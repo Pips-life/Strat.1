@@ -7,6 +7,7 @@ from typing import Iterable, Sequence, Mapping
 
 from strat.core.models import PriceBar
 from .detector import StructuralZoneDetector, ZoneDetectionConfig
+from .evidence import ZoneEvidenceContext, attach_market_evidence
 from .models import Zone, ZoneCandidate, ZoneRole, ZoneState, ZoneType
 from .options import OptionsZoneConfig, detect_options_zones
 from .scorer import ZoneScorer, ZoneScoreConfig
@@ -56,13 +57,16 @@ class ZoneEngine:
         return merged
 
     def build(self, bars: Sequence[PriceBar], atr: float, price: float | None = None,
-              now_minutes_old: float = 0.0, options: Iterable[Mapping[str, object]] | None = None) -> list[Zone]:
+              now_minutes_old: float = 0.0, options: Iterable[Mapping[str, object]] | None = None,
+              evidence: ZoneEvidenceContext | None = None) -> list[Zone]:
         if not bars or atr <= 0:
             return []
         current_price = float(price if price is not None else bars[-1].close)
         candidates = self.detector.detect(bars, atr)
         if options is not None:
             candidates.extend(detect_options_zones(options, current_price, atr, bars[-1].timestamp, self.config.options))
+        if evidence is not None:
+            candidates = [attach_market_evidence(c, current_price, atr, evidence) for c in candidates]
         candidates = self._merge_candidates(candidates, atr)
         zones: list[Zone] = []
         for candidate in candidates:
