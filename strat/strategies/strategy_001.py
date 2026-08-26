@@ -1,7 +1,7 @@
 """Strategy 001: QOF (Quantitative Options Flow).
 
 Canonical path: market intelligence -> QOF-implied market map -> confluence
--> QOF entry/target validation -> global risk/execution.
+-> precision-aware QOF entry/target validation -> global risk/execution.
 
 Conventional TradingView structure is secondary context only and is never an
 entry prerequisite.
@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 from strat.confluence import ConfluenceConfig, ConfluenceEngine
 from strat.intelligence import delta_pressure, gamma_exposure, gamma_regime, iv_regime, velocity_signal
+from strat.intelligence.precision import PrecisionEntryPlanner
 from strat.core.models import PriceBar
 from strat.zones.engine import QOFStructureEngine
 from strat.zones.models import ZoneRole
@@ -28,6 +29,8 @@ class Strategy001Config:
     minimum_rr: float = 1.35
     entry_zone_atr: float = 0.35
     stop_buffer_atr: float = 0.10
+    precision_minimum: float = 70.0
+    precision_preferred_fraction: float = 0.25
     end_of_day_flatten_minutes: int = 15
 
 
@@ -39,11 +42,15 @@ def _bars(market: Dict[str, Any]) -> list[PriceBar]:
 class Strategy001(Strategy):
     id = "strategy_001"
     name = "QOF — Quantitative Options Flow"
-    version = "4.1.0"
+    version = "4.2.0"
 
     def __init__(self, config: Optional[Strategy001Config] = None) -> None:
         self.config = config or Strategy001Config()
         self.qof_structure_engine = QOFStructureEngine()
+        self.precision = PrecisionEntryPlanner(
+            preferred_fraction=self.config.precision_preferred_fraction,
+            minimum_score=self.config.precision_minimum,
+        )
         self.confluence = ConfluenceEngine(ConfluenceConfig(
             minimum_score=self.config.confluence_minimum,
             strong_score=self.config.strong_confluence,
@@ -220,9 +227,29 @@ class Strategy001(Strategy):
         risk = abs(price - stop)
         reward = abs(target - price)
         rr = reward / risk if risk > 0 else 0.0
-        if rr < self.config.minimum_rr:
-            return Signal("WAIT", result.score, reason=f"Only {rr:.2f}R available; minimum is {self.config.minimum_rr:.2f}R.")
-        return Signal(action="BUY" if side == "LONG" else "SELL", confidence=result.score, entry=price, stop_loss=stop, take_profit=target, reason=f"QOF {side} structure-confluence setup confirmed with {rr:.2f}R available.", metadata={"strategy": self.id, "structure_type": "QOF_IMPLIED", "setup_zone": zone, "target_zone": target_zone, "confluence": result, "intraday_only": True})
+        precision = self.precision.plan(
+            side=side,
+            price=price,
+            zone=zone,
+            atr=atr,
+            stop=stop,
+            target=target,
+            minimum_rr=self.config.minimum_rr,
+        )
+        if not precision.accepted:
+            return Signal(
+                "WAIT",
+                result.score,
+                reason=precision.reason,
+                metadata={
+                    "precision_score": precision.precision_score,
+                    "preferred_entry": precision.preferred_entry,
+                    "setup_zone": zone,
+                    "target_zone": target_zone,
+                    "precision_required": True,
+                },
+            )
+        return Signal(action="BUY" if side == "LONG" else "SELL", confidence=result.score, entry=price, stop_loss=stop, take_profit=target, reason=f"QOF {side} precision structure-confluence setup confirmed with {rr:.2f}R available.", metadata={"strategy": self.id, "structure_type": "QOF_IMPLIED", "setup_zone": zone, "target_zone": target_zone, "confluence": result, "precision_score": precision.precision_score, "preferred_entry": precision.preferred_entry, "intraday_only": True})
 
     def generate_signal(self, analysis: Dict[str, Any]) -> Signal:
         managed = self._manage_position(analysis)
@@ -240,4 +267,4 @@ class Strategy001(Strategy):
         return self._entry(analysis, result.direction) if result.direction in {"LONG", "SHORT"} else Signal("WAIT", result.score, reason="No directional QOF confluence.")
 
     def risk_parameters(self) -> Dict[str, Any]:
-        return {"min_confidence": self.config.confluence_minimum, "max_positions": 1, "intraday_only": True, "end_of_day_flatten_minutes": self.config.end_of_day_flatten_minutes, "minimum_rr": self.config.minimum_rr, "risk_per_trade": "delegated_to_global_risk_engine"}
+        return {"min_confidence": self.config.confluence_minimum, "max_positions": 1, "intraday_only": True, "end_of_day_flatten_minutes": self.config.end_of_day_flatten_minutes, "minimum_rr": self.config.minimum_rr, "precision_minimum": self.config.precision_minimum, "precision_preferred_fraction": self.config.precision_preferred_fraction, "risk_per_trade": "delegated_to_global_risk_engine"}
