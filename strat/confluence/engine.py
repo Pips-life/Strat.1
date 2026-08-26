@@ -1,37 +1,31 @@
-"""Reusable confluence scoring engine.
+"""Reusable quantitative confluence engine for Strategy 001 and future strategies.
 
-Designed to avoid the common failure mode of requiring every confirmation to
-be present. A primary setup can remain tradable when one secondary signal is
-missing, while contradictory evidence is penalized.
+The engine scores evidence; it never places orders. Missing evidence is neutral,
+while explicit contradictions reduce the final score. Components are normalized
+to 0..100 before weighted aggregation.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Mapping
 
 
 @dataclass(frozen=True)
 class ConfluenceConfig:
-    # Primary evidence carries the most weight.
     weights: Dict[str, float] = field(default_factory=lambda: {
-        "options": 0.35,
-        "structure": 0.30,
-        "liquidity": 0.20,
-        "volatility": 0.15,
+        "structure": 0.25,
+        "options_flow": 0.20,
+        "gamma": 0.15,
+        "delta": 0.10,
+        "iv": 0.10,
+        "velocity": 0.10,
+        "volume": 0.10,
     })
-
-    # Do not demand 100% confirmation. This is deliberately permissive.
-    minimum_score: float = 62.0
-    strong_score: float = 78.0
-    exceptional_score: float = 90.0
-
-    # A missing secondary confluence is neutral, not a failure.
-    missing_penalty: float = 0.0
-
-    # Contradiction matters more than absence.
-    contradiction_penalty: float = 12.0
-
-    # Prevent a single extreme component from dominating everything.
+    minimum_score: float = 65.0
+    strong_score: float = 75.0
+    exceptional_score: float = 80.0
+    minimum_directional_edge: float = 12.0
+    contradiction_penalty: float = 6.0
     component_cap: float = 100.0
 
 
@@ -40,44 +34,57 @@ class ConfluenceResult:
     score: float
     grade: str
     tradable: bool
+    direction: str
+    long_score: float
+    short_score: float
+    directional_edge: float
     components: Dict[str, float]
     contradictions: list[str]
     missing: list[str]
+    derived: Dict[str, float] = field(default_factory=dict)
 
 
 class ConfluenceEngine:
     def __init__(self, config: ConfluenceConfig | None = None):
         self.config = config or ConfluenceConfig()
 
-    def evaluate(
-        self,
-        components: Dict[str, float],
-        contradictions: Iterable[str] = (),
-    ) -> ConfluenceResult:
-        weights = self.config.weights
-        total_weight = 0.0
-        weighted = 0.0
-        missing: list[str] = []
+    @staticmethod
+    def _normalize(value: object) -> float:
+        try:
+            return max(0.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            return 0.0
 
-        normalized: Dict[str, float] = {}
-        for name, weight in weights.items():
+    def _score_direction(self, components: Mapping[str, float | None], direction: str) -> tuple[float, list[str]]:
+        weighted = 0.0
+        total_weight = 0.0
+        missing: list[str] = []
+        for name, weight in self.config.weights.items():
             value = components.get(name)
             if value is None:
                 missing.append(name)
                 continue
-
-            value = max(0.0, min(self.config.component_cap, float(value)))
-            normalized[name] = value
-            weighted += value * weight
+            weighted += self._normalize(value) * weight
             total_weight += weight
+        return ((weighted / total_weight) if total_weight else 0.0, missing)
 
-        # Renormalize available evidence. Missing data does not automatically
-        # turn a good setup into a no-trade setup.
-        score = (weighted / total_weight) if total_weight else 0.0
+    def evaluate_directional(
+        self,
+        long_components: Mapping[str, float | None],
+        short_components: Mapping[str, float | None],
+        contradictions: Iterable[str] = (),
+        derived: Mapping[str, float] | None = None,
+    ) -> ConfluenceResult:
+        long_score, long_missing = self._score_direction(long_components, "LONG")
+        short_score, short_missing = self._score_direction(short_components, "SHORT")
         contradiction_list = list(contradictions)
-        score -= self.config.contradiction_penalty * len(contradiction_list)
-        score = max(0.0, min(100.0, score))
-
+        penalty = self.config.contradiction_penalty * len(contradiction_list)
+        long_score = max(0.0, min(100.0, long_score - penalty))
+        short_score = max(0.0, min(100.0, short_score - penalty))
+        edge = abs(long_score - short_score)
+        direction = "LONG" if long_score > short_score else "SHORT" if short_score > long_score else "NONE"
+        score = max(long_score, short_score)
+        missing = sorted(set(long_missing + short_missing))
         if score >= self.config.exceptional_score:
             grade = "EXCEPTIONAL"
         elif score >= self.config.strong_score:
@@ -88,12 +95,29 @@ class ConfluenceEngine:
             grade = "WATCH"
         else:
             grade = "WEAK"
-
+        tradable = direction != "NONE" and score >= self.config.minimum_score and edge >= self.config.minimum_directional_edge
+        selected = long_components if direction == "LONG" else short_components
         return ConfluenceResult(
             score=round(score, 2),
             grade=grade,
-            tradable=score >= self.config.minimum_score,
-            components=normalized,
+            tradable=tradable,
+            direction=direction,
+            long_score=round(long_score, 2),
+            short_score=round(short_score, 2),
+            directional_edge=round(edge, 2),
+            components={k: self._normalize(v) for k, v in selected.items() if v is not None},
             contradictions=contradiction_list,
             missing=missing,
+            derived=dict(derived or {}),
         )
+
+    def evaluate(self, components: Dict[str, float], contradictions: Iterable[str] = ()) -> ConfluenceResult:
+        """Backward-compatible single-direction evaluation.
+
+        New callers should use ``evaluate_directional``. This method interprets
+        supplied components as bullish evidence and mirrors it for a neutral
+        opposite side, preserving the one-engine contract without reviving the
+        former four-component scoring model.
+        """
+        inverse = {name: 100.0 - self._normalize(value) for name, value in components.items()}
+        return self.evaluate_directional(components, inverse, contradictions)

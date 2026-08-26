@@ -1,7 +1,7 @@
-"""Strategy plugins."""
+"""Canonical Strategy 001 plugin package."""
 
 from .base import Signal, Strategy
 from .registry import registry
-from .options_flow_001 import OptionsFlowStrategy
+from .strategy_001 import Strategy001, Strategy001Config
 
-__all__ = ["Signal", "Strategy", "registry", "OptionsFlowStrategy"]
+__all__ = ["Signal", "Strategy", "registry", "Strategy001", "Strategy001Config"]

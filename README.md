@@ -4,8 +4,6 @@ Quantitative intraday trading-bot research repository for Gold futures/options i
 
 ## Canonical workflow
 
-There is **one active architecture**. Strategy logic must follow this flow:
-
 ```text
 Provider / Replay Data
         ↓
@@ -35,29 +33,24 @@ Execution Interface
    └─ Live
 ```
 
-Replay is a **development/testing capability**, not a third production mode. The eventual APK exposes only Demo / Live.
+Replay is development/testing only; the eventual APK exposes Demo / Live.
 
 ## Repository rules
 
-- `docs/strategy_001_phase1_phase2_blueprint.md` is the canonical implementation blueprint for the current Phase 1/2 work.
+- Keep one active implementation for each trading decision layer.
 - Do not create parallel strategy specifications, duplicate confluence engines, or alternate S/R definitions.
-- New ideas must extend the canonical modules rather than create competing implementations.
-- If an older rule conflicts with the current architecture, the older rule must be removed or replaced rather than left for the runtime to interpret.
-- Provider adapters normalize data only; they must not contain trading decisions.
+- Superseded rules must be removed or replaced, not left for runtime interpretation.
+- Provider adapters normalize data only; they do not make trading decisions.
+- The S/R Zone Engine owns the market map.
 - The Confluence Engine scores evidence; Strategy 001 decides whether a setup is tradable.
 - Risk and execution remain outside strategy/confluence logic.
-- All production and replay decisions must be causal: no look-ahead data.
+- Production and replay decisions must be causal: no look-ahead data.
 
-## Current implementation status
+## Current implementation
 
 ### Phase 1 — Core models
 
-Implemented in `strat/core/`:
-
-- `PriceBar`
-- `MarketSnapshot`
-
-These are provider-neutral domain models used as the boundary between data adapters and strategy intelligence.
+Provider-neutral `PriceBar` and `MarketSnapshot` models are implemented in `strat/core/`.
 
 ### Phase 2 — S/R Zone Engine
 
@@ -66,33 +59,40 @@ Implemented in `strat/zones/`:
 - Structural swing detection with confirmation delay
 - ATR-normalized zone width
 - Pivot clustering
-- Zone strength scoring
-- Volatility-normalized relevance
-- Zone state machine
-- Break / flip handling
-- Market-map orchestration
+- Zone strength and relevance
+- Zone state machine and break/flip handling
+- Active market-map orchestration
 
-The Zone Engine is intentionally extensible. Options/dealer, gamma, stabilization, liquidity/sweep, reclaim, and composite evidence can be added through the same zone model without creating another S/R system.
+### Phase 3 — Intelligence + Confluence
 
-### Existing options intelligence
+Implemented:
 
-`strat/options_engine.py` remains a reusable **market-intelligence/data-calculation module**. Its options levels are inputs to the broader Zone/Confluence architecture; they are not a second Strategy 001 specification.
+- Delta-adjusted directional pressure
+- Gamma exposure proxy with explicit provider sign convention
+- Positive/negative/neutral gamma regime
+- IV expansion/contraction/stable regime
+- Velocity expansion/contraction/stable regime
+- Relative volume
+- Seven-factor directional Confluence Engine
+- Directional edge and contradiction penalty
+- Missing-data neutrality
+- Canonical Strategy 001 consuming the zone map and confluence result
 
-## Next implementation phase
+The former `options_flow_001.py` strategy implementation was removed because it maintained a competing level-based entry path.
 
-Phase 3 will connect:
+## Confluence weights
 
 ```text
-Options Flow → Delta → Gamma/GEX → IV
-                    ↓
-              Zone Evidence
-                    ↓
-             Confluence Engine
-                    ↓
-              Strategy 001
+Structure      25%
+Options Flow  20%
+Gamma         15%
+Delta         10%
+IV            10%
+Velocity      10%
+Volume        10%
 ```
 
-That phase will also reconcile the existing options-flow strategy implementation with the canonical S/R Zone Engine so there is only one Strategy 001 runtime path.
+Initial thresholds are configurable and intended for replay calibration, not assumed optimal parameters.
 
 ## Testing
 
