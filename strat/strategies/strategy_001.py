@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from strat.confluence import ConfluenceConfig, ConfluenceEngine
 from strat.intelligence import delta_pressure, gamma_exposure, gamma_regime, iv_regime, velocity_signal
 from strat.core.models import PriceBar
-from strat.zones.engine import ZoneEngine
+from strat.zones.engine import QOFStructureEngine
 from strat.zones.models import ZoneRole
 from .base import Signal, Strategy
 from .registry import registry
@@ -39,11 +39,11 @@ def _bars(market: Dict[str, Any]) -> list[PriceBar]:
 class Strategy001(Strategy):
     id = "strategy_001"
     name = "QOF — Quantitative Options Flow"
-    version = "4.0.0"
+    version = "4.1.0"
 
     def __init__(self, config: Optional[Strategy001Config] = None) -> None:
         self.config = config or Strategy001Config()
-        self.zone_engine = ZoneEngine()
+        self.qof_structure_engine = QOFStructureEngine()
         self.confluence = ConfluenceEngine(ConfluenceConfig(
             minimum_score=self.config.confluence_minimum,
             strong_score=self.config.strong_confluence,
@@ -51,23 +51,33 @@ class Strategy001(Strategy):
         ))
 
     def _market_map(self, market: Dict[str, Any]) -> list[Any]:
-        """Return the canonical QOF market map supplied by the Structure Engine.
+        """Return the canonical QOF market map from QOFStructureEngine.
 
-        If no map is supplied, legacy price-derived construction is retained as
-        a compatibility fallback only; it is not treated as the primary QOF
-        structural signal.
+        An externally supplied QOF map may be consumed when produced by the
+        canonical engine upstream. Otherwise the engine builds the map from
+        the current causal market snapshot. There is no legacy price-structure
+        fallback: conventional TradingView structure is secondary evidence.
         """
         supplied = market.get("qof_market_map") or market.get("qof_structure_map")
-        if supplied:
-            return list(supplied)
-        supplied = market.get("zone_map")
         if supplied:
             return list(supplied)
         bars = _bars(market)
         if not bars:
             return []
-        zones = self.zone_engine.build(bars, float(market["atr"]), float(market["price"]))
-        return self.zone_engine.update_states(zones, float(market["price"]), float(market["atr"]), market.get("timestamp", bars[-1].timestamp))
+        options = market.get("options", ()) or ()
+        zones = self.qof_structure_engine.build(
+            bars,
+            float(market["atr"]),
+            float(market["price"]),
+            options=options,
+            as_of_index=market.get("as_of_index"),
+        )
+        return self.qof_structure_engine.update_states(
+            zones,
+            float(market["price"]),
+            float(market["atr"]),
+            market.get("timestamp", bars[-1].timestamp),
+        )
 
     def _intelligence(self, market: Dict[str, Any]) -> Dict[str, Any]:
         options = market.get("options", ()) or ()
@@ -102,9 +112,10 @@ class Strategy001(Strategy):
         zone_dicts = [self._zone_dict(z) for z in zones]
 
         def structure(side: str) -> float:
-            # Prefer QOF-implied structures; price-derived roles are fallback evidence.
             role = ZoneRole.SUPPORT.value if side == "LONG" else ZoneRole.RESISTANCE.value
             candidates = [z for z in zone_dicts if str(z.get("role", "")).upper() == role and z.get("center") is not None]
+            primary = [z for z in candidates if bool(z.get("qof_primary", True))]
+            candidates = primary or candidates
             if not candidates:
                 return 50.0
             nearest = min(candidates, key=lambda z: abs(float(z["center"]) - float(market["price"])))
@@ -148,22 +159,22 @@ class Strategy001(Strategy):
         intelligence = self._intelligence(market)
         long_components, short_components = self._component_scores(market, intelligence, zones)
         result = self.confluence.evaluate_directional(long_components, short_components, market.get("contradictions", []) or [], derived=intelligence)
-        return {**market, "qof_market_map": zones, "zone_map": zones, "intelligence": intelligence, "confluence_result": result}
+        return {**market, "qof_market_map": zones, "intelligence": intelligence, "confluence_result": result}
 
     def _relevant_zone(self, analysis: Dict[str, Any], side: str) -> Optional[Dict[str, Any]]:
-        zones = [self._zone_dict(z) for z in analysis.get("qof_market_map", analysis.get("zone_map", [])) or ()]
+        zones = [self._zone_dict(z) for z in analysis.get("qof_market_map", []) or ()]
         price = float(analysis["price"])
         role = ZoneRole.SUPPORT.value if side == "LONG" else ZoneRole.RESISTANCE.value
-        candidates = [z for z in zones if str(z.get("role", "")).upper() == role and z.get("center") is not None]
+        candidates = [z for z in zones if str(z.get("role", "")).upper() == role and z.get("center") is not None and bool(z.get("qof_primary", True))]
         if not candidates:
             return None
         directional = [z for z in candidates if (side == "LONG" and float(z["center"]) <= price) or (side == "SHORT" and float(z["center"]) >= price)]
         return min(directional or candidates, key=lambda z: abs(float(z["center"]) - price))
 
     def _target_zone(self, analysis: Dict[str, Any], side: str, price: float) -> Optional[Dict[str, Any]]:
-        zones = [self._zone_dict(z) for z in analysis.get("qof_market_map", analysis.get("zone_map", [])) or ()]
+        zones = [self._zone_dict(z) for z in analysis.get("qof_market_map", []) or ()]
         target_role = ZoneRole.RESISTANCE.value if side == "LONG" else ZoneRole.SUPPORT.value
-        candidates = [z for z in zones if str(z.get("role", "")).upper() == target_role and z.get("center") is not None]
+        candidates = [z for z in zones if str(z.get("role", "")).upper() == target_role and z.get("center") is not None and bool(z.get("qof_primary", True))]
         if side == "LONG":
             candidates = [z for z in candidates if float(z["center"]) > price]
             return min(candidates, key=lambda z: float(z["center"]) - price) if candidates else None
@@ -198,8 +209,6 @@ class Strategy001(Strategy):
         atr = float(analysis["atr"])
         if abs(price - float(zone["center"])) > atr * self.config.entry_zone_atr:
             return Signal("WAIT", result.score, reason="Price is outside the QOF-implied structure entry area.")
-        # QOF confluence and structural interaction are the trigger. No TradingView
-        # swing/price-action trigger is required.
         if side == "LONG":
             stop = float(zone["lower"]) - self.config.stop_buffer_atr * atr
         else:
