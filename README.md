@@ -1,12 +1,20 @@
 # Strat.1 — QOF (Strategy 001)
 
-Quantitative Options Flow (QOF) intraday trading-bot research repository for Gold futures/options intelligence.
+Quantitative Options Flow (QOF) intraday trading-bot research repository.
+
+## Pips-life strategies
+
+1. QOF.
+2.
+3.
+
+Future strategies will be added only when formally designed and approved. Blank entries are intentional placeholders.
 
 ## Canonical objective
 
-**Strategy 001 trades QOF-derived market structures, not TradingView-derived market structures.**
+**QOF trades QOF-derived market structures, not TradingView-derived market structures.**
 
-QOF continuously converts options flow, open interest, Delta, Gamma/GEX, IV, options volume and price/market data into mathematical estimates of potential dealer resistance, dealer support, stabilization, liquidity/reaction and flip zones. These QOF-implied structures may exist before conventional chart structure becomes visually obvious.
+QOF continuously converts options flow, open interest, Delta, Gamma/GEX, IV, options volume and price/market data into mathematical estimates of potential dealer resistance, dealer support, stabilization, liquidity/reaction and flip structures. These QOF-implied structures may exist before conventional chart structure becomes visually obvious.
 
 TradingView-style swings/support/resistance may be used as secondary confirmation, but they are never a prerequisite for a QOF trade.
 
@@ -54,7 +62,7 @@ Replay is development/testing only; the eventual APK exposes Demo / Live.
 - QOF is the canonical name and identity of Strategy 001.
 - QOF-derived structure is the primary structural map.
 - Do not turn conventional TradingView S/R into the strategy's entry prerequisite.
-- QOF-implied zones are predictions/evidence, not guaranteed support or resistance; price and live QOF behavior validate, reject or update them.
+- QOF-implied structures are predictions/evidence, not guaranteed support or resistance; price and live QOF behavior validate, reject or update them.
 - Keep one active implementation for each trading decision layer.
 - Do not create parallel strategy specifications, duplicate confluence engines, or alternate structural definitions.
 - Superseded rules must be removed or replaced, not left for runtime interpretation.
@@ -94,18 +102,18 @@ Implemented:
 - IV expansion/contraction/stable regime
 - Velocity expansion/contraction/stable regime
 - Relative volume
-- Options-derived candidate zones
-- Composite multi-source zones
+- Options-derived candidate structures
+- Composite multi-source structures
 - Seven-factor directional Confluence Engine
 - Directional edge and contradiction penalty
 - Missing-data neutrality
 - Canonical QOF Strategy 001 consuming the structural map and confluence result
 
-The former `options_flow_001.py` strategy implementation was removed because it maintained a competing level-based entry path.
+The former competing level-based Strategy 001 implementation was removed.
 
 ## QOF structure principle
 
-The engine should be able to identify a potential QOF market structure **before conventional chart structure forms**.
+The engine should identify potential QOF market structure **before conventional chart structure forms**.
 
 Example:
 
