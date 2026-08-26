@@ -1,4 +1,4 @@
-"""Domain models for quantitative S/R zones."""
+"""Domain models for the canonical QOF Structure Engine."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,8 +8,10 @@ from typing import Any, Mapping, Optional
 
 
 class ZoneType(str, Enum):
-    STRUCTURAL = "STRUCTURAL"
-    OPTIONS_DEALER = "OPTIONS_DEALER"
+    """Structural output categories; QOF_IMPLIED is the primary QOF type."""
+    STRUCTURAL = "STRUCTURAL"          # price-derived confirmation/context
+    QOF_IMPLIED = "QOF_IMPLIED"        # predictive QOF-derived structure
+    OPTIONS_DEALER = "QOF_IMPLIED"     # enum alias for old serialized values
     RECLAIM = "RECLAIM"
     STABILIZATION = "STABILIZATION"
     LIQUIDITY_SWEEP = "LIQUIDITY_SWEEP"
