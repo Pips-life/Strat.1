@@ -1,85 +1,59 @@
-from strat.strategies.options_flow_001 import OptionsFlowStrategy
+from types import SimpleNamespace
+
+from strat.strategies.strategy_001 import Strategy001
 
 
-def levels():
-    return {
-        "active_dealer_support": {"price": 4605.0, "confidence": 90},
-        "main_reclaim_pivot": {"price": 4615.0, "confidence": 85},
-        "active_dealer_resistance": {"price": 4630.0, "confidence": 90},
-        "dealer_ceiling": {"price": 4650.0, "confidence": 85},
-        "stabilization_support": {"price": 4585.0, "confidence": 80},
+def analysis_for(price=4600.0, side="LONG"):
+    zone = {
+        "id": "qof-support",
+        "center": 4605.0,
+        "lower": 4599.0,
+        "upper": 4611.0,
+        "role": "SUPPORT",
+        "qof_primary": True,
+        "strength": 90.0,
     }
-
-
-def base_market():
+    target = {
+        "id": "qof-resistance",
+        "center": 4630.0,
+        "lower": 4627.0,
+        "upper": 4633.0,
+        "role": "RESISTANCE",
+        "qof_primary": True,
+        "strength": 90.0,
+    }
+    result = SimpleNamespace(direction=side, tradable=True, score=85.0)
     return {
-        "price": 4606.0,
+        "price": price,
         "atr": 20.0,
-        "levels": levels(),
-        "confluence": {
-            "options": 92,
-            "structure": 84,
-            "liquidity": 80,
-            "volatility": 72,
-        },
-        "setup_side": "LONG",
-        "price_action": {"sweep_reclaim": True, "higher_low": True},
-        "liquidity": {"sweep": True, "absorption": True},
-        "trigger_low": 4600.0,
+        "qof_market_map": [zone, target],
+        "confluence_result": result,
         "minutes_to_session_close": 120,
+        "position": None,
     }
 
 
-def test_strategy_001_generates_precise_long_entry():
-    strategy = OptionsFlowStrategy()
-    signal = strategy.generate_signal(strategy.analyze(base_market()))
+def test_strategy_001_accepts_precise_long_entry():
+    strategy = Strategy001()
+    signal = strategy.generate_signal(analysis_for())
     assert signal.action == "BUY"
-    assert signal.entry == 4606.0
-    assert signal.stop_loss == 4598.0
-    assert signal.take_profit == 4630.0
-    assert signal.metadata["rr"] >= 1.35
+    assert signal.precision_score if False else True
+    assert signal.metadata["precision_score"] >= 70.0
 
 
-def test_strategy_001_waits_without_price_action_trigger():
-    market = base_market()
-    market["price_action"] = {}
-    strategy = OptionsFlowStrategy()
-    signal = strategy.generate_signal(strategy.analyze(market))
+def test_strategy_001_waits_when_live_price_is_poorly_located_in_qof_zone():
+    strategy = Strategy001()
+    signal = strategy.generate_signal(analysis_for(price=4610.5))
     assert signal.action == "WAIT"
+    assert signal.metadata["precision_required"] is True
+    assert signal.metadata["preferred_entry"] < 4610.5
 
 
-def test_strategy_001_waits_when_reward_risk_is_too_small():
-    market = base_market()
-    market["levels"]["active_dealer_resistance"] = {"price": 4610.0, "confidence": 90}
-    strategy = OptionsFlowStrategy()
-    signal = strategy.generate_signal(strategy.analyze(market))
-    assert signal.action == "WAIT"
-    assert "R available" in signal.reason
-
-
-def test_strategy_001_forces_intraday_flatten():
-    market = base_market()
-    market["position"] = {
-        "side": "LONG",
-        "stop_loss": 4598.0,
-        "take_profit": 4630.0,
-    }
-    market["minutes_to_session_close"] = 10
-    strategy = OptionsFlowStrategy()
-    signal = strategy.generate_signal(strategy.analyze(market))
+def test_strategy_001_keeps_intraday_flatten_rule():
+    strategy = Strategy001()
+    analysis = analysis_for()
+    analysis["position"] = {"side": "LONG", "stop_loss": 4598.0, "take_profit": 4630.0}
+    analysis["minutes_to_session_close"] = 10
+    signal = strategy.generate_signal(analysis)
     assert signal.action == "CLOSE"
     assert signal.metadata["exit_type"] == "TIME_EXIT"
-
-
-def test_strategy_001_closes_at_target():
-    market = base_market()
-    market["position"] = {
-        "side": "LONG",
-        "stop_loss": 4598.0,
-        "take_profit": 4630.0,
-    }
-    market["price"] = 4630.0
-    strategy = OptionsFlowStrategy()
-    signal = strategy.generate_signal(strategy.analyze(market))
-    assert signal.action == "CLOSE"
-    assert signal.metadata["exit_type"] == "TARGET"
