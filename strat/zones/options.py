@@ -22,11 +22,6 @@ def _bounded(value: float) -> float:
 
 @dataclass(frozen=True)
 class OptionsStructureConfig:
-    """Calibration controls for QOF-implied structure generation.
-
-    Thresholds are intentionally configurable. Replay calibration must determine
-    production values rather than assuming the initial defaults are optimal.
-    """
     min_open_interest: float = 1.0
     min_volume: float = 1.0
     max_distance_atr: float = 2.50
@@ -40,48 +35,57 @@ class OptionsStructureConfig:
     flow_weight: float = 0.10
 
 
-def _row_score(row: Mapping[str, object], cfg: OptionsStructureConfig) -> tuple[float, dict[str, float]]:
-    oi = abs(_num(row.get("open_interest", row.get("oi", 0))))
-    volume = abs(_num(row.get("volume", row.get("contracts", 0))))
-    gamma = abs(_num(row.get("gamma", row.get("gex", 0))))
-    delta = abs(_num(row.get("delta", 0)))
-    iv = abs(_num(row.get("iv", row.get("implied_volatility", 0))))
-    flow = abs(_num(row.get("flow_score", row.get("flow", 0))))
-
-    # Each feature is normalized against its configured minimum or the row's
-    # natural bounded scale. This creates a comparable evidence score without
-    # pretending that raw provider units are interchangeable.
-    oi_n = min(100.0, oi / max(1.0, cfg.min_open_interest) * 20.0)
-    volume_n = min(100.0, volume / max(1.0, cfg.min_volume) * 20.0)
-    gamma_n = min(100.0, gamma * 100.0)
-    delta_n = min(100.0, delta * 100.0)
-    iv_n = min(100.0, iv if iv <= 100.0 else iv / 2.0)
-    flow_n = min(100.0, flow if flow <= 100.0 else flow / 2.0)
-
-    score = (
-        oi_n * cfg.oi_weight
-        + volume_n * cfg.volume_weight
-        + gamma_n * cfg.gamma_weight
-        + delta_n * cfg.delta_weight
-        + iv_n * cfg.iv_weight
-        + flow_n * cfg.flow_weight
-    )
-    return _bounded(score), {
-        "open_interest": oi_n,
-        "volume": volume_n,
-        "gamma": gamma_n,
-        "delta": delta_n,
-        "iv": iv_n,
-        "options_flow": flow_n,
+def _signed_components(row: Mapping[str, object]) -> dict[str, float]:
+    """Preserve the sign of directional QOF inputs."""
+    return {
+        "gamma": _num(row.get("gamma", row.get("gex", 0))),
+        "delta": _num(row.get("delta", 0)),
+        "options_flow": _num(row.get("flow_score", row.get("flow", row.get("net_flow", 0)))),
     }
 
 
-def _role(row: Mapping[str, object], strike: float, spot: float) -> ZoneRole | None:
+def _row_score(row: Mapping[str, object], cfg: OptionsStructureConfig) -> tuple[float, dict[str, float], float]:
+    """Separate concentration magnitude from signed directional pressure."""
+    oi = max(0.0, _num(row.get("open_interest", row.get("oi", 0))))
+    volume = max(0.0, _num(row.get("volume", row.get("contracts", 0))))
+    signed = _signed_components(row)
+    gamma, delta, flow = signed["gamma"], signed["delta"], signed["options_flow"]
+    iv = max(0.0, _num(row.get("iv", row.get("implied_volatility", 0))))
+
+    oi_n = min(100.0, oi / max(1.0, cfg.min_open_interest) * 20.0)
+    volume_n = min(100.0, volume / max(1.0, cfg.min_volume) * 20.0)
+    gamma_n = min(100.0, abs(gamma) * 100.0)
+    delta_n = min(100.0, abs(delta) * 100.0)
+    iv_n = min(100.0, iv if iv <= 100.0 else iv / 2.0)
+    flow_n = min(100.0, abs(flow) if abs(flow) <= 100.0 else abs(flow) / 2.0)
+
+    concentration_score = _bounded(
+        oi_n * cfg.oi_weight + volume_n * cfg.volume_weight
+        + gamma_n * cfg.gamma_weight + delta_n * cfg.delta_weight
+        + iv_n * cfg.iv_weight + flow_n * cfg.flow_weight
+    )
+    # OI/volume/IV are magnitude evidence only. Direction is preserved here.
+    pressure = gamma * cfg.gamma_weight + delta * cfg.delta_weight + flow * cfg.flow_weight
+    components = {
+        "open_interest": oi_n, "volume": volume_n, "gamma": gamma_n,
+        "delta": delta_n, "iv": iv_n, "options_flow": flow_n,
+    }
+    return concentration_score, components, pressure
+
+
+def _role(row: Mapping[str, object], strike: float, spot: float, pressure: float) -> ZoneRole | None:
     explicit = str(row.get("structure_role", row.get("role", ""))).upper()
     if explicit in {"SUPPORT", "DEALER_SUPPORT", "STABILISATION", "STABILIZATION"}:
         return ZoneRole.SUPPORT
     if explicit in {"RESISTANCE", "DEALER_RESISTANCE"}:
         return ZoneRole.RESISTANCE
+
+    # Signed QOF pressure is primary. Location/type is only a deterministic
+    # fallback when directional pressure is effectively neutral.
+    if pressure < 0:
+        return ZoneRole.RESISTANCE
+    if pressure > 0:
+        return ZoneRole.SUPPORT
 
     kind = str(row.get("option_type", row.get("type", ""))).upper()
     if kind in {"C", "CALL"}:
@@ -98,13 +102,7 @@ def detect_qof_structure(
     detected_at: datetime,
     config: OptionsStructureConfig | None = None,
 ) -> list[ZoneCandidate]:
-    """Generate predictive QOF-implied structures before chart structure forms.
-
-    The engine deliberately scans a forward price landscape rather than only
-    strikes already touching spot. A candidate is probabilistic evidence; live
-    price/flow interaction later validates, rejects, strengthens, weakens or
-    flips it.
-    """
+    """Generate QOF-primary structures before conventional chart structure forms."""
     cfg = config or OptionsStructureConfig()
     if spot <= 0 or atr <= 0:
         return []
@@ -115,16 +113,16 @@ def detect_qof_structure(
         strike = _num(row.get("strike"))
         if strike <= 0 or abs(strike - spot) > max_distance:
             continue
-        oi = abs(_num(row.get("open_interest", row.get("oi", 0))))
-        volume = abs(_num(row.get("volume", row.get("contracts", 0))))
+        oi = max(0.0, _num(row.get("open_interest", row.get("oi", 0))))
+        volume = max(0.0, _num(row.get("volume", row.get("contracts", 0))))
         if oi < cfg.min_open_interest and volume < cfg.min_volume:
             continue
 
-        role = _role(row, strike, spot)
+        score, components, pressure = _row_score(row, cfg)
+        role = _role(row, strike, spot, pressure)
         if role is None:
             continue
 
-        score, components = _row_score(row, cfg)
         proximity = exp(-abs(strike - spot) / atr)
         relevance = _bounded(score * proximity)
         width = max(atr * 0.05, atr * cfg.zone_width_atr)
@@ -133,39 +131,25 @@ def detect_qof_structure(
             kind = "STABILISATION"
 
         evidence = [ZoneEvidence(
-            "qof_options", relevance,
-            "Predictive QOF positioning concentration",
-            {
-                "strike": strike,
-                "distance_atr": abs(strike - spot) / atr,
-                "structure_kind": kind,
-                "proximity_weight": proximity,
-            },
+            "qof_options", relevance, "Predictive QOF positioning concentration",
+            {"strike": strike, "distance_atr": abs(strike - spot) / atr,
+             "structure_kind": kind, "proximity_weight": proximity,
+             "signed_pressure": pressure},
         )]
         for source, component_score in components.items():
             if component_score > 0:
-                evidence.append(ZoneEvidence(
-                    source, _bounded(component_score * proximity),
-                    f"QOF {source} contribution",
-                    {"strike": strike},
-                ))
+                evidence.append(ZoneEvidence(source, _bounded(component_score * proximity),
+                    f"QOF {source} contribution", {"strike": strike}))
 
         rows.append(ZoneCandidate(
-            center=strike,
-            lower=strike - width,
-            upper=strike + width,
-            role=role,
-            detected_at=detected_at,
-            source="QOF_IMPLIED",
-            reaction_count=0,
-            reaction_strength=relevance,
-            evidence=tuple(evidence),
+            center=strike, lower=strike - width, upper=strike + width,
+            role=role, detected_at=detected_at, source="QOF_IMPLIED",
+            reaction_count=0, reaction_strength=relevance, evidence=tuple(evidence),
         ))
 
     rows.sort(key=lambda c: c.reaction_strength, reverse=True)
     return rows[: cfg.max_candidates]
 
 
-# Compatibility aliases while callers migrate to QOF terminology.
 detect_options_zones = detect_qof_structure
 OptionsZoneConfig = OptionsStructureConfig
