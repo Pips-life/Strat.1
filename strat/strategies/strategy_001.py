@@ -1,7 +1,8 @@
 """Strategy 001: QOF (Quantitative Options Flow).
 
 Canonical path: market intelligence -> QOF-implied market map -> confluence
--> precision-aware QOF entry/target validation -> global risk/execution.
+-> multi-timeframe precision-aware QOF entry/target validation -> global
+risk/execution.
 
 Conventional TradingView structure is secondary context only and is never an
 entry prerequisite.
@@ -13,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from strat.confluence import ConfluenceConfig, ConfluenceEngine
 from strat.intelligence import delta_pressure, gamma_exposure, gamma_regime, iv_regime, velocity_signal
-from strat.intelligence.precision import PrecisionEntryPlanner
+from strat.intelligence.precision import MultiTimeframePrecisionPlanner, PrecisionEntryPlanner
 from strat.core.models import PriceBar
 from strat.zones.engine import QOFStructureEngine
 from strat.zones.models import ZoneRole
@@ -42,7 +43,7 @@ def _bars(market: Dict[str, Any]) -> list[PriceBar]:
 class Strategy001(Strategy):
     id = "strategy_001"
     name = "QOF — Quantitative Options Flow"
-    version = "4.2.0"
+    version = "4.3.0"
 
     def __init__(self, config: Optional[Strategy001Config] = None) -> None:
         self.config = config or Strategy001Config()
@@ -51,6 +52,7 @@ class Strategy001(Strategy):
             preferred_fraction=self.config.precision_preferred_fraction,
             minimum_score=self.config.precision_minimum,
         )
+        self.multitimeframe_precision = MultiTimeframePrecisionPlanner(self.precision)
         self.confluence = ConfluenceEngine(ConfluenceConfig(
             minimum_score=self.config.confluence_minimum,
             strong_score=self.config.strong_confluence,
@@ -103,7 +105,7 @@ class Strategy001(Strategy):
     def _zone_dict(zone: Any) -> Dict[str, Any]:
         if isinstance(zone, dict):
             return zone
-        return {"id": getattr(zone, "id", None), "center": getattr(zone, "center", None), "lower": getattr(zone, "lower", None), "upper": getattr(zone, "upper", None), "role": getattr(getattr(zone, "role", None), "value", getattr(zone, "role", None)), "state": getattr(getattr(zone, "state", None), "value", getattr(zone, "state", None)), "strength": getattr(zone, "strength", 0.0), "type": getattr(getattr(zone, "type", None), "value", getattr(zone, "type", None)), "origin": getattr(getattr(zone, "origin", None), "value", getattr(zone, "origin", None))}
+        return {"id": getattr(zone, "id", None), "center": getattr(zone, "center", None), "lower": getattr(zone, "lower", None), "upper": getattr(zone, "upper", None), "role": getattr(getattr(zone, "role", None), "value", getattr(zone, "role", None)), "state": getattr(getattr(zone, "state", None), "value", getattr(zone, "state", None)), "strength": getattr(zone, "strength", 0.0), "type": getattr(getattr(zone, "type", None), "value", getattr(zone, "type", None)), "origin": getattr(getattr(zone, "origin", None), "value", getattr(zone, "origin", None)), "qof_primary": getattr(zone, "qof_primary", True), "timeframe": getattr(zone, "timeframe", None)}
 
     def _component_scores(self, market: Dict[str, Any], intelligence: Dict[str, Any], zones: list[Any]) -> tuple[dict[str, float], dict[str, float]]:
         supplied = market.get("evidence", {}) or {}
@@ -205,6 +207,19 @@ class Strategy001(Strategy):
             return Signal("CLOSE", 100.0, reason=f"{side} target reached.", metadata={"exit_type": "TARGET"})
         return Signal("WAIT", 0.0, reason="Open intraday position remains inside its plan.", metadata={"manage": True})
 
+    def _context_zones(self, analysis: Dict[str, Any], execution_timeframe: str) -> Dict[str, list[Dict[str, Any]]]:
+        supplied = analysis.get("qof_market_maps_by_timeframe") or analysis.get("qof_structures_by_timeframe") or {}
+        if supplied:
+            return {str(tf): [self._zone_dict(z) for z in zones] for tf, zones in supplied.items()}
+        grouped: Dict[str, list[Dict[str, Any]]] = {}
+        for zone in analysis.get("qof_market_map", []) or ():
+            z = self._zone_dict(zone)
+            tf = z.get("timeframe")
+            if tf is None or str(tf) == str(execution_timeframe):
+                continue
+            grouped.setdefault(str(tf), []).append(z)
+        return grouped
+
     def _entry(self, analysis: Dict[str, Any], side: str) -> Signal:
         result = analysis["confluence_result"]
         if result.direction != side or not result.tradable:
@@ -227,29 +242,35 @@ class Strategy001(Strategy):
         risk = abs(price - stop)
         reward = abs(target - price)
         rr = reward / risk if risk > 0 else 0.0
-        precision = self.precision.plan(
+        execution_timeframe = str(analysis.get("execution_timeframe", zone.get("timeframe") or "5m"))
+        mtf = self.multitimeframe_precision.plan(
             side=side,
             price=price,
-            zone=zone,
+            execution_zone=zone,
+            execution_timeframe=execution_timeframe,
+            context_zones_by_timeframe=self._context_zones(analysis, execution_timeframe),
             atr=atr,
             stop=stop,
             target=target,
             minimum_rr=self.config.minimum_rr,
         )
-        if not precision.accepted:
+        if not mtf.accepted:
             return Signal(
                 "WAIT",
                 result.score,
-                reason=precision.reason,
+                reason=mtf.reason,
                 metadata={
-                    "precision_score": precision.precision_score,
-                    "preferred_entry": precision.preferred_entry,
+                    "precision_score": mtf.precision_score,
+                    "preferred_entry": mtf.preferred_entry,
+                    "execution_timeframe": mtf.execution_timeframe,
+                    "context_timeframes": mtf.context_timeframes,
+                    "mtf_context_aligned": mtf.aligned_context,
                     "setup_zone": zone,
                     "target_zone": target_zone,
                     "precision_required": True,
                 },
             )
-        return Signal(action="BUY" if side == "LONG" else "SELL", confidence=result.score, entry=price, stop_loss=stop, take_profit=target, reason=f"QOF {side} precision structure-confluence setup confirmed with {rr:.2f}R available.", metadata={"strategy": self.id, "structure_type": "QOF_IMPLIED", "setup_zone": zone, "target_zone": target_zone, "confluence": result, "precision_score": precision.precision_score, "preferred_entry": precision.preferred_entry, "intraday_only": True})
+        return Signal(action="BUY" if side == "LONG" else "SELL", confidence=result.score, entry=price, stop_loss=stop, take_profit=target, reason=f"QOF {side} multi-timeframe precision structure-confluence setup confirmed with {rr:.2f}R available.", metadata={"strategy": self.id, "structure_type": "QOF_IMPLIED", "setup_zone": zone, "target_zone": target_zone, "confluence": result, "precision_score": mtf.precision_score, "preferred_entry": mtf.preferred_entry, "execution_timeframe": mtf.execution_timeframe, "context_timeframes": mtf.context_timeframes, "mtf_context_aligned": mtf.aligned_context, "intraday_only": True})
 
     def generate_signal(self, analysis: Dict[str, Any]) -> Signal:
         managed = self._manage_position(analysis)
@@ -267,4 +288,4 @@ class Strategy001(Strategy):
         return self._entry(analysis, result.direction) if result.direction in {"LONG", "SHORT"} else Signal("WAIT", result.score, reason="No directional QOF confluence.")
 
     def risk_parameters(self) -> Dict[str, Any]:
-        return {"min_confidence": self.config.confluence_minimum, "max_positions": 1, "intraday_only": True, "end_of_day_flatten_minutes": self.config.end_of_day_flatten_minutes, "minimum_rr": self.config.minimum_rr, "precision_minimum": self.config.precision_minimum, "precision_preferred_fraction": self.config.precision_preferred_fraction, "risk_per_trade": "delegated_to_global_risk_engine"}
+        return {"min_confidence": self.config.confluence_minimum, "max_positions": 1, "intraday_only": True, "end_of_day_flatten_minutes": self.config.end_of_day_flatten_minutes, "minimum_rr": self.config.minimum_rr, "precision_minimum": self.config.precision_minimum, "precision_preferred_fraction": self.config.precision_preferred_fraction, "risk_per_trade": "delegated_to_global_risk_engine", "multi_timeframe_precision": True}
