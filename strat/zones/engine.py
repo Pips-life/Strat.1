@@ -30,7 +30,9 @@ class QOFStructureEngine:
 
     QOF-implied structures are primary. Price-derived structure is retained as
     secondary confirmation/evidence and is never required before a QOF candidate
-    can exist.
+    can exist. Timeframe is carried as context so precision and multi-timeframe
+    logic can distinguish where a structure was derived without changing its
+    causal identity.
     """
 
     def __init__(self, config: QOFStructureEngineConfig | None = None) -> None:
@@ -45,6 +47,13 @@ class QOFStructureEngine:
         return sha1(raw.encode("utf-8")).hexdigest()[:12]
 
     def _merge_candidates(self, candidates: Iterable[ZoneCandidate], atr: float) -> list[ZoneCandidate]:
+        """Merge coincident evidence without erasing QOF provenance.
+
+        QOF is the primary source whenever a QOF-implied candidate overlaps a
+        price-derived candidate. Price evidence is attached to the QOF candidate
+        as validation/context; it never upgrades a price structure into a new
+        COMPOSITE structure type.
+        """
         ordered = sorted(candidates, key=lambda c: (c.role.value, c.center))
         merged: list[ZoneCandidate] = []
         tolerance = atr * self.config.merge_tolerance_atr
@@ -58,16 +67,19 @@ class QOFStructureEngine:
             total = existing.reaction_count + candidate.reaction_count
             center = ((existing.center * existing.reaction_count + candidate.center * candidate.reaction_count) / total
                       if total > 0 else (existing.center + candidate.center) / 2.0)
+            qof_present = existing.source == "QOF_IMPLIED" or candidate.source == "QOF_IMPLIED"
+            primary = candidate if candidate.source == "QOF_IMPLIED" else existing
+            secondary = existing if primary is candidate else candidate
             merged[hit] = ZoneCandidate(
                 center=center,
                 lower=min(existing.lower, candidate.lower),
                 upper=max(existing.upper, candidate.upper),
                 role=existing.role,
                 detected_at=max(existing.detected_at, candidate.detected_at),
-                source="COMPOSITE",
+                source="QOF_IMPLIED" if qof_present else "STRUCTURAL",
                 reaction_count=total,
                 reaction_strength=max(existing.reaction_strength, candidate.reaction_strength),
-                evidence=existing.evidence + candidate.evidence,
+                evidence=primary.evidence + secondary.evidence,
             )
         return merged
 
@@ -80,8 +92,15 @@ class QOFStructureEngine:
         options: Iterable[Mapping[str, object]] | None = None,
         evidence: ZoneEvidenceContext | None = None,
         as_of_index: int | None = None,
+        timeframe: str | None = None,
     ) -> list[Zone]:
-        """Build a causal QOF market map as of the supplied observation."""
+        """Build a causal QOF market map as of the supplied observation.
+
+        ``timeframe`` is contextual metadata (for example ``"1m"``, ``"5m"`` or
+        ``"15m"``). It does not by itself create direction or alter QOF structure
+        identity. Precision and multi-timeframe consumers may use it to prefer
+        structures that match the strategy's execution horizon.
+        """
         if not bars or atr <= 0:
             return []
         boundary = len(bars) - 1 if as_of_index is None else as_of_index
@@ -99,15 +118,13 @@ class QOFStructureEngine:
         structures: list[Zone] = []
         for candidate in candidates:
             strength = self.scorer.strength(candidate, now_minutes_old)
-            qof_primary = candidate.source in {"QOF_IMPLIED", "COMPOSITE"}
+            qof_primary = candidate.source == "QOF_IMPLIED"
             structure = Zone(
                 id=self._structure_id(candidate),
                 center=candidate.center,
                 lower=candidate.lower,
                 upper=candidate.upper,
-                type=ZoneType.COMPOSITE if candidate.source == "COMPOSITE" else (
-                    ZoneType.QOF_IMPLIED if candidate.source == "QOF_IMPLIED" else ZoneType.STRUCTURAL
-                ),
+                type=ZoneType.QOF_IMPLIED if qof_primary else ZoneType.STRUCTURAL,
                 role=candidate.role,
                 state=self.config.predictive_state if qof_primary else ZoneState.ACTIVE,
                 strength=strength,
@@ -124,7 +141,9 @@ class QOFStructureEngine:
                 "relevance": self.scorer.relevance(structure, current_price, atr),
                 "source_count": len({e.source for e in candidate.evidence}),
                 "distance_atr": structure.normalized_distance(current_price, atr),
-                "validated_by_price": candidate.reaction_count > 0,
+                "validated_by_price": candidate.reaction_count > 0 if qof_primary else False,
+                "timeframe": timeframe,
+                "timeframe_context": "execution" if timeframe else "unspecified",
             })
             structures.append(structure)
 
@@ -141,8 +160,6 @@ class QOFStructureEngine:
             return str(kinds[0])
         if candidate.source == "QOF_IMPLIED":
             return "DEALER_RESISTANCE" if candidate.role == ZoneRole.RESISTANCE else "DEALER_SUPPORT"
-        if candidate.source == "COMPOSITE":
-            return "COMPOSITE"
         return "PRICE_CONFIRMATION"
 
     def update_states(self, structures: Sequence[Zone], price: float, atr: float, timestamp) -> list[Zone]:
@@ -177,7 +194,7 @@ class QOFStructureEngine:
         else:
             return []
         return sorted(
-            [z for z in candidates if z.state != ZoneState.INVALIDATED],
+            [z for z in candidates if z.state != ZoneState.INVALIDATED and bool(z.metadata.get("qof_primary"))],
             key=lambda z: (z.distance(price), -float(z.metadata.get("relevance", 0.0))),
         )
 
