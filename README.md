@@ -1,83 +1,104 @@
-# Strat.1
+# Strat.1 — Strategy 001
 
-Options-flow research engine for Gold futures (GC) options.
+Quantitative intraday trading-bot research repository for Gold futures/options intelligence.
 
-The repository contains a provider-independent calculation engine plus a provider-neutral data-adapter layer for the six-level Gold options map:
+## Canonical workflow
 
-- Dealer Ceiling
-- Main Reclaim Pivot
-- Active Dealer Resistance
-- Active Dealer Support
-- Stabilization Support
-- Sweep-Trap Zone
-
-## Architecture
+There is **one active architecture**. Strategy logic must follow this flow:
 
 ```text
-Provider API / CSV / JSON replay
-             |
-             v
-      strat.adapters
-             |
-     canonical DataFrame
-             |
-             v
-    strat.options_engine
-             |
-             v
-       six-level map
+Provider / Replay Data
+        ↓
+Provider-Neutral Normalization
+        ↓
+Market Intelligence
+  ├─ Price Structure
+  ├─ Volume
+  ├─ Velocity
+  ├─ Options Flow
+  ├─ Delta
+  ├─ Gamma / GEX
+  └─ IV
+        ↓
+S/R Zone Engine
+        ↓
+Active Market Map
+        ↓
+Reusable Confluence Engine
+        ↓
+Strategy 001 Setup / Entry Validation
+        ↓
+Global Risk Engine
+        ↓
+Execution Interface
+   ├─ Demo
+   └─ Live
 ```
 
-The analytics layer does not know which market-data vendor supplied the data. This lets us develop and test the complete strategy before live CME access is available.
+Replay is a **development/testing capability**, not a third production mode. The eventual APK exposes only Demo / Live.
 
-## Install
+## Repository rules
 
-```bash
-pip install -e .
+- `docs/strategy_001_phase1_phase2_blueprint.md` is the canonical implementation blueprint for the current Phase 1/2 work.
+- Do not create parallel strategy specifications, duplicate confluence engines, or alternate S/R definitions.
+- New ideas must extend the canonical modules rather than create competing implementations.
+- If an older rule conflicts with the current architecture, the older rule must be removed or replaced rather than left for the runtime to interpret.
+- Provider adapters normalize data only; they must not contain trading decisions.
+- The Confluence Engine scores evidence; Strategy 001 decides whether a setup is tradable.
+- Risk and execution remain outside strategy/confluence logic.
+- All production and replay decisions must be causal: no look-ahead data.
+
+## Current implementation status
+
+### Phase 1 — Core models
+
+Implemented in `strat/core/`:
+
+- `PriceBar`
+- `MarketSnapshot`
+
+These are provider-neutral domain models used as the boundary between data adapters and strategy intelligence.
+
+### Phase 2 — S/R Zone Engine
+
+Implemented in `strat/zones/`:
+
+- Structural swing detection with confirmation delay
+- ATR-normalized zone width
+- Pivot clustering
+- Zone strength scoring
+- Volatility-normalized relevance
+- Zone state machine
+- Break / flip handling
+- Market-map orchestration
+
+The Zone Engine is intentionally extensible. Options/dealer, gamma, stabilization, liquidity/sweep, reclaim, and composite evidence can be added through the same zone model without creating another S/R system.
+
+### Existing options intelligence
+
+`strat/options_engine.py` remains a reusable **market-intelligence/data-calculation module**. Its options levels are inputs to the broader Zone/Confluence architecture; they are not a second Strategy 001 specification.
+
+## Next implementation phase
+
+Phase 3 will connect:
+
+```text
+Options Flow → Delta → Gamma/GEX → IV
+                    ↓
+              Zone Evidence
+                    ↓
+             Confluence Engine
+                    ↓
+              Strategy 001
 ```
 
-## Offline adapter example
-
-```python
-from strat.adapters import RecordsAdapter
-from strat.options_engine import GoldOptionsEngine
-
-adapter = RecordsAdapter([
-    {
-        "strike": 4630,
-        "expiry": "2026-08-28",
-        "option_type": "CALL",
-        "bid": 31.2,
-        "ask": 32.1,
-        "last": 31.7,
-        "volume": 1250,
-        "oi": 8430,
-        "delta": 0.58,
-        "gamma": 0.0018,
-        "vega": 0.42,
-        "iv": 0.185,
-    }
-])
-
-chain = adapter.fetch_chain()
-```
-
-`CsvReplayAdapter` and `JsonReplayAdapter` can replay saved snapshots from any provider. `RecordsAdapter` is useful for tests and for integrating a provider SDK.
-
-## Required normalized fields
-
-`strike`, `expiry`, `option_type`, `bid`, `ask`, `last`, `volume`, `open_interest`, `delta`, `gamma`, `vega`, `iv`.
-
-Optional trade fields are `trade_price`, `trade_size`, `aggressor`, and `multiplier`. The default multiplier is 100 ounces for standard GC; pass the instrument multiplier explicitly for other contracts.
-
-## Adding CME later
-
-The future CME adapter should only translate CME's response into the canonical schema. It should not contain GEX, level-selection, or signal logic. That logic remains in `strat.options_engine`.
+That phase will also reconcile the existing options-flow strategy implementation with the canonical S/R Zone Engine so there is only one Strategy 001 runtime path.
 
 ## Testing
 
 ```bash
+pip install -e .
 pytest -q
 ```
 
-This is an analytics/research component, not financial advice or a guaranteed trading signal.
+This repository is a quantitative research/development system and does not guarantee trading performance or provide financial advice.
