@@ -7,7 +7,7 @@ from strat.backtest.models import Bar
 from strat.backtest.replay import ReplayEngine
 from strat.execution.interface import ExecutionAdapter
 from strat.execution.models import Fill, OrderRequest
-from strat.risk.engine import RiskEngine, RiskState
+from strat.risk.engine import RiskEngine, RiskRequest
 from strat.strategies.base import Strategy
 
 
@@ -19,18 +19,12 @@ class ReplayEvent:
 
 
 class ReplayRunner:
-    """Run a real Strategy through the production risk/execution pipeline.
-
-    Replay is an environment, not a special strategy. The strategy generates
-    intent; the RiskEngine sizes/approves it; the ExecutionAdapter simulates it.
-    Historical options data remains an injectable market_builder.
-    """
+    """Run a Strategy through the production risk and execution pipeline."""
 
     def __init__(self, bars: list[Bar], execution: ExecutionAdapter, strategy: Strategy,
                  risk: RiskEngine | None = None,
                  market_builder: Callable[[Bar], dict[str, Any]] | None = None,
-                 account_equity: float = 0.0,
-                 point_value: float = 1.0,
+                 account_equity: float = 0.0, point_value: float = 1.0,
                  quantity_step: float = 0.01) -> None:
         self.replay = ReplayEngine(bars)
         self.execution = execution
@@ -41,13 +35,26 @@ class ReplayRunner:
         self.point_value = point_value
         self.quantity_step = quantity_step
         self.events: list[ReplayEvent] = []
-        self.state = RiskState()
+        self.daily_pnl = 0.0
+        self.trades_today = 0
+        self.consecutive_losses = 0
 
     def run(self) -> list[ReplayEvent]:
         for bar in self.replay.stream():
             symbol = self._symbol(bar)
             protective = self.execution.on_bar(symbol, bar.timestamp, bar.high, bar.low, bar.close)
             self._record_fills(protective, bar, "PROTECTIVE_EXIT")
+
+            # Global no-overnight guard: flatten before the strategy can open a new trade.
+            if self.risk.should_flatten(bar.timestamp) and self.execution.positions():
+                result = self.execution.close_position(symbol, bar.timestamp, bar.close)
+                self.events.append(ReplayEvent(bar.timestamp, "ORDER", {
+                    "status": result.status, "order_id": result.order_id,
+                    "reason": "risk: end-of-day flatten",
+                }))
+                if result.fill:
+                    self._record_fills([result.fill], bar, "END_OF_DAY_EXIT")
+                continue
 
             market = self.market_builder(bar)
             market.setdefault("symbol", symbol)
@@ -63,32 +70,28 @@ class ReplayRunner:
                 "metadata": signal.metadata,
             }))
 
-            if signal.action in {"BUY", "SELL"} and signal.entry is not None:
-                risk_result = self.risk.evaluate_signal(
-                    signal=signal,
-                    equity=self.account_equity,
-                    point_value=self.point_value,
-                    quantity_step=self.quantity_step,
-                    current_positions=len(self.execution.positions()),
-                    daily_loss=self.state.daily_loss,
-                    trades_today=self.state.trades_today,
-                    consecutive_losses=self.state.consecutive_losses,
-                    timestamp=bar.timestamp,
+            if signal.action in {"BUY", "SELL"} and signal.entry is not None and signal.stop_loss is not None and signal.take_profit is not None:
+                request = RiskRequest(
+                    side=signal.action, entry=signal.entry, stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit, equity=self.account_equity,
+                    current_positions=len(self.execution.positions()), daily_pnl=self.daily_pnl,
+                    trades_today=self.trades_today, consecutive_losses=self.consecutive_losses,
+                    now=bar.timestamp, point_value=self.point_value,
+                    confidence=signal.confidence,
                 )
+                decision = self.risk.evaluate(request)
                 self.events.append(ReplayEvent(bar.timestamp, "RISK", {
-                    "approved": risk_result.approved,
-                    "quantity": risk_result.quantity,
-                    "reason": risk_result.reason,
-                    "risk_amount": risk_result.risk_amount,
+                    "approved": decision.approved, "quantity": decision.quantity,
+                    "reason": decision.reason, "risk_amount": decision.risk_amount,
+                    "reward_risk": decision.reward_risk,
                 }))
-                if not risk_result.approved:
+                if not decision.approved:
                     continue
 
                 order = OrderRequest(
-                    symbol=symbol, side=signal.action,
-                    quantity=risk_result.quantity, price=signal.entry,
-                    stop_loss=signal.stop_loss, take_profit=signal.take_profit,
-                    timestamp=bar.timestamp,
+                    symbol=symbol, side=signal.action, quantity=decision.quantity,
+                    price=signal.entry, stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit, timestamp=bar.timestamp,
                     metadata={"strategy": self.strategy.id, "confidence": signal.confidence, **signal.metadata},
                 )
                 result = self.execution.submit(order)
@@ -96,8 +99,9 @@ class ReplayRunner:
                     "status": result.status, "order_id": result.order_id, "reason": result.reason,
                 }))
                 if result.fill:
-                    self.state.trades_today += 1
+                    self.trades_today += 1
                     self._record_fills([result.fill], bar, "ENTRY")
+
             elif signal.action == "CLOSE" and self.execution.positions():
                 result = self.execution.close_position(symbol, bar.timestamp, bar.close)
                 self.events.append(ReplayEvent(bar.timestamp, "ORDER", {
