@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from strat.backtest.models import Bar
+from strat.backtest.replay import ReplayEngine
 from strat.execution.interface import ExecutionAdapter
 from strat.execution.models import Fill, OrderRequest
-from strat.backtest.replay import ReplayEngine
+from strat.strategies.base import Strategy
 
 
 @dataclass(frozen=True)
@@ -17,47 +18,70 @@ class ReplayEvent:
 
 
 class ReplayRunner:
-    """Runs the real strategy/execution pipeline against replay bars.
+    """Run a real Strategy plugin through the normal execution interface.
 
-    The runner intentionally knows nothing about Strategy 001. A strategy is
-    supplied as a callable receiving the current bar and returning an optional
-    OrderRequest. The same execution interface can later be backed by demo or
-    live adapters.
+    A market_builder converts each historical bar and synchronized historical
+    options snapshot into the canonical market dictionary expected by the
+    selected strategy. No future bars are exposed to the strategy.
     """
 
-    def __init__(
-        self,
-        bars: list[Bar],
-        execution: ExecutionAdapter,
-        strategy_step: Callable[[Bar], OrderRequest | None],
-    ) -> None:
+    def __init__(self, bars: list[Bar], execution: ExecutionAdapter, strategy: Strategy,
+                 market_builder: Callable[[Bar], dict[str, Any]] | None = None) -> None:
         self.replay = ReplayEngine(bars)
         self.execution = execution
-        self.strategy_step = strategy_step
+        self.strategy = strategy
+        self.market_builder = market_builder or self._default_market_builder
         self.events: list[ReplayEvent] = []
 
     def run(self) -> list[ReplayEvent]:
         for bar in self.replay.stream():
-            # Existing stops/targets are processed before a new decision at this bar.
-            fills = self.execution.on_bar(
-                symbol=self._symbol(bar),
-                timestamp=bar.timestamp,
-                high=bar.high,
-                low=bar.low,
-                close=bar.close,
-            )
-            self._record_fills(fills, bar, "PROTECTIVE_EXIT")
+            symbol = self._symbol(bar)
+            protective = self.execution.on_bar(symbol, bar.timestamp, bar.high, bar.low, bar.close)
+            self._record_fills(protective, bar, "PROTECTIVE_EXIT")
 
-            order = self.strategy_step(bar)
-            if order is not None:
-                result = self.execution.submit(order)
-                self.events.append(
-                    ReplayEvent(bar.timestamp, "ORDER", {"status": result.status, "order_id": result.order_id, "reason": result.reason})
+            market = self.market_builder(bar)
+            market.setdefault("symbol", symbol)
+            market.setdefault("price", bar.close)
+            if bar.atr is not None:
+                market.setdefault("atr", bar.atr)
+
+            analysis = self.strategy.analyze(market)
+            signal = self.strategy.generate_signal(analysis)
+            self.events.append(ReplayEvent(bar.timestamp, "SIGNAL", {
+                "strategy": self.strategy.id, "action": signal.action,
+                "confidence": signal.confidence, "reason": signal.reason,
+                "metadata": signal.metadata,
+            }))
+
+            if signal.action in {"BUY", "SELL"} and signal.entry is not None:
+                order = OrderRequest(
+                    symbol=symbol, side=signal.action,
+                    quantity=float(market.get("quantity", 1.0)), price=signal.entry,
+                    stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                    timestamp=bar.timestamp,
+                    metadata={"strategy": self.strategy.id, "confidence": signal.confidence, **signal.metadata},
                 )
+                result = self.execution.submit(order)
+                self.events.append(ReplayEvent(bar.timestamp, "ORDER", {
+                    "status": result.status, "order_id": result.order_id, "reason": result.reason,
+                }))
                 if result.fill:
                     self._record_fills([result.fill], bar, "ENTRY")
+            elif signal.action == "CLOSE" and self.execution.positions():
+                result = self.execution.close_position(symbol, bar.timestamp, bar.close)
+                self.events.append(ReplayEvent(bar.timestamp, "ORDER", {
+                    "status": result.status, "order_id": result.order_id, "reason": result.reason,
+                }))
+                if result.fill:
+                    self._record_fills([result.fill], bar, "STRATEGY_EXIT")
 
         return self.events
+
+    @staticmethod
+    def _default_market_builder(bar: Bar) -> dict[str, Any]:
+        return {"symbol": str(bar.metadata.get("symbol", "XAUUSD")), "price": bar.close,
+                "atr": bar.atr or 0.0, "confluence": {}, "levels": {},
+                "price_action": {}, "liquidity": {}}
 
     @staticmethod
     def _symbol(bar: Bar) -> str:
@@ -65,18 +89,8 @@ class ReplayRunner:
 
     def _record_fills(self, fills: list[Fill], bar: Bar, kind: str) -> None:
         for fill in fills:
-            self.events.append(
-                ReplayEvent(
-                    bar.timestamp,
-                    kind,
-                    {
-                        "order_id": fill.order_id,
-                        "symbol": fill.symbol,
-                        "side": fill.side,
-                        "quantity": fill.quantity,
-                        "price": fill.price,
-                        "commission": fill.commission,
-                        "slippage": fill.slippage,
-                    },
-                )
-            )
+            self.events.append(ReplayEvent(bar.timestamp, kind, {
+                "order_id": fill.order_id, "symbol": fill.symbol, "side": fill.side,
+                "quantity": fill.quantity, "price": fill.price,
+                "commission": fill.commission, "slippage": fill.slippage,
+            }))
