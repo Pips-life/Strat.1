@@ -1,6 +1,14 @@
-# Strat.1 — Strategy 001
+# Strat.1 — QOF (Strategy 001)
 
-Quantitative intraday trading-bot research repository for Gold futures/options intelligence.
+Quantitative Options Flow (QOF) intraday trading-bot research repository for Gold futures/options intelligence.
+
+## Canonical objective
+
+**Strategy 001 trades QOF-derived market structures, not TradingView-derived market structures.**
+
+QOF continuously converts options flow, open interest, Delta, Gamma/GEX, IV, options volume and price/market data into mathematical estimates of potential dealer resistance, dealer support, stabilization, liquidity/reaction and flip zones. These QOF-implied structures may exist before conventional chart structure becomes visually obvious.
+
+TradingView-style swings/support/resistance may be used as secondary confirmation, but they are never a prerequisite for a QOF trade.
 
 ## Canonical workflow
 
@@ -10,21 +18,27 @@ Provider / Replay Data
 Provider-Neutral Normalization
         ↓
 Market Intelligence
-  ├─ Price Structure
-  ├─ Volume
-  ├─ Velocity
   ├─ Options Flow
+  ├─ Open Interest
   ├─ Delta
   ├─ Gamma / GEX
-  └─ IV
+  ├─ IV
+  ├─ Options Volume
+  ├─ Price / Volume
+  └─ Velocity
         ↓
-S/R Zone Engine
+QOF Structure Engine
+  ├─ Dealer Resistance
+  ├─ Dealer Support
+  ├─ Stabilisation Zones
+  ├─ Liquidity / Reaction Zones
+  └─ Potential Flip Zones
         ↓
-Active Market Map
+QOF Market Map
         ↓
 Reusable Confluence Engine
         ↓
-Strategy 001 Setup / Entry Validation
+QOF (Strategy 001) Setup / Entry Validation
         ↓
 Global Risk Engine
         ↓
@@ -37,12 +51,16 @@ Replay is development/testing only; the eventual APK exposes Demo / Live.
 
 ## Repository rules
 
+- QOF is the canonical name and identity of Strategy 001.
+- QOF-derived structure is the primary structural map.
+- Do not turn conventional TradingView S/R into the strategy's entry prerequisite.
+- QOF-implied zones are predictions/evidence, not guaranteed support or resistance; price and live QOF behavior validate, reject or update them.
 - Keep one active implementation for each trading decision layer.
-- Do not create parallel strategy specifications, duplicate confluence engines, or alternate S/R definitions.
+- Do not create parallel strategy specifications, duplicate confluence engines, or alternate structural definitions.
 - Superseded rules must be removed or replaced, not left for runtime interpretation.
 - Provider adapters normalize data only; they do not make trading decisions.
-- The S/R Zone Engine owns the market map.
-- The Confluence Engine scores evidence; Strategy 001 decides whether a setup is tradable.
+- The QOF Structure Engine owns QOF-derived market structures and the market map.
+- The Confluence Engine scores evidence; QOF decides whether a setup is tradable.
 - Risk and execution remain outside strategy/confluence logic.
 - Production and replay decisions must be causal: no look-ahead data.
 
@@ -52,7 +70,7 @@ Replay is development/testing only; the eventual APK exposes Demo / Live.
 
 Provider-neutral `PriceBar` and `MarketSnapshot` models are implemented in `strat/core/`.
 
-### Phase 2 — S/R Zone Engine
+### Phase 2 — Structural intelligence
 
 Implemented in `strat/zones/`:
 
@@ -63,22 +81,49 @@ Implemented in `strat/zones/`:
 - Zone state machine and break/flip handling
 - Active market-map orchestration
 
-### Phase 3 — Intelligence + Confluence
+These price-derived structures are supporting evidence only; they do not define the QOF strategy.
+
+### Phase 3 — QOF intelligence + Confluence
 
 Implemented:
 
+- Options flow evidence
 - Delta-adjusted directional pressure
 - Gamma exposure proxy with explicit provider sign convention
 - Positive/negative/neutral gamma regime
 - IV expansion/contraction/stable regime
 - Velocity expansion/contraction/stable regime
 - Relative volume
+- Options-derived candidate zones
+- Composite multi-source zones
 - Seven-factor directional Confluence Engine
 - Directional edge and contradiction penalty
 - Missing-data neutrality
-- Canonical Strategy 001 consuming the zone map and confluence result
+- Canonical QOF Strategy 001 consuming the structural map and confluence result
 
 The former `options_flow_001.py` strategy implementation was removed because it maintained a competing level-based entry path.
+
+## QOF structure principle
+
+The engine should be able to identify a potential QOF market structure **before conventional chart structure forms**.
+
+Example:
+
+```text
+QOF detects active dealer resistance
+              ↓
+price approaches resistance
+              ↓
+QOF flow + Delta + Gamma/GEX + IV + velocity
+validate bearish pressure
+              ↓
+QOF SHORT
+              ↓
+target = next QOF-derived dealer support /
+stabilisation zone
+```
+
+A later TradingView swing high is confirmation/context, not the reason the trade exists.
 
 ## Confluence weights
 
