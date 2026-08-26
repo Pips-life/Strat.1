@@ -33,6 +33,7 @@ class MultiTimeframePrecisionPlan:
     precision_score: float
     aligned_context: bool
     reason: str
+    htf_respected: bool = False
 
 
 class PrecisionEntryPlanner:
@@ -82,12 +83,14 @@ class PrecisionEntryPlanner:
 
 
 class MultiTimeframePrecisionPlanner:
-    """Use higher-timeframe QOF structures as context and an execution timeframe for entry precision.
+    """Use HTF QOF zones as context and accept explicit LTF respect as confirmation.
 
     Higher timeframes establish structural context; they do not manufacture
-    direction. The execution timeframe must provide a QOF structure compatible
-    with the selected side. Price/TradingView structure cannot satisfy this
-    requirement by itself.
+direction. The execution timeframe normally provides a QOF structure compatible
+with the selected side. A higher-timeframe QOF zone that is explicitly
+*respected by the execution timeframe* is also valid confirmation: the LTF
+reaction validates the HTF location rather than requiring a duplicate LTF zone.
+Price/TradingView structure cannot satisfy this requirement by itself.
     """
 
     def __init__(self, entry_planner: PrecisionEntryPlanner | None = None, *, context_bonus: float = 10.0) -> None:
@@ -109,25 +112,43 @@ class MultiTimeframePrecisionPlanner:
     def _timeframe(zone: Mapping[str, object], default: str) -> str:
         return str(zone.get("timeframe", default))
 
+    @staticmethod
+    def _ltf_respects_htf(zone: Mapping[str, object], side: str) -> bool:
+        """Consume an explicit causal LTF confirmation of an HTF QOF zone.
+
+        Upstream market-structure processing owns the actual price-action
+        recognition. This planner consumes its normalized result so it never
+        invents a future reaction or uses look-ahead data.
+        """
+        if not MultiTimeframePrecisionPlanner._qof(zone):
+            return False
+        raw = zone.get("ltf_respect", zone.get("respected_by_ltf", False))
+        if not isinstance(raw, bool) or not raw:
+            return False
+        direction = zone.get("respect_direction")
+        if direction is None:
+            return True
+        return str(getattr(direction, "value", direction)).upper() == side
+
     def _context_aligned(
         self,
         *,
         side: str,
         price: float,
         context_zones: Sequence[Mapping[str, object]],
-    ) -> bool:
+    ) -> tuple[bool, bool]:
         wanted = "SUPPORT" if side == "LONG" else "RESISTANCE"
         for zone in context_zones:
             if not self._qof(zone) or self._role(zone) != wanted:
                 continue
+            if self._ltf_respects_htf(zone, side):
+                return True, True
             lower = float(zone["lower"])
             upper = float(zone["upper"])
-            # Context may be above/below the execution area; it is alignment,
-            # not an entry trigger. A nearby QOF context zone is sufficient.
             width = max(upper - lower, 0.0)
             if lower <= price <= upper or abs(float(zone.get("center", (lower + upper) / 2.0)) - price) <= max(width, 1e-9):
-                return True
-        return False
+                return True, False
+        return False, False
 
     def plan(
         self,
@@ -158,8 +179,10 @@ class MultiTimeframePrecisionPlanner:
             return MultiTimeframePrecisionPlan(False, str(execution_timeframe), context_timeframes, base.preferred_entry, base.precision_score, False, base.reason)
 
         context_zones = [z for zones in context.values() for z in zones]
-        aligned = self._context_aligned(side=side, price=price, context_zones=context_zones)
+        aligned, htf_respected = self._context_aligned(side=side, price=price, context_zones=context_zones)
         score = min(100.0, base.precision_score + (self.context_bonus if aligned else 0.0))
         if context_zones and not aligned:
             return MultiTimeframePrecisionPlan(False, str(execution_timeframe), context_timeframes, base.preferred_entry, score, False, "execution setup lacks aligned higher-timeframe QOF context")
+        if htf_respected:
+            return MultiTimeframePrecisionPlan(True, str(execution_timeframe), context_timeframes, base.preferred_entry, score, True, "LTF respect validated the higher-timeframe QOF zone", True)
         return MultiTimeframePrecisionPlan(True, str(execution_timeframe), context_timeframes, base.preferred_entry, score, aligned, "multi-timeframe QOF precision entry accepted")
