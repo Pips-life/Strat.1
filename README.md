@@ -2,7 +2,7 @@
 
 Options-flow research engine for Gold futures (GC) options.
 
-This repository contains the first provider-independent calculation engine for the six-level Gold options map:
+The repository contains a provider-independent calculation engine plus a provider-neutral data-adapter layer for the six-level Gold options map:
 
 - Dealer Ceiling
 - Main Reclaim Pivot
@@ -11,7 +11,24 @@ This repository contains the first provider-independent calculation engine for t
 - Stabilization Support
 - Sweep-Trap Zone
 
-The engine is designed to accept normalized options-chain/trade data from CME or another provider without coupling the analytics to a particular API.
+## Architecture
+
+```text
+Provider API / CSV / JSON replay
+             |
+             v
+      strat.adapters
+             |
+     canonical DataFrame
+             |
+             v
+    strat.options_engine
+             |
+             v
+       six-level map
+```
+
+The analytics layer does not know which market-data vendor supplied the data. This lets us develop and test the complete strategy before live CME access is available.
 
 ## Install
 
@@ -19,24 +36,33 @@ The engine is designed to accept normalized options-chain/trade data from CME or
 pip install -e .
 ```
 
-## Quick start
+## Offline adapter example
 
 ```python
-import pandas as pd
+from strat.adapters import RecordsAdapter
 from strat.options_engine import GoldOptionsEngine
 
-chain = pd.DataFrame([...])
+adapter = RecordsAdapter([
+    {
+        "strike": 4630,
+        "expiry": "2026-08-28",
+        "option_type": "CALL",
+        "bid": 31.2,
+        "ask": 32.1,
+        "last": 31.7,
+        "volume": 1250,
+        "oi": 8430,
+        "delta": 0.58,
+        "gamma": 0.0018,
+        "vega": 0.42,
+        "iv": 0.185,
+    }
+])
 
-engine = GoldOptionsEngine()
-result = engine.calculate(
-    chain=chain,
-    futures_price=4623.54,
-    atr=18.50,
-)
-
-print(result.levels)
-print(result.gamma_regime)
+chain = adapter.fetch_chain()
 ```
+
+`CsvReplayAdapter` and `JsonReplayAdapter` can replay saved snapshots from any provider. `RecordsAdapter` is useful for tests and for integrating a provider SDK.
 
 ## Required normalized fields
 
@@ -44,9 +70,9 @@ print(result.gamma_regime)
 
 Optional trade fields are `trade_price`, `trade_size`, `aggressor`, and `multiplier`. The default multiplier is 100 ounces for standard GC; pass the instrument multiplier explicitly for other contracts.
 
-## Important modelling note
+## Adding CME later
 
-The engine estimates dealer positioning. Public open interest does not reveal the private dealer/customer side of every position. The structural GEX model therefore uses a configurable customer-long/dealer-short baseline, while flow-adjusted GEX uses signed trade pressure as a proxy. These assumptions must be validated with historical data before live trading.
+The future CME adapter should only translate CME's response into the canonical schema. It should not contain GEX, level-selection, or signal logic. That logic remains in `strat.options_engine`.
 
 ## Testing
 
