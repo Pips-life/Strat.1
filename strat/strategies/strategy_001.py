@@ -1,8 +1,10 @@
-"""Strategy 001: zone-aware intraday directional strategy.
+"""Strategy 001: QOF (Quantitative Options Flow).
 
-One canonical path: market intelligence -> S/R market map -> seven-factor
-confluence -> setup/entry validation. The strategy does not maintain a second
-options-level rule set.
+Canonical path: market intelligence -> QOF-implied market map -> confluence
+-> QOF entry/target validation -> global risk/execution.
+
+Conventional TradingView structure is secondary context only and is never an
+entry prerequisite.
 """
 from __future__ import annotations
 
@@ -36,8 +38,8 @@ def _bars(market: Dict[str, Any]) -> list[PriceBar]:
 @registry.register
 class Strategy001(Strategy):
     id = "strategy_001"
-    name = "Quantitative Zone Confluence"
-    version = "3.1.0"
+    name = "QOF — Quantitative Options Flow"
+    version = "4.0.0"
 
     def __init__(self, config: Optional[Strategy001Config] = None) -> None:
         self.config = config or Strategy001Config()
@@ -49,6 +51,15 @@ class Strategy001(Strategy):
         ))
 
     def _market_map(self, market: Dict[str, Any]) -> list[Any]:
+        """Return the canonical QOF market map supplied by the Structure Engine.
+
+        If no map is supplied, legacy price-derived construction is retained as
+        a compatibility fallback only; it is not treated as the primary QOF
+        structural signal.
+        """
+        supplied = market.get("qof_market_map") or market.get("qof_structure_map")
+        if supplied:
+            return list(supplied)
         supplied = market.get("zone_map")
         if supplied:
             return list(supplied)
@@ -75,13 +86,12 @@ class Strategy001(Strategy):
     def _zone_dict(zone: Any) -> Dict[str, Any]:
         if isinstance(zone, dict):
             return zone
-        return {"id": getattr(zone, "id", None), "center": getattr(zone, "center", None), "lower": getattr(zone, "lower", None), "upper": getattr(zone, "upper", None), "role": getattr(getattr(zone, "role", None), "value", getattr(zone, "role", None)), "state": getattr(getattr(zone, "state", None), "value", getattr(zone, "state", None)), "strength": getattr(zone, "strength", 0.0), "type": getattr(getattr(zone, "type", None), "value", getattr(zone, "type", None))}
+        return {"id": getattr(zone, "id", None), "center": getattr(zone, "center", None), "lower": getattr(zone, "lower", None), "upper": getattr(zone, "upper", None), "role": getattr(getattr(zone, "role", None), "value", getattr(zone, "role", None)), "state": getattr(getattr(zone, "state", None), "value", getattr(zone, "state", None)), "strength": getattr(zone, "strength", 0.0), "type": getattr(getattr(zone, "type", None), "value", getattr(zone, "type", None)), "origin": getattr(getattr(zone, "origin", None), "value", getattr(zone, "origin", None))}
 
     def _component_scores(self, market: Dict[str, Any], intelligence: Dict[str, Any], zones: list[Any]) -> tuple[dict[str, float], dict[str, float]]:
         supplied = market.get("evidence", {}) or {}
         if supplied.get("long") or supplied.get("short"):
             return dict(supplied.get("long", {}) or {}), dict(supplied.get("short", {}) or {})
-        price = float(market["price"])
         flow_direction = str(market.get("flow_direction", "")).upper()
         flow_strength = max(0.0, min(100.0, float(market.get("flow_strength", 50.0))))
         delta = float(intelligence["delta_pressure"])
@@ -92,13 +102,14 @@ class Strategy001(Strategy):
         zone_dicts = [self._zone_dict(z) for z in zones]
 
         def structure(side: str) -> float:
+            # Prefer QOF-implied structures; price-derived roles are fallback evidence.
             role = ZoneRole.SUPPORT.value if side == "LONG" else ZoneRole.RESISTANCE.value
             candidates = [z for z in zone_dicts if str(z.get("role", "")).upper() == role and z.get("center") is not None]
             if not candidates:
                 return 50.0
-            nearest = min(candidates, key=lambda z: abs(float(z["center"]) - price))
-            distance = abs(float(nearest["center"]) - price)
-            strength = float(nearest.get("strength", 50.0))
+            nearest = min(candidates, key=lambda z: abs(float(z["center"]) - float(market["price"])))
+            distance = abs(float(nearest["center"]) - float(market["price"]))
+            strength = float(nearest.get("strength", nearest.get("confidence", 50.0)))
             proximity = max(0.0, 1.0 - distance / max(float(market["atr"]) * 2.0, 1e-9))
             return min(100.0, 50.0 + 0.5 * strength * proximity)
 
@@ -137,14 +148,27 @@ class Strategy001(Strategy):
         intelligence = self._intelligence(market)
         long_components, short_components = self._component_scores(market, intelligence, zones)
         result = self.confluence.evaluate_directional(long_components, short_components, market.get("contradictions", []) or [], derived=intelligence)
-        return {**market, "zone_map": zones, "intelligence": intelligence, "confluence_result": result}
+        return {**market, "qof_market_map": zones, "zone_map": zones, "intelligence": intelligence, "confluence_result": result}
 
     def _relevant_zone(self, analysis: Dict[str, Any], side: str) -> Optional[Dict[str, Any]]:
-        zones = [self._zone_dict(z) for z in analysis.get("zone_map", []) or ()]
-        role = ZoneRole.SUPPORT.value if side == "LONG" else ZoneRole.RESISTANCE.value
+        zones = [self._zone_dict(z) for z in analysis.get("qof_market_map", analysis.get("zone_map", [])) or ()]
         price = float(analysis["price"])
+        role = ZoneRole.SUPPORT.value if side == "LONG" else ZoneRole.RESISTANCE.value
         candidates = [z for z in zones if str(z.get("role", "")).upper() == role and z.get("center") is not None]
-        return min(candidates, key=lambda z: abs(float(z["center"]) - price)) if candidates else None
+        if not candidates:
+            return None
+        directional = [z for z in candidates if (side == "LONG" and float(z["center"]) <= price) or (side == "SHORT" and float(z["center"]) >= price)]
+        return min(directional or candidates, key=lambda z: abs(float(z["center"]) - price))
+
+    def _target_zone(self, analysis: Dict[str, Any], side: str, price: float) -> Optional[Dict[str, Any]]:
+        zones = [self._zone_dict(z) for z in analysis.get("qof_market_map", analysis.get("zone_map", [])) or ()]
+        target_role = ZoneRole.RESISTANCE.value if side == "LONG" else ZoneRole.SUPPORT.value
+        candidates = [z for z in zones if str(z.get("role", "")).upper() == target_role and z.get("center") is not None]
+        if side == "LONG":
+            candidates = [z for z in candidates if float(z["center"]) > price]
+            return min(candidates, key=lambda z: float(z["center"]) - price) if candidates else None
+        candidates = [z for z in candidates if float(z["center"]) < price]
+        return min(candidates, key=lambda z: price - float(z["center"])) if candidates else None
 
     def _manage_position(self, analysis: Dict[str, Any]) -> Optional[Signal]:
         position = analysis.get("position") or {}
@@ -166,36 +190,30 @@ class Strategy001(Strategy):
     def _entry(self, analysis: Dict[str, Any], side: str) -> Signal:
         result = analysis["confluence_result"]
         if result.direction != side or not result.tradable:
-            return Signal("WAIT", result.score, reason="Confluence direction, score, or edge is insufficient.")
+            return Signal("WAIT", result.score, reason="QOF confluence direction, score, or edge is insufficient.")
         zone = self._relevant_zone(analysis, side)
         if zone is None:
-            return Signal("WAIT", result.score, reason="No relevant S/R zone in the canonical market map.")
+            return Signal("WAIT", result.score, reason="No relevant QOF-implied structure in the market map.")
         price = float(analysis["price"])
         atr = float(analysis["atr"])
         if abs(price - float(zone["center"])) > atr * self.config.entry_zone_atr:
-            return Signal("WAIT", result.score, reason="Price is outside the volatility-adjusted zone entry area.")
-        trigger = (analysis.get("entry_trigger") or {}).get(side.lower(), False)
-        if not trigger:
-            return Signal("WAIT", result.score, reason="Strategy 001 price-action trigger is not confirmed.")
+            return Signal("WAIT", result.score, reason="Price is outside the QOF-implied structure entry area.")
+        # QOF confluence and structural interaction are the trigger. No TradingView
+        # swing/price-action trigger is required.
         if side == "LONG":
             stop = float(zone["lower"]) - self.config.stop_buffer_atr * atr
-            targets = [self._zone_dict(z) for z in analysis.get("zone_map", []) or ()]
-            targets = [z for z in targets if str(z.get("role", "")).upper() == ZoneRole.RESISTANCE.value and z.get("center") is not None and float(z["center"]) > price]
-            target_zone = min(targets, key=lambda z: float(z["center"]) - price) if targets else None
         else:
             stop = float(zone["upper"]) + self.config.stop_buffer_atr * atr
-            targets = [self._zone_dict(z) for z in analysis.get("zone_map", []) or ()]
-            targets = [z for z in targets if str(z.get("role", "")).upper() == ZoneRole.SUPPORT.value and z.get("center") is not None and float(z["center"]) < price]
-            target_zone = min(targets, key=lambda z: price - float(z["center"])) if targets else None
+        target_zone = self._target_zone(analysis, side, price)
         if target_zone is None:
-            return Signal("WAIT", result.score, reason="No valid opposing S/R zone for a same-day target.")
+            return Signal("WAIT", result.score, reason="No valid opposing QOF-implied structure for a same-day target.")
         target = float(target_zone["center"])
         risk = abs(price - stop)
         reward = abs(target - price)
         rr = reward / risk if risk > 0 else 0.0
         if rr < self.config.minimum_rr:
             return Signal("WAIT", result.score, reason=f"Only {rr:.2f}R available; minimum is {self.config.minimum_rr:.2f}R.")
-        return Signal(action="BUY" if side == "LONG" else "SELL", confidence=result.score, entry=price, stop_loss=stop, take_profit=target, reason=f"{side} zone-confluence setup confirmed with {rr:.2f}R available.", metadata={"strategy": self.id, "setup_zone": zone, "target_zone": target_zone, "confluence": result, "intraday_only": True})
+        return Signal(action="BUY" if side == "LONG" else "SELL", confidence=result.score, entry=price, stop_loss=stop, take_profit=target, reason=f"QOF {side} structure-confluence setup confirmed with {rr:.2f}R available.", metadata={"strategy": self.id, "structure_type": "QOF_IMPLIED", "setup_zone": zone, "target_zone": target_zone, "confluence": result, "intraday_only": True})
 
     def generate_signal(self, analysis: Dict[str, Any]) -> Signal:
         managed = self._manage_position(analysis)
@@ -210,7 +228,7 @@ class Strategy001(Strategy):
         if requested in {"LONG", "SHORT"}:
             return self._entry(analysis, requested)
         result = analysis["confluence_result"]
-        return self._entry(analysis, result.direction) if result.direction in {"LONG", "SHORT"} else Signal("WAIT", result.score, reason="No directional confluence.")
+        return self._entry(analysis, result.direction) if result.direction in {"LONG", "SHORT"} else Signal("WAIT", result.score, reason="No directional QOF confluence.")
 
     def risk_parameters(self) -> Dict[str, Any]:
         return {"min_confidence": self.config.confluence_minimum, "max_positions": 1, "intraday_only": True, "end_of_day_flatten_minutes": self.config.end_of_day_flatten_minutes, "minimum_rr": self.config.minimum_rr, "risk_per_trade": "delegated_to_global_risk_engine"}
