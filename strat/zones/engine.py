@@ -56,8 +56,9 @@ class QOFStructureEngine:
                 continue
             existing = merged[hit]
             total = existing.reaction_count + candidate.reaction_count
-            center = (existing.center * existing.reaction_count + candidate.center * candidate.reaction_count) / max(1, total)
-            if existing.reaction_count == 0 and candidate.reaction_count == 0:
+            if total > 0:
+                center = (existing.center * existing.reaction_count + candidate.center * candidate.reaction_count) / total
+            else:
                 center = (existing.center + candidate.center) / 2.0
             merged[hit] = ZoneCandidate(
                 center=center,
@@ -82,12 +83,7 @@ class QOFStructureEngine:
         evidence: ZoneEvidenceContext | None = None,
         as_of_index: int | None = None,
     ) -> list[Zone]:
-        """Build a causal QOF market map as of the supplied observation.
-
-        ``options`` may contain strikes ahead of current price, allowing the
-        engine to identify potential structures before price creates visible
-        swing structure. ``as_of_index`` is provided for replay causality.
-        """
+        """Build a causal QOF market map as of the supplied observation."""
         if not bars or atr <= 0:
             return []
         boundary = len(bars) - 1 if as_of_index is None else as_of_index
@@ -111,21 +107,21 @@ class QOFStructureEngine:
             strength = self.scorer.strength(candidate, now_minutes_old)
             qof_primary = candidate.source in {"QOF_IMPLIED", "COMPOSITE"}
             structure = Zone(
-                self._structure_id(candidate),
-                candidate.center,
-                candidate.lower,
-                candidate.upper,
-                ZoneType.COMPOSITE if candidate.source == "COMPOSITE" else (
+                id=self._structure_id(candidate),
+                center=candidate.center,
+                lower=candidate.lower,
+                upper=candidate.upper,
+                type=ZoneType.COMPOSITE if candidate.source == "COMPOSITE" else (
                     ZoneType.OPTIONS_DEALER if candidate.source == "QOF_IMPLIED" else ZoneType.STRUCTURAL
                 ),
-                candidate.role,
-                self.config.predictive_state if qof_primary else ZoneState.ACTIVE,
-                strength,
-                strength,
-                candidate.detected_at,
-                candidate.reaction_count,
-                candidate.reaction_strength,
-                list(candidate.evidence),
+                role=candidate.role,
+                state=self.config.predictive_state if qof_primary else ZoneState.ACTIVE,
+                strength=strength,
+                confidence=strength,
+                detected_at=candidate.detected_at,
+                reaction_count=candidate.reaction_count,
+                last_reaction_strength=candidate.reaction_strength,
+                source_evidence=list(candidate.evidence),
             )
             structure.metadata.update({
                 "qof_primary": qof_primary,
@@ -150,18 +146,17 @@ class QOFStructureEngine:
 
     @staticmethod
     def _structure_kind(candidate: ZoneCandidate) -> str:
+        kinds = [
+            e.metadata.get("structure_kind")
+            for e in candidate.evidence
+            if e.metadata.get("structure_kind")
+        ]
+        if kinds:
+            return str(kinds[0])
         if candidate.source == "QOF_IMPLIED":
-            kinds = [
-                e.metadata.get("structure_kind")
-                for e in candidate.evidence
-                if e.source == "qof_options"
-            ]
-            return str(kinds[0]) if kinds and kinds[0] else (
-                "DEALER_RESISTANCE" if candidate.role == ZoneRole.RESISTANCE else "DEALER_SUPPORT"
-            )
+            return "DEALER_RESISTANCE" if candidate.role == ZoneRole.RESISTANCE else "DEALER_SUPPORT"
         if candidate.source == "COMPOSITE":
-            kinds = [e.metadata.get("structure_kind") for e in candidate.evidence if e.metadata.get("structure_kind")]
-            return str(kinds[0]) if kinds else "COMPOSITE"
+            return "COMPOSITE"
         return "PRICE_CONFIRMATION"
 
     def update_states(self, structures: Sequence[Zone], price: float, atr: float, timestamp) -> list[Zone]:
