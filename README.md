@@ -31,6 +31,32 @@ Conventional TradingView-style swings, support and resistance are **secondary co
 
 Avoid using "S/R strategy", "TradingView structure strategy", or similar names for QOF. Structural labels describe QOF outputs, not separate strategies.
 
+## Canonical layer responsibilities
+
+Each decision layer has one responsibility and one authoritative implementation:
+
+```text
+QOF Structure Engine
+    = WHERE is QOF structure forming?
+
+QOF Intelligence
+    = WHAT is the current options/market state doing?
+
+Confluence Engine
+    = HOW MUCH do the independent evidence streams agree?
+
+QOF Strategy 001
+    = SHOULD this QOF setup be traded, and what QOF structure is the target?
+
+Global Risk Engine
+    = HOW MUCH risk is permitted?
+
+Execution Interface
+    = HOW is the approved trade executed?
+```
+
+These boundaries are intentional. The Structure Engine does not decide whether to trade; Intelligence does not execute trades; Confluence does not size or execute trades; Risk does not redefine market structure; and provider adapters do not make trading decisions.
+
 ## Canonical workflow
 
 ```text
@@ -38,7 +64,7 @@ Provider / Replay Data
         ↓
 Provider-Neutral Normalization
         ↓
-Market Intelligence
+QOF Intelligence
   ├─ Options Flow
   ├─ Open Interest
   ├─ Delta
@@ -69,6 +95,8 @@ Execution Interface
    └─ Live
 ```
 
+TradingView-derived price structure may enter as **secondary confirmation/context** after the QOF map exists, but it does not create or redefine the primary QOF market map.
+
 Replay is development/testing only; the eventual APK exposes Demo / Live.
 
 ## Predictive structure principle
@@ -86,7 +114,9 @@ price approaches the structure
       ↓
 real-time QOF + price behavior validates/rejects it
       ↓
-QOF Confluence determines tradeability
+QOF Confluence determines evidence strength
+      ↓
+QOF Strategy 001 determines whether to trade
 ```
 
 Example:
@@ -137,7 +167,9 @@ Structure strength may incorporate:
 - Price interaction after the structure is approached
 - Volatility-normalized proximity/relevance
 
-No single Greek or options strike automatically creates a tradable structure. Provider-specific Greek/GEX sign conventions must be normalized explicitly.
+The roles of these inputs remain distinct. OI and volume describe concentration/activity; Delta and signed options flow provide directional pressure; Gamma/GEX describes hedging/regime and structural influence; IV describes volatility context; and price/velocity describe current market response. No single Greek or options strike automatically creates a tradable structure.
+
+Provider-specific Greek/GEX sign conventions must be normalized explicitly. Dealer GEX must not be inferred from OI alone: OI does not reveal which side of the contract the dealer holds. An explicit dealer-side convention or signed GEX input is required before a value is treated as dealer GEX.
 
 ## Repository rules
 
@@ -146,7 +178,9 @@ No single Greek or options strike automatically creates a tradable structure. Pr
 - Do not turn conventional TradingView S/R into the strategy's entry prerequisite.
 - QOF-implied structures are probabilistic predictions/evidence, not guaranteed support or resistance.
 - The QOF Structure Engine owns QOF-derived structures and the QOF market map.
-- The Confluence Engine scores evidence; QOF determines whether a setup is tradable.
+- QOF Intelligence describes the current options/market state and does not make execution decisions.
+- The Confluence Engine evaluates agreement and contradiction across evidence streams; it does not own market structure or risk sizing.
+- QOF Strategy 001 decides whether a validated QOF setup is tradable and selects QOF-derived structure targets.
 - Risk and execution remain outside strategy/confluence logic.
 - Keep one active implementation for each trading decision layer.
 - Do not create parallel strategy specifications, duplicate confluence engines, or alternate structural definitions.
@@ -170,17 +204,17 @@ Implemented:
 
 - Options flow evidence
 - Delta-adjusted directional pressure
-- Gamma exposure proxy with explicit provider sign convention
+- Gamma exposure/regime with explicit provider sign convention
 - Positive/negative/neutral gamma regime
 - IV expansion/contraction/stable regime
 - Velocity expansion/contraction/stable regime
 - Relative volume
 - QOF-derived candidate structures
-- Composite multi-source structures
+- QOF-primary structure lifecycle and market map
 - Seven-factor directional Confluence Engine
-- Directional edge and contradiction penalty
+- Cross-factor agreement and contradiction penalty
 - Missing-data neutrality
-- Canonical QOF Strategy 001 consuming the structural map and confluence result
+- Canonical QOF Strategy 001 consuming the QOF structural map and Confluence result
 
 Superseded level-based Strategy 001 logic was removed.
 
