@@ -37,7 +37,6 @@ def test_strategy_001_accepts_precise_long_entry():
     strategy = Strategy001()
     signal = strategy.generate_signal(analysis_for())
     assert signal.action == "BUY"
-    assert signal.precision_score if False else True
     assert signal.metadata["precision_score"] >= 70.0
 
 
