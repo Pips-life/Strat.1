@@ -25,12 +25,7 @@ def _num(value: object, default: float = 0.0) -> float:
 
 
 def delta_pressure(options: Iterable[Mapping[str, object]], underlying_price: float) -> float:
-    """Return normalized directional delta pressure in [-100, 100].
-
-    Each record may contain contracts, multiplier, delta and side/type. Calls
-    contribute positive delta and puts negative delta. The result is normalized
-    by gross absolute delta exposure so contract count alone cannot dominate.
-    """
+    """Return normalized directional delta pressure in [-100, 100]."""
     bullish = bearish = 0.0
     for row in options:
         contracts = abs(_num(row.get("contracts", row.get("volume", 0))))
@@ -48,21 +43,42 @@ def delta_pressure(options: Iterable[Mapping[str, object]], underlying_price: fl
     return max(-100.0, min(100.0, 100.0 * (bullish - bearish) / gross))
 
 
-def gamma_exposure(options: Iterable[Mapping[str, object]], underlying_price: float) -> float:
-    """Return a convention-neutral raw net GEX proxy.
+def _gex_sign(row: Mapping[str, object]) -> float | None:
+    """Resolve dealer-GEX sign only from explicit dealer-side information.
 
-    The caller must supply ``gex_sign`` when the provider's dealer convention
-    differs from the default. This keeps vendor-specific sign assumptions out
-    of the confluence engine.
+    ``gex_sign`` is a normalized convention: +1 means long gamma and -1 means
+    short gamma for that contract. ``dealer_position`` may alternatively be LONG
+    or SHORT. Option type and open interest alone are never used to infer dealer
+    positioning because OI does not reveal which side is the dealer.
+    """
+    if "gex_sign" in row and row.get("gex_sign") not in (None, ""):
+        raw = _num(row.get("gex_sign"), float("nan"))
+        if isfinite(raw) and raw != 0:
+            return 1.0 if raw > 0 else -1.0
+    position = str(row.get("dealer_position", "")).upper().strip()
+    if position in {"LONG", "BUY"}:
+        return 1.0
+    if position in {"SHORT", "SELL"}:
+        return -1.0
+    return None
+
+
+def gamma_exposure(options: Iterable[Mapping[str, object]], underlying_price: float) -> float:
+    """Return signed dealer GEX from explicitly signed dealer positioning only.
+
+    Rows without ``gex_sign`` or ``dealer_position`` are excluded. This prevents
+    an OI-only assumption from being mislabeled as observed dealer exposure.
     """
     total = 0.0
     price_sq = max(underlying_price, 0.0) ** 2
     for row in options:
-        gamma = _num(row.get("gamma"))
+        sign = _gex_sign(row)
+        if sign is None:
+            continue
+        gamma = abs(_num(row.get("gamma")))
         oi = abs(_num(row.get("open_interest", row.get("oi", 0))))
         multiplier = abs(_num(row.get("multiplier", 1), 1))
-        sign = _num(row.get("gex_sign", 1), 1)
-        total += gamma * oi * multiplier * price_sq * sign
+        total += sign * gamma * oi * multiplier * price_sq
     return total
 
 
