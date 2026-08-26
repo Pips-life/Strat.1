@@ -1,10 +1,13 @@
-from .options_engine import EngineConfig, GoldOptionsEngine, GoldOptionsMap, Level, black76_gamma, black76_d1
+"""Strategy platform public package surface.
+
+QOF options intelligence is canonical. The legacy GoldOptionsEngine is no longer
+exported because it contained an invalid OI->dealer-position assumption.
+"""
+from .intelligence.greeks import delta_pressure, gamma_exposure, gamma_regime, iv_regime
 
 __all__ = [
-    "EngineConfig",
-    "GoldOptionsEngine",
-    "GoldOptionsMap",
-    "Level",
-    "black76_gamma",
-    "black76_d1",
+    "delta_pressure",
+    "gamma_exposure",
+    "gamma_regime",
+    "iv_regime",
 ]
