@@ -56,10 +56,8 @@ class QOFStructureEngine:
                 continue
             existing = merged[hit]
             total = existing.reaction_count + candidate.reaction_count
-            if total > 0:
-                center = (existing.center * existing.reaction_count + candidate.center * candidate.reaction_count) / total
-            else:
-                center = (existing.center + candidate.center) / 2.0
+            center = ((existing.center * existing.reaction_count + candidate.center * candidate.reaction_count) / total
+                      if total > 0 else (existing.center + candidate.center) / 2.0)
             merged[hit] = ZoneCandidate(
                 center=center,
                 lower=min(existing.lower, candidate.lower),
@@ -93,11 +91,7 @@ class QOFStructureEngine:
         current_price = float(price if price is not None else visible_bars[-1].close)
         candidates = self.detector.detect(visible_bars, atr, boundary)
         if options is not None:
-            candidates.extend(
-                detect_qof_structure(
-                    options, current_price, atr, visible_bars[-1].timestamp, self.config.options
-                )
-            )
+            candidates.extend(detect_qof_structure(options, current_price, atr, visible_bars[-1].timestamp, self.config.options))
         if evidence is not None:
             candidates = [attach_market_evidence(c, current_price, atr, evidence) for c in candidates]
         candidates = self._merge_candidates(candidates, atr)
@@ -112,7 +106,7 @@ class QOFStructureEngine:
                 lower=candidate.lower,
                 upper=candidate.upper,
                 type=ZoneType.COMPOSITE if candidate.source == "COMPOSITE" else (
-                    ZoneType.OPTIONS_DEALER if candidate.source == "QOF_IMPLIED" else ZoneType.STRUCTURAL
+                    ZoneType.QOF_IMPLIED if candidate.source == "QOF_IMPLIED" else ZoneType.STRUCTURAL
                 ),
                 role=candidate.role,
                 state=self.config.predictive_state if qof_primary else ZoneState.ACTIVE,
@@ -135,22 +129,14 @@ class QOFStructureEngine:
             structures.append(structure)
 
         structures.sort(
-            key=lambda z: (
-                bool(z.metadata.get("qof_primary")),
-                float(z.metadata.get("relevance", 0.0)),
-                z.strength,
-            ),
+            key=lambda z: (bool(z.metadata.get("qof_primary")), float(z.metadata.get("relevance", 0.0)), z.strength),
             reverse=True,
         )
         return structures[: self.config.max_active_structures]
 
     @staticmethod
     def _structure_kind(candidate: ZoneCandidate) -> str:
-        kinds = [
-            e.metadata.get("structure_kind")
-            for e in candidate.evidence
-            if e.metadata.get("structure_kind")
-        ]
+        kinds = [e.metadata.get("structure_kind") for e in candidate.evidence if e.metadata.get("structure_kind")]
         if kinds:
             return str(kinds[0])
         if candidate.source == "QOF_IMPLIED":
@@ -171,12 +157,7 @@ class QOFStructureEngine:
         return list(structures)
 
     @staticmethod
-    def nearest(
-        structures: Sequence[Zone],
-        price: float,
-        role: ZoneRole | None = None,
-        primary_only: bool = False,
-    ) -> Zone | None:
+    def nearest(structures: Sequence[Zone], price: float, role: ZoneRole | None = None, primary_only: bool = False) -> Zone | None:
         candidates = [
             z for z in structures
             if (role is None or z.role == role)
@@ -201,6 +182,6 @@ class QOFStructureEngine:
         )
 
 
-# Compatibility aliases while remaining internal callers migrate.
+# Compatibility aliases while internal callers migrate.
 ZoneEngine = QOFStructureEngine
 ZoneEngineConfig = QOFStructureEngineConfig
