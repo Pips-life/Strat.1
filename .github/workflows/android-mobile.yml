@@ -1,0 +1,71 @@
+name: Pips-life Android
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/android-mobile.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Install Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build debug APK
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Verify APK metadata
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pipslife-badging.txt
+          grep -q "package: name='life.pipslife.mobile'" /tmp/pipslife-badging.txt
+          grep -q "versionCode='2'" /tmp/pipslife-badging.txt
+          grep -q "versionName='0.2.0'" /tmp/pipslife-badging.txt
+
+      - name: Verify APK installation and launch
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell monkey -p life.pipslife.mobile 1
+            sleep 5
+            adb shell pidof life.pipslife.mobile
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pips-life-0.2.0-2-debug
+          path: mobile/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
