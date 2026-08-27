@@ -7,11 +7,6 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -61,441 +56,158 @@ private val Scheme = darkColorScheme(primary = Cyan, secondary = Green, tertiary
 class MainActivity : ComponentActivity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9001)
-        }
-        setContent { App(applicationContext) }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9001)
+        setContent { PipsLifeApp(applicationContext) }
     }
 }
 
-@Composable
-private fun App(context: Context) {
-    var tab by remember { mutableStateOf(0) }
-    var session by remember { mutableStateOf<BackendSession?>(null) }
-    var update by remember { mutableStateOf<AppRelease?>(null) }
-    var updateError by remember { mutableStateOf<String?>(null) }
-    var checking by remember { mutableStateOf(false) }
-    val api = remember { BackendApiClient() }
-    val manager = remember { ReleaseUpdateManager(context) }
-    val scope = rememberCoroutineScope()
+private enum class Screen(val label: String) { HOME("Home"), MARKETS("Markets"), STRATEGIES("Strategies"), MT5("MT5"), ACTIVITY("Activity") }
 
-    fun checkUpdates() {
-        checking = true
-        scope.launch {
-            manager.check()
-                .onSuccess {
-                    update = it
-                    updateError = if (it == null) "You are running the latest Pips-life release." else null
-                }
-                .onFailure { updateError = it.message ?: "Unable to check for updates" }
-            checking = false
-        }
-    }
+@Composable
+private fun PipsLifeApp(context: Context) {
+    var screen by remember { mutableStateOf(Screen.HOME) }
+    var session by remember { mutableStateOf<BackendSession?>(null) }
+    val api = remember { BackendApiClient() }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         val p = context.pipsDataStore.data.first()
-        val id = p[ACCOUNT_ID]
-        val token = p[SESSION_TOKEN]
-        if (!id.isNullOrBlank() && !token.isNullOrBlank()) {
-            session = BackendSession(id, token, p[SERVER].orEmpty())
-        }
-        checkUpdates()
+        val id = p[ACCOUNT_ID]; val token = p[SESSION_TOKEN]
+        if (!id.isNullOrBlank() && !token.isNullOrBlank()) session = BackendSession(id, token, p[SERVER].orEmpty())
     }
-
-    val nav = listOf(
-        "Home" to Icons.Default.Home,
-        "Strategies" to Icons.Default.Tune,
-        "Positions" to Icons.Default.ShowChart,
-        "MT5" to Icons.Default.AccountBalance,
-        "Settings" to Icons.Default.Settings
-    )
 
     MaterialTheme(colorScheme = Scheme) {
-        Scaffold(
-            containerColor = Ink,
-            bottomBar = {
-                NavigationBar(containerColor = Panel) {
-                    nav.forEachIndexed { i, n ->
-                        NavigationBarItem(
-                            selected = tab == i,
-                            onClick = { tab = i },
-                            icon = { Icon(n.second, n.first) },
-                            label = { Text(n.first, fontSize = 10.sp) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = Cyan,
-                                selectedTextColor = Cyan,
-                                unselectedIconColor = Muted,
-                                unselectedTextColor = Muted,
-                                indicatorColor = Raised
-                            )
-                        )
-                    }
+        Scaffold(containerColor = Ink, bottomBar = {
+            NavigationBar(containerColor = Panel) {
+                listOf(Screen.HOME to Icons.Default.Home, Screen.MARKETS to Icons.Default.ShowChart, Screen.STRATEGIES to Icons.Default.Tune, Screen.MT5 to Icons.Default.AccountBalance, Screen.ACTIVITY to Icons.Default.History).forEach { (s, icon) ->
+                    NavigationBarItem(selected = screen == s, onClick = { screen = s }, icon = { Icon(icon, s.label) }, label = { Text(s.label, fontSize = 10.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Cyan, selectedTextColor = Cyan, unselectedIconColor = Muted, unselectedTextColor = Muted, indicatorColor = Raised))
                 }
             }
-        ) { padding ->
-            Box(Modifier.fillMaxSize()) {
-                when (tab) {
-                    0 -> Home(Modifier.padding(padding), api, session)
-                    1 -> Strategies(Modifier.padding(padding))
-                    2 -> Positions(Modifier.padding(padding), api, session)
-                    3 -> Mt5(Modifier.padding(padding), api) { s ->
-                        session = s
-                        scope.launch {
-                            context.pipsDataStore.edit {
-                                it[ACCOUNT_ID] = s.accountId
-                                it[SESSION_TOKEN] = s.token
-                                it[SERVER] = s.server
-                            }
-                        }
-                    }
-                    else -> Settings(Modifier.padding(padding), session, checking, updateError, ::checkUpdates)
+        }) { pad ->
+            when (screen) {
+                Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session, { screen = Screen.MT5 })
+                Screen.MARKETS -> MarketsScreen(Modifier.padding(pad), session)
+                Screen.STRATEGIES -> StrategiesScreen(Modifier.padding(pad), api, session)
+                Screen.MT5 -> Mt5Screen(Modifier.padding(pad), api, session) { s ->
+                    session = s
+                    scope.launch { context.pipsDataStore.edit { it[ACCOUNT_ID] = s.accountId; it[SESSION_TOKEN] = s.token; it[SERVER] = s.server } }
                 }
-
-                update?.let { release ->
-                    AlertDialog(
-                        onDismissRequest = { update = null },
-                        title = { Text("Pips-life update available", color = Cyan) },
-                        text = {
-                            Text("Version ${release.versionName} (build ${release.versionCode}) is ready. The official APK will be downloaded and Android will open the installer.")
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    manager.downloadAndInstall(release)
-                                    update = null
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Ink)
-                            ) {
-                                Text("DOWNLOAD & INSTALL", fontWeight = FontWeight.Bold)
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { update = null }) { Text("LATER") }
-                        }
-                    )
-                }
+                Screen.ACTIVITY -> ActivityScreen(Modifier.padding(pad), api, session)
             }
         }
     }
 }
 
 @Composable
-private fun Home(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
+private fun TopBar(title: String, subtitle: String, connected: Boolean = false) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column { Text(title, color = Primary, fontSize = 26.sp, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 11.sp) }
+        Pill(if (connected) "MT5 LIVE" else "OFFLINE")
+    }
+}
+
+@Composable
+private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, openMt5: () -> Unit) {
     var state by remember { mutableStateOf<LiveState?>(null) }
     var bot by remember { mutableStateOf<BotState?>(null) }
-    var message by remember { mutableStateOf(if (session == null) "Connect an MT5 account to activate live data." else "Synchronizing with backend…") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val raw = bot?.state?.uppercase(Locale.US).orEmpty()
-    val running = raw.contains("RUN")
-    val starting = raw.contains("START") || raw.contains("STOPPING") || raw.contains("TRANSITION")
-    val failed = raw.contains("ERROR") || raw.contains("FAIL")
-    val statusText = when {
-        running -> "RUNNING"
-        starting -> raw.replace('_', ' ')
-        failed -> raw.replace('_', ' ')
-        raw.isBlank() -> "NOT CONNECTED"
-        else -> raw.replace('_', ' ')
-    }
-    val statusColor = when {
-        running -> Green
-        starting -> Amber
-        failed -> Red
-        else -> Muted
-    }
-    val pulse = rememberInfiniteTransition(label = "bot-pulse").animateFloat(
-        initialValue = 1f,
-        targetValue = if (running) 1.08f else 1f,
-        animationSpec = infiniteRepeatable(tween(850), RepeatMode.Reverse),
-        label = "bot-pulse"
-    )
-
+    val running = bot?.state?.uppercase(Locale.US)?.contains("RUN") == true
     LaunchedEffect(session) {
-        if (session == null) {
-            state = null
-            bot = null
-        } else {
-            while (true) {
-                api.liveState(session).onSuccess {
-                    state = it
-                    message = "LIVE • MT5 ${it.connectionStatus}"
-                }.onFailure { message = it.message ?: "Live data unavailable" }
-                api.botStatus(session).onSuccess { bot = it }.onFailure { message = it.message ?: "Bot status unavailable" }
-                delay(3000)
-            }
-        }
+        if (session == null) { state = null; bot = null } else while (true) { api.liveState(session).onSuccess { state = it }; api.botStatus(session).onSuccess { bot = it }; delay(3000) }
     }
-
-    LazyColumn(
-        modifier.fillMaxSize().background(Ink).padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(top = 18.dp, bottom = 24.dp)
-    ) {
-        item { Header(state != null) }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp)) {
-                Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("BOT STATUS", color = Cyan, fontSize = 11.sp, letterSpacing = 1.5.sp)
-                    Spacer(Modifier.height(10.dp))
-                    Box(Modifier.size(90.dp).scale(pulse.value), contentAlignment = Alignment.Center) {
-                        Box(Modifier.fillMaxSize().border(2.dp, statusColor, CircleShape))
-                        Box(Modifier.size(15.dp).background(statusColor, CircleShape))
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text(statusText, color = statusColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("Strategy 001 • QOF", color = Purple, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(16.dp))
-                    Button(
-                        enabled = session != null && !busy,
-                        onClick = {
-                            busy = true
-                            val s = session
-                            if (s != null) {
-                                scope.launch {
-                                    api.botCommand(s, if (running) "stop" else "start")
-                                        .onSuccess {
-                                            bot = it
-                                            message = if (it.configured) "Backend runner command accepted • status is live" else "Strategy runner is not configured"
-                                        }
-                                        .onFailure { message = it.message ?: "Bot control unavailable" }
-                                    busy = false
-                                }
-                            } else {
-                                busy = false
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().height(54.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = if (running) Red else Green, contentColor = Ink)
-                    ) {
-                        Text(if (busy) "WORKING…" else if (running) "STOP BOT" else "START BOT", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-        item { Section("LIVE ACCOUNT", message) }
-        item {
-            if (state == null) Empty("Connect MT5 from the MT5 tab. Live balance, equity and positions will appear here.")
-            else AccountCard(state!!)
-        }
-        item { Section("ACTIVE POSITIONS", "${state?.positions?.size ?: 0} open") }
-        if (state?.positions?.isNotEmpty() == true) {
-            items(state!!.positions) { PositionCard(it) }
-        } else {
-            item { Empty("No live MT5 positions") }
-        }
-        item { Section("STRATEGIES", "Live slots") }
-        item { Strategy("001", "QOF", if (running) "RUNNING • LIVE" else "PRIMARY • READY", true) }
-        item { Strategy("002", "Reserved", "FUTURE STRATEGY SLOT", false) }
-        item { Strategy("003", "Reserved", "FUTURE STRATEGY SLOT", false) }
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)) {
+        item { TopBar("Pips-life", "TRADING COMMAND CENTER", state != null) }
+        item { HeroCard(state, openMt5) }
+        item { SectionTitle("ACCOUNT", "LIVE") }
+        item { if (state == null) EmptyCard("Connect MT5 to unlock live balance, equity and position intelligence.", "CONNECT MT5", openMt5) else AccountCard(state!!) }
+        item { SectionTitle("STRATEGY ENGINE", "STRATEGY 001") }
+        item { EngineCard(bot, running, session != null, busy) { action -> busy = true; scope.launch { api.botCommand(session!!, action); busy = false } } }
+        item { SectionTitle("ACTIVE POSITIONS", "${state?.positions?.size ?: 0} open") }
+        if (state?.positions?.isNotEmpty() == true) items(state!!.positions) { PositionCard(it) } else item { EmptyCard("No live MT5 positions right now.") }
     }
 }
 
-@Composable
-private fun Header(connected: Boolean) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Column {
-            Text("PIPS-LIFE", color = Cyan, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            Text("TRADING CONTROL CENTER", color = Muted, fontSize = 11.sp, letterSpacing = 1.4.sp)
-        }
-        Pill(if (connected) "MT5 LIVE" else "NO MT5")
+@Composable private fun HeroCard(state: LiveState?, openMt5: () -> Unit) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(24.dp)) {
+    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("TODAY'S TRADING PICTURE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+        Text(if (state == null) "Ready when you are." else "Live account connected.", color = Primary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(if (state == null) "Pips-life is monitoring the platform. Connect an account to surface live intelligence." else "${state.connectionStatus} • ${state.server}", color = Muted, fontSize = 12.sp)
+        if (state == null) Button(onClick = openMt5, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("CONNECT MT5") }
     }
 }
 
-@Composable
-private fun AccountCard(s: LiveState) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-                Text("MT5 ${s.login}", color = Primary, fontWeight = FontWeight.Bold)
-                Text(s.server, color = Muted, fontSize = 10.sp)
-            }
-            Text(s.connectionStatus, color = if (s.connectionStatus.equals("CONNECTED", true)) Green else Amber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Metric("BALANCE", money(s.balance, s.currency))
-            Metric("EQUITY", money(s.equity, s.currency))
-            Metric("FREE MARGIN", money(s.freeMargin, s.currency))
-        }
+@Composable private fun MarketsScreen(modifier: Modifier, session: BackendSession?) {
+    val symbols = listOf("NAS100" to "Watching", "XAUUSD" to "Watching", "EURUSD" to "Watching", "US30" to "Watching")
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)) {
+        item { TopBar("Markets", "MARKET INTELLIGENCE", session != null) }
+        item { SearchCard() }
+        item { SectionTitle("WATCHLIST", "${symbols.size} instruments") }
+        items(symbols) { (symbol, status) -> MarketCard(symbol, status) }
+        item { EmptyCard("Market intelligence cards are ready for live evidence from the existing backend. No strategy logic is changed here.") }
     }
 }
 
-@Composable
-private fun PositionCard(p: LivePosition) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
-    Column(Modifier.padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-                Text(p.symbol, color = Primary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                Text("${p.side} • ${p.volume} lot", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
-            Text(money(p.profit, ""), color = if (p.profit >= 0) Green else Red, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Metric("ENTRY", num(p.entry))
-            Metric("CURRENT", num(p.current))
-            Metric("SL", num(p.stopLoss))
-            Metric("TP", num(p.takeProfit))
-        }
+@Composable private fun SearchCard() = OutlinedTextField("", {}, Modifier.fillMaxWidth(), placeholder = { Text("Search markets…") }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true, colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Panel, focusedContainerColor = Panel, unfocusedBorderColor = Line, focusedBorderColor = Cyan))
+
+@Composable private fun MarketCard(symbol: String, status: String) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
+    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(42.dp).background(Raised, CircleShape), contentAlignment = Alignment.Center) { Text(symbol.take(2), color = Cyan, fontWeight = FontWeight.Bold) }
+        Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(symbol, color = Primary, fontWeight = FontWeight.Bold); Text("Live evidence • $status", color = Muted, fontSize = 11.sp) }; Icon(Icons.Default.ChevronRight, null, tint = Muted)
     }
 }
 
-@Composable
-private fun Positions(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
+@Composable private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
+    var bot by remember { mutableStateOf<BotState?>(null) }
+    LaunchedEffect(session) { if (session != null) while (true) { api.botStatus(session).onSuccess { bot = it }; delay(3000) } }
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)) {
+        item { TopBar("Strategies", "EVIDENCE → CONFLUENCE → EXECUTION", session != null) }
+        item { StrategyDetail("001", "QOF", bot?.state ?: "READY", true, "Primary strategy. Engine remains unchanged.") }
+        item { StrategyDetail("002", "Reserved", "LOCKED", false, "Future strategy slot.") }
+        item { StrategyDetail("003", "Reserved", "LOCKED", false, "Future strategy slot.") }
+    }
+}
+
+@Composable private fun StrategyDetail(number: String, name: String, state: String, active: Boolean, desc: String) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("STRATEGY $number", color = if (active) Cyan else Purple, fontWeight = FontWeight.Bold); Pill(state.replace('_', ' ')) }
+        Text(name, color = Primary, fontSize = 21.sp, fontWeight = FontWeight.Bold); Text(desc, color = Muted, fontSize = 12.sp)
+        if (active) { Divider(color = Line); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Metric("ENGINE", "PROTECTED"); Metric("STATE", state); Metric("ROLE", "PRIMARY") } }
+    }
+}
+
+@Composable private fun Mt5Screen(modifier: Modifier, api: BackendApiClient, existing: BackendSession?, onConnected: (BackendSession) -> Unit) {
+    val scope = rememberCoroutineScope(); var broker by remember { mutableStateOf("") }; var login by remember { mutableStateOf("") }; var password by remember { mutableStateOf("") }; var server by remember { mutableStateOf(existing?.server.orEmpty()) }; var servers by remember { mutableStateOf(emptyList<Mt5Server>()) }; var busy by remember { mutableStateOf(false) }; var status by remember { mutableStateOf(if (existing != null) "Account linked and ready." else "Find your broker to begin.") }
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)) {
+        item { TopBar("MT5", "SECURE ACCOUNT CONNECTION", existing != null) }
+        if (existing != null) item { AccountCardMini(existing) }
+        item { Field(broker, { broker = it }, "Broker or broker alias") }
+        item { Button(enabled = broker.length >= 2 && !busy, onClick = { busy = true; scope.launch { api.findServers(broker).onSuccess { servers = it; status = "Select the exact server used by your MT5 account." }.onFailure { status = it.message ?: "Broker search failed" }; busy = false } }, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(14.dp)) { Text(if (busy) "SEARCHING…" else "FIND SERVERS") } }
+        items(servers) { s -> Card(onClick = { server = s.serverName }, colors = CardDefaults.cardColors(containerColor = if (server == s.serverName) Raised else Panel), shape = RoundedCornerShape(16.dp)) { Column(Modifier.padding(15.dp)) { Text(s.brokerName, color = Muted, fontSize = 10.sp); Text(s.serverName, color = Cyan, fontWeight = FontWeight.Bold); Text(s.environment.uppercase(), color = Muted, fontSize = 9.sp) } } }
+        item { Field(server, { server = it }, "MT5 server") }; item { Field(login, { login = it }, "Account number") }; item { OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) }
+        item { Button(enabled = login.isNotBlank() && password.isNotBlank() && server.isNotBlank() && !busy, onClick = { busy = true; status = "Connecting securely through backend…"; scope.launch { api.connect(login, password, server, broker).onSuccess { s -> password = ""; onConnected(s); status = "Connected. Live account sync is active." }.onFailure { status = it.message ?: "MT5 connection failed" }; busy = false } }, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Ink)) { Text(if (busy) "CONNECTING…" else "CONNECT SECURELY", fontWeight = FontWeight.Bold) } }
+        item { Text(status, color = if (status.contains("Connected", true)) Green else Muted, fontSize = 12.sp) }
+    }
+}
+
+@Composable private fun ActivityScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
     var state by remember { mutableStateOf<LiveState?>(null) }
-    LaunchedEffect(session) {
-        if (session != null) {
-            while (true) {
-                api.liveState(session).onSuccess { state = it }
-                delay(3000)
-            }
-        } else state = null
-    }
-    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item {
-            Text("POSITIONS", color = Cyan, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            Text("Live positions reported by MT5.", color = Muted, fontSize = 12.sp)
-        }
-        if (state?.positions?.isNotEmpty() == true) items(state!!.positions) { PositionCard(it) }
-        else item { Empty("No live MT5 positions") }
+    LaunchedEffect(session) { if (session != null) while (true) { api.liveState(session).onSuccess { state = it }; delay(5000) } }
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)) {
+        item { TopBar("Activity", "ACCOUNT & POSITION TIMELINE", session != null) }
+        item { if (state != null) AccountCard(state!!) else EmptyCard("Connect MT5 to populate live account activity.") }
+        if (state?.positions?.isNotEmpty() == true) items(state!!.positions) { PositionCard(it) } else item { EmptyCard("No live positions to show.") }
     }
 }
 
-@Composable
-private fun Mt5(modifier: Modifier, api: BackendApiClient, onConnected: (BackendSession) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var broker by remember { mutableStateOf("") }
-    var login by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var server by remember { mutableStateOf("") }
-    var servers by remember { mutableStateOf(emptyList<Mt5Server>()) }
-    var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Credentials are sent to the backend; password is not stored locally.") }
-
-    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-        item {
-            Text("MT5 ACCOUNT", color = Cyan, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            Text("Actual MetaApi account connection", color = Muted, fontSize = 12.sp)
-        }
-        item { Field(broker, { broker = it }, "Broker name") }
-        item {
-            Button(
-                enabled = broker.length >= 2 && !busy,
-                onClick = {
-                    busy = true
-                    scope.launch {
-                        api.findServers(broker)
-                            .onSuccess { servers = it; status = "Select the exact MT5 server." }
-                            .onFailure { status = it.message ?: "Server search failed" }
-                        busy = false
-                    }
-                }
-            ) { Text(if (busy) "SEARCHING…" else "FIND SERVERS") }
-        }
-        items(servers) { s ->
-            Card(onClick = { server = s.serverName }, colors = CardDefaults.cardColors(containerColor = if (server == s.serverName) Raised else Panel), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(s.brokerName, color = Muted, fontSize = 10.sp)
-                    Text(s.serverName, color = Cyan, fontWeight = FontWeight.Bold)
-                    Text(s.environment.uppercase(), color = Muted, fontSize = 9.sp)
-                }
-            }
-        }
-        item { Field(server, { server = it }, "MT5 server") }
-        item { Field(login, { login = it }, "MT5 account number") }
-        item {
-            OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
-        }
-        item {
-            Button(
-                enabled = login.isNotBlank() && password.isNotBlank() && server.isNotBlank() && !busy,
-                onClick = {
-                    busy = true
-                    status = "Connecting through backend…"
-                    scope.launch {
-                        api.connect(login, password, server, broker)
-                            .onSuccess { s -> password = ""; onConnected(s); status = "Account linked. Synchronizing live MT5 state…" }
-                            .onFailure { status = it.message ?: "MT5 connection failed" }
-                        busy = false
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) { Text(if (busy) "CONNECTING…" else "CONNECT MT5 TO BACKEND") }
-        }
-        item { Text(status, color = Muted, fontSize = 12.sp) }
-    }
-}
-
-@Composable
-private fun Strategies(modifier: Modifier) {
-    LazyColumn(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            Text("STRATEGIES", color = Cyan, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            Text("Modular slots; Strategy 001 remains protected.", color = Muted, fontSize = 12.sp)
-        }
-        item { Strategy("001", "QOF", "PRIMARY • LIVE READY", true) }
-        item { Strategy("002", "Reserved", "FUTURE STRATEGY SLOT", false) }
-        item { Strategy("003", "Reserved", "FUTURE STRATEGY SLOT", false) }
-    }
-}
-
-@Composable
-private fun Settings(modifier: Modifier, session: BackendSession?, checking: Boolean, error: String?, check: () -> Unit) {
-    Column(modifier.fillMaxSize().background(Ink).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("SETTINGS", color = Cyan, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-        Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Pips-life ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", color = Primary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text(if (session != null) "Authenticated MT5 backend session active." else "No MT5 backend session.", color = if (session != null) Green else Amber, fontSize = 12.sp)
-                Text("Strategy 001 preserved • Strategy 002/003 reserved", color = Muted, fontSize = 12.sp)
-            }
-        }
-        Button(onClick = check, enabled = !checking, modifier = Modifier.fillMaxWidth().height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Ink)) {
-            Icon(Icons.Default.SystemUpdate, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (checking) "CHECKING FOR UPDATES…" else "CHECK FOR UPDATES", fontWeight = FontWeight.Bold)
-        }
-        error?.let { Text(it, color = if (it.contains("latest", true)) Green else Amber, fontSize = 12.sp) }
-    }
-}
-
-@Composable
-private fun Field(v: String, set: (String) -> Unit, label: String) = OutlinedTextField(v, set, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true)
-
-@Composable
-private fun Section(a: String, b: String) = Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-    Text(a, color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-    Text(b, color = Muted, fontSize = 10.sp)
-}
-
-@Composable
-private fun Empty(t: String) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
-    Text(t, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(16.dp))
-}
-
-@Composable
-private fun Strategy(n: String, name: String, state: String, active: Boolean) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
-    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(n, color = if (active) Cyan else Purple, fontWeight = FontWeight.Bold, modifier = Modifier.width(40.dp))
-        Column(Modifier.weight(1f)) {
-            Text(name, color = Primary, fontWeight = FontWeight.Bold)
-            Text(state, color = if (active) Green else Muted, fontSize = 10.sp)
-        }
-        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
-    }
-}
-
-@Composable
-private fun Metric(a: String, b: String) = Column {
-    Text(a, color = Muted, fontSize = 9.sp)
-    Text(b, color = Primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-}
-
-@Composable
-private fun Pill(t: String) = Row(Modifier.background(Panel, RoundedCornerShape(50)), verticalAlignment = Alignment.CenterVertically) {
-    Box(Modifier.padding(start = 10.dp).size(8.dp).background(if (t == "MT5 LIVE") Green else Amber, CircleShape))
-    Text(" $t", color = Primary, fontSize = 10.sp, modifier = Modifier.padding(end = 10.dp))
-}
-
+@Composable private fun AccountCardMini(s: BackendSession) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) { Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(42.dp).background(Green, CircleShape)); Spacer(Modifier.width(12.dp)); Column { Text("MT5 ACCOUNT CONNECTED", color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold); Text(s.server, color = Primary, fontWeight = FontWeight.Bold) } } }
+@Composable private fun AccountCard(s: LiveState) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Column { Text("MT5 ${s.login}", color = Primary, fontWeight = FontWeight.Bold); Text(s.server, color = Muted, fontSize = 10.sp) }; Pill(s.connectionStatus) }; Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Metric("BALANCE", money(s.balance, s.currency)); Metric("EQUITY", money(s.equity, s.currency)); Metric("FREE MARGIN", money(s.freeMargin, s.currency)) } } }
+@Composable private fun EngineCard(bot: BotState?, running: Boolean, enabled: Boolean, busy: Boolean, command: (String) -> Unit) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Column { Text("QOF", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Bold); Text("Strategy 001", color = Muted, fontSize = 11.sp) }; Text(bot?.state?.replace('_', ' ') ?: "READY", color = if (running) Green else Amber, fontWeight = FontWeight.Bold) }; Text(bot?.activity ?: "Awaiting backend account connection.", color = Muted, fontSize = 12.sp); Button(enabled = enabled && !busy, onClick = { command(if (running) "stop" else "start") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = if (running) Red else Green, contentColor = Ink)) { Text(if (busy) "WORKING…" else if (running) "STOP ENGINE" else "START ENGINE", fontWeight = FontWeight.Bold) } } }
+@Composable private fun PositionCard(p: LivePosition) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Column { Text(p.symbol, color = Primary, fontSize = 17.sp, fontWeight = FontWeight.Bold); Text("${p.side} • ${p.volume} lot", color = Cyan, fontSize = 11.sp) }; Text(money(p.profit, ""), color = if (p.profit >= 0) Green else Red, fontWeight = FontWeight.Bold) }; Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Metric("ENTRY", num(p.entry)); Metric("CURRENT", num(p.current)); Metric("SL", num(p.stopLoss)); Metric("TP", num(p.takeProfit)) } } }
+@Composable private fun EmptyCard(text: String, action: String? = null, onAction: (() -> Unit)? = null) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(text, color = Muted, fontSize = 12.sp); if (action != null && onAction != null) OutlinedButton(onClick = onAction, modifier = Modifier.fillMaxWidth()) { Text(action) } } }
+@Composable private fun SectionTitle(a: String, b: String) = Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(a, color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp); Text(b, color = Muted, fontSize = 10.sp) }
+@Composable private fun Field(v: String, set: (String) -> Unit, label: String) = OutlinedTextField(v, set, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true)
+@Composable private fun Metric(a: String, b: String) = Column { Text(a, color = Muted, fontSize = 9.sp); Text(b, color = Primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+@Composable private fun Pill(t: String) = Row(Modifier.background(Panel, RoundedCornerShape(50)).border(1.dp, Line, RoundedCornerShape(50)), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.padding(start = 9.dp).size(7.dp).background(if (t.contains("LIVE", true) || t.contains("CONNECTED", true) || t.contains("RUN", true)) Green else Amber, CircleShape)); Text(t.take(18), color = Primary, fontSize = 9.sp, modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) }
 private fun num(v: Double?) = if (v == null || v.isNaN()) "—" else String.format(Locale.US, "%.5f", v)
 private fun money(v: Double, c: String) = if (v.isNaN()) "—" else String.format(Locale.US, "%s%.2f", if (c.isBlank()) "" else "$c ", v)
