@@ -2,10 +2,6 @@ name: Pips-life Android APK
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'mobile/**'
-      - '.github/workflows/mobile-apk.yml'
 
 permissions:
   contents: read
