@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version matching mobile/app/build.gradle.kts, e.g. 0.2.1'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -37,26 +42,23 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Resolve app version
+      - name: Resolve release version
         id: version
         shell: bash
         run: |
-          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' mobile/app/build.gradle.kts | head -1)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          APP_VERSION=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' mobile/app/build.gradle.kts | head -1)
           VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' mobile/app/build.gradle.kts | head -1)
-          test -n "$VERSION_NAME"
+          test "$APP_VERSION" = "$VERSION" || { echo "Release $VERSION does not match app version $APP_VERSION"; exit 1; }
           test -n "$VERSION_CODE"
-          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
-
-      - name: Validate release tag against app version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          test "${{ steps.version.outputs.version_name }}" = "$TAG_VERSION" || {
-            echo "Tag $TAG_VERSION does not match app versionName ${{ steps.version.outputs.version_name }}"
-            exit 1
-          }
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build release APK
         run: gradle -p mobile --no-daemon clean :app:assembleRelease --stacktrace
@@ -66,25 +68,23 @@ jobs:
         run: |
           APK="mobile/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
-          echo "APK_SIZE=$(stat -c%s "$APK")" >> "$GITHUB_ENV"
-          echo "APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          echo "APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_ENV"
 
-      - name: Rename numbered APK
+      - name: Prepare numbered APK
         shell: bash
         run: |
           cp mobile/app/build/outputs/apk/release/app-release.apk \
             "Pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk"
 
-      - name: Create numbered GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish numbered GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})
           generate_release_notes: true
-          files: |
-            Pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk
+          files: Pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk
           fail_on_unmatched_files: true
           body: |
             ## Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})
@@ -93,4 +93,11 @@ jobs:
 
             APK SHA-256: `${{ env.APK_SHA256 }}`
 
-            The app checks GitHub's latest stable release at startup and offers newer APK releases to the user. Release tags must use `vMAJOR.MINOR.PATCH` and must match `versionName` in `mobile/app/build.gradle.kts`.
+            ### Update mechanism
+            Existing Pips-life installations check the public GitHub Releases feed for the latest stable release. When a newer version is found, the app prompts the user to download the APK from the GitHub release and then launches Android's package installer.
+
+            ### Release numbering
+            - Git tag: `vMAJOR.MINOR.PATCH`
+            - Android `versionName`: `MAJOR.MINOR.PATCH`
+            - Android `versionCode`: monotonically increasing integer
+            - APK asset: `Pips-life-MAJOR.MINOR.PATCH-versionCode.apk`
