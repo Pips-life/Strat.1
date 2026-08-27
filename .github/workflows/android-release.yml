@@ -9,12 +9,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: pips-life-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-release:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mobile
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,55 +32,65 @@ jobs:
       - name: Install Android SDK 35
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Resolve app version
+        id: version
+        shell: bash
+        run: |
+          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' mobile/app/build.gradle.kts | head -1)
+          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' mobile/app/build.gradle.kts | head -1)
+          test -n "$VERSION_NAME"
+          test -n "$VERSION_CODE"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
       - name: Validate release tag against app version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          test -n "$VERSION_NAME"
-          test "$VERSION_NAME" = "$TAG_VERSION" || { echo "Tag $TAG_VERSION does not match app versionName $VERSION_NAME"; exit 1; }
-          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
-          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
-          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
-
-      - name: Read version for manual runs
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          echo "VERSION_NAME=$(sed -n 's/.*versionName = \"\([^\"]*\)\".*/\1/p' app/build.gradle.kts | head -1)" >> "$GITHUB_ENV"
-          echo "VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)" >> "$GITHUB_ENV"
+          test "${{ steps.version.outputs.version_name }}" = "$TAG_VERSION" || {
+            echo "Tag $TAG_VERSION does not match app versionName ${{ steps.version.outputs.version_name }}"
+            exit 1
+          }
 
       - name: Build release APK
-        run: ./gradlew --no-daemon clean assembleRelease
+        run: gradle -p mobile --no-daemon clean :app:assembleRelease --stacktrace
 
       - name: Verify APK
         shell: bash
         run: |
-          APK="app/build/outputs/apk/release/app-release.apk"
+          APK="mobile/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
           echo "APK_SIZE=$(stat -c%s "$APK")" >> "$GITHUB_ENV"
           echo "APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
 
-      - name: Rename APK
+      - name: Rename numbered APK
         shell: bash
-        run: cp app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/Pips-life-${VERSION_NAME}.apk"
+        run: |
+          cp mobile/app/build/outputs/apk/release/app-release.apk \
+            "Pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk"
 
       - name: Create numbered GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
+          name: Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})
           generate_release_notes: true
-          files: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}.apk
+          files: |
+            Pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk
           fail_on_unmatched_files: true
           body: |
-            ## Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
+            ## Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})
 
-            Install the attached Android APK on an existing Pips-life installation.
+            Numbered Android release for Pips-life.
 
             APK SHA-256: `${{ env.APK_SHA256 }}`
 
-            Release numbering is controlled by `mobile/app/build.gradle.kts` and the `vMAJOR.MINOR.PATCH` tag. The app's built-in updater checks GitHub's latest stable release and offers the APK when a newer version is available.
+            The app checks GitHub's latest stable release at startup and offers newer APK releases to the user. Release tags must use `vMAJOR.MINOR.PATCH` and must match `versionName` in `mobile/app/build.gradle.kts`.
