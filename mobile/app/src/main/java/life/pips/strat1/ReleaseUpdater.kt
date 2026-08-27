@@ -13,10 +13,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
-import life.pips.strat1.data.BackendApiClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -26,46 +27,47 @@ import java.io.File
 private const val RELEASES_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
 private const val APK_MIME = "application/vnd.android.package-archive"
 
-/** GitHub Releases updater. It only offers APKs from official Pips-life releases. */
 @Composable
 fun ReleaseUpdatePrompt(context: Context) {
-    var update by remember { mutableStateOf<ReleaseInfo?>(null) }
+    var release by remember { mutableStateOf<ReleaseInfo?>(null) }
     var downloading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         runCatching { ReleaseUpdater().latest() }
-            .onSuccess { if (it != null && isNewer(it.versionCode, BuildConfig.VERSION_CODE)) update = it }
-            .onFailure { /* Update checks must never block the trading UI. */ }
+            .onSuccess { candidate -> if (candidate != null && ReleaseUpdater.isNewer(candidate.versionCode, BuildConfig.VERSION_CODE)) release = candidate }
     }
 
-    update?.let { release ->
+    release?.let { candidate ->
         AlertDialog(
-            onDismissRequest = { if (!downloading) update = null },
+            onDismissRequest = { if (!downloading) release = null },
             title = { Text("Pips-life update available") },
-            text = { Text(if (downloading) "Downloading ${release.tag}…" else "Version ${release.tag} is available. Download the official GitHub release now?${error?.let { "\n\n$it" } ?: ""}") },
+            text = { Text(message ?: if (downloading) "Downloading ${candidate.tag} from GitHub…" else "Version ${candidate.tag} is available. Download and install the official Pips-life release?") },
             confirmButton = {
                 Button(enabled = !downloading, onClick = {
                     downloading = true
-                    error = null
-                    androidx.compose.runtime.LaunchedEffect(Unit) { }
-                }) { Text(if (downloading) "DOWNLOADING…" else "DOWNLOAD") }
+                    message = null
+                    scope.launch {
+                        runCatching {
+                            val apk = ReleaseUpdater().download(context, candidate)
+                            ReleaseUpdater().install(context, apk)
+                        }.onSuccess { message = "APK downloaded. Android will open the installer. If prompted, allow Pips-life to install updates." }
+                            .onFailure { message = it.message ?: "Update failed." }
+                        downloading = false
+                    }
+                }) { Text(if (downloading) "DOWNLOADING…" else "DOWNLOAD & INSTALL") }
             },
-            dismissButton = {
-                Button(enabled = !downloading, onClick = { update = null }) { Text("LATER") }
-            }
+            dismissButton = { Button(enabled = !downloading, onClick = { release = null }) { Text("LATER") } }
         )
     }
 }
 
-/** Imperative helper used by the activity/UI when an APK has been downloaded. */
 class ReleaseUpdater(private val http: OkHttpClient = OkHttpClient()) {
     suspend fun latest(): ReleaseInfo? = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(RELEASES_URL)
+        val request = Request.Builder().url(RELEASES_URL)
             .addHeader("Accept", "application/vnd.github+json")
-            .addHeader("User-Agent", "Pips-life-Android")
-            .build()
+            .addHeader("User-Agent", "Pips-life-Android").build()
         http.newCall(request).execute().use { response ->
             if (response.code == 404) return@withContext null
             if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
@@ -76,10 +78,8 @@ class ReleaseUpdater(private val http: OkHttpClient = OkHttpClient()) {
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
                 val name = asset.optString("name")
-                if (name.endsWith(".apk", true) && asset.optString("browser_download_url").startsWith("https://github.com/Pips-life/Strat.1/releases/download/")) {
-                    apkUrl = asset.optString("browser_download_url")
-                    break
-                }
+                val url = asset.optString("browser_download_url")
+                if (name.endsWith(".apk", true) && url.startsWith("https://github.com/Pips-life/Strat.1/releases/download/")) { apkUrl = url; break }
             }
             if (tag.isBlank() || apkUrl.isNullOrBlank()) null else ReleaseInfo(tag, versionCode(tag), apkUrl)
         }
@@ -115,11 +115,7 @@ class ReleaseUpdater(private val http: OkHttpClient = OkHttpClient()) {
         return p[0].toInt() * 1_000_000 + p[1].toInt() * 1_000 + p[2].toInt()
     }
 
-    companion object {
-        fun isNewer(releaseCode: Int, currentCode: Int): Boolean = releaseCode > currentCode
-    }
+    companion object { fun isNewer(releaseCode: Int, currentCode: Int) = releaseCode > currentCode }
 }
 
 data class ReleaseInfo(val tag: String, val versionCode: Int, val apkUrl: String)
-
-private fun isNewer(releaseCode: Int, currentCode: Int): Boolean = ReleaseUpdater.isNewer(releaseCode, currentCode)
