@@ -1,16 +1,20 @@
-import MetaApi from 'metaapi.cloud-sdk';
+import type MetaApi from 'metaapi.cloud-sdk';
 
 let client: MetaApi | undefined;
 
-export function metaApi(): MetaApi {
+export async function metaApi(): Promise<MetaApi> {
   const token = process.env.METAAPI_TOKEN;
   if (!token) throw new Error('METAAPI_TOKEN is not configured');
-  client ??= new MetaApi(token);
+  if (!client) {
+    const { default: MetaApiClient } = await import('metaapi.cloud-sdk');
+    client = new MetaApiClient(token);
+  }
   return client;
 }
 
 export async function getAccount(accountId: string) {
-  return metaApi().metatraderAccountApi.getAccount(accountId);
+  const api = await metaApi();
+  return api.metatraderAccountApi.getAccount(accountId);
 }
 
 export async function deployAccount(accountId: string) {
