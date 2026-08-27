@@ -39,12 +39,7 @@ class Mt5ApiClient(
                             val servers = brokerObject.optJSONArray("servers") ?: continue
                             for (j in 0 until servers.length()) {
                                 val server = servers.getString(j)
-                                result += Mt5Server(
-                                    id = "$broker:$server",
-                                    broker = broker,
-                                    name = server,
-                                    environment = inferEnvironment(server)
-                                )
+                                result += Mt5Server("$broker:$server", broker, server, inferEnvironment(server))
                             }
                         }
                         callback(Result.success(result))
@@ -74,7 +69,13 @@ class Mt5ApiClient(
                     val text = it.body?.string().orEmpty()
                     try {
                         val root = JSONObject(text)
-                        if (!it.isSuccessful) {
+                        if (it.code == 202) {
+                            callback(Result.success(Mt5ConnectionResult(
+                                accountId = root.optString("accountId", ""),
+                                state = root.optString("state", "PROCESSING"),
+                                server = root.optString("server", server)
+                            )))
+                        } else if (!it.isSuccessful) {
                             callback(Result.failure(IOException(root.optString("error", "MT5 connection failed"))))
                         } else {
                             callback(Result.success(Mt5ConnectionResult(
