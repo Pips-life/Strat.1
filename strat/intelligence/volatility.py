@@ -48,7 +48,9 @@ class VolatilitySnapshot:
 def _aggregate(options: Iterable[Mapping[str, Any]], field: str) -> float:
     total = 0.0
     for row in options:
-        contracts = abs(_first(row, "contracts", "volume", default=0.0))
+        # Provider payloads commonly expose OI but not contracts/volume for
+        # Greek snapshots. Use the best available exposure weight.
+        contracts = abs(_first(row, "contracts", "volume", "open_interest", "oi", default=0.0))
         multiplier = abs(_first(row, "multiplier", default=1.0)) or 1.0
         total += _num(row.get(field)) * contracts * multiplier
     return total
