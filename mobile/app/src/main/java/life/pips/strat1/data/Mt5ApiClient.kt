@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import life.pips.strat1.BuildConfig
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,7 +20,7 @@ class Mt5ApiClient(
         val url = "$baseUrl/api/mt5/servers?q=${java.net.URLEncoder.encode(query, "UTF-8")}"
         val request = Request.Builder().url(url).get().build()
         http.newCall(request).execute().use { response ->
-            val body = response.body.string()
+            val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException(extractError(body, "Server discovery failed"))
             val brokers = JSONObject(body).optJSONArray("brokers") ?: JSONArray()
             buildList {
@@ -48,12 +49,12 @@ class Mt5ApiClient(
             put("login", login)
             put("password", password)
             put("server", server)
-            put("name", "Strat.1 MT5 $login")
+            put("name", "Pips-life MT5 $login")
         }
         val request = Request.Builder().url("$baseUrl/api/mt5/connect")
             .post(json.toString().toRequestBody("application/json".toMediaType())).build()
         http.newCall(request).execute().use { response ->
-            val body = response.body.string()
+            val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException(extractError(body, "MT5 connection failed"))
             val result = JSONObject(body)
             Mt5ConnectionResult(result.optString("accountId").ifBlank { null }, result.optString("state", "UNKNOWN"), result.optString("server", server))
