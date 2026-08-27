@@ -100,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, subprocess, urllib.request
+          import json, subprocess
 
           release = json.loads(subprocess.check_output([
               'gh', 'release', 'view', '--json', 'tagName,name,isDraft,isPrerelease,assets'
@@ -116,10 +116,15 @@ jobs:
           assert sha in assets, 'latest release is missing its SHA-256 sidecar'
           assert 'release-manifest.json' in assets, 'latest release is missing release-manifest.json'
 
-          manifest_url = assets['release-manifest.json']['browserDownloadUrl']
-          token = subprocess.check_output(['gh', 'auth', 'token'], text=True).strip()
-          req = urllib.request.Request(manifest_url, headers={'Authorization': f'Bearer {token}', 'Accept': 'application/octet-stream'})
-          manifest = json.load(urllib.request.urlopen(req))
+          subprocess.check_call([
+              'gh', 'release', 'download', tag,
+              '--pattern', 'release-manifest.json',
+              '--dir', '/tmp/pips-life-release',
+              '--clobber'
+          ])
+          with open('/tmp/pips-life-release/release-manifest.json') as f:
+              manifest = json.load(f)
+
           assert manifest['tag'] == tag
           assert manifest['apk'] == apk
           assert isinstance(manifest['versionCode'], int) and manifest['versionCode'] > 0
