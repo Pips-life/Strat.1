@@ -5,7 +5,6 @@ import android.app.Application
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
@@ -13,6 +12,7 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import life.pips.strat1.BuildConfig
@@ -42,12 +42,19 @@ class PipsLifeApplication : Application() {
     }
 }
 
-data class GitHubRelease(val tag: String, val name: String, val versionName: String, val versionCode: Int, val apkUrl: String)
+data class PipsLifeRelease(
+    val tag: String,
+    val name: String,
+    val versionName: String,
+    val versionCode: Int,
+    val assetId: Long
+)
 
 class ReleaseUpdater(private val context: Context) {
     companion object {
-        private const val LATEST_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
         private const val APK_MIME = "application/vnd.android.package-archive"
+        private const val LATEST_PATH = "/api/app/release/latest"
+        private const val DOWNLOAD_PATH = "/api/app/release/download?asset="
     }
 
     fun checkAndPrompt(activity: Activity) {
@@ -65,41 +72,35 @@ class ReleaseUpdater(private val context: Context) {
         }
     }
 
-    private fun fetchLatest(): GitHubRelease {
-        val c = URL(LATEST_URL).openConnection() as HttpURLConnection
-        c.requestMethod = "GET"
-        c.setRequestProperty("Accept", "application/vnd.github+json")
-        c.setRequestProperty("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
-        c.connectTimeout = 10000
-        c.readTimeout = 10000
-        if (c.responseCode !in 200..299) error("GitHub release lookup failed: ${c.responseCode}")
-        val json = c.inputStream.bufferedReader().use { JSONObject(it.readText()) }
-        val tag = json.optString("tag_name")
-        val name = json.optString("name", tag)
-        val body = json.optString("body", "")
-        val versionName = Regex("(?m)^Version:\\s*([0-9]+\\.[0-9]+\\.[0-9]+)").find(body)?.groupValues?.get(1)
-            ?: tag.removePrefix("v").substringBefore("+")
-        val versionCode = Regex("(?m)^VersionCode:\\s*(\\d+)").find(body)?.groupValues?.get(1)?.toIntOrNull()
-            ?: versionName.split(".").fold(0) { acc, part -> acc * 100 + (part.toIntOrNull() ?: 0) }
-        val assets = json.optJSONArray("assets") ?: error("Release has no assets")
-        var apk: String? = null
-        for (i in 0 until assets.length()) {
-            val a = assets.getJSONObject(i)
-            if (a.optString("name").endsWith(".apk", true)) { apk = a.optString("browser_download_url"); break }
-        }
-        return GitHubRelease(tag, name, versionName, versionCode, apk ?: error("Release has no APK asset"))
+    private fun fetchLatest(): PipsLifeRelease {
+        val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
+        val connection = URL(base + LATEST_PATH).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+        if (connection.responseCode !in 200..299) error("Release check failed: ${connection.responseCode}")
+        val json = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }
+        return PipsLifeRelease(
+            tag = json.getString("tag"),
+            name = json.optString("name", "Pips-life update"),
+            versionName = json.getString("versionName"),
+            versionCode = json.getInt("versionCode"),
+            assetId = json.getLong("assetId")
+        )
     }
 
-    private fun downloadAndInstall(activity: Activity, release: GitHubRelease) {
+    private fun downloadAndInstall(activity: Activity, release: PipsLifeRelease) {
         if (android.os.Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
             Toast.makeText(context, "Allow Pips-life to install updates, then tap the update again.", Toast.LENGTH_LONG).show()
-            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-            activity.startActivity(intent)
+            activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")))
             return
         }
-        val request = DownloadManager.Request(Uri.parse(release.apkUrl))
+        val url = BuildConfig.BACKEND_BASE_URL.trimEnd('/') + DOWNLOAD_PATH + release.assetId
+        val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("Pips-life ${release.versionName}")
-            .setDescription("Downloading Pips-life update ${release.tag}")
+            .setDescription("Downloading Pips-life ${release.tag} from the GitHub release gateway")
             .setMimeType(APK_MIME)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "Pips-life-${release.versionName}-${release.versionCode}.apk")
@@ -117,18 +118,22 @@ class ReleaseUpdater(private val context: Context) {
                     withContext(Dispatchers.Main) { install(activity, Uri.parse(uri)) }
                     return@launch
                 }
-                if (status == DownloadManager.STATUS_FAILED) return@launch
-                kotlinx.coroutines.delay(700)
+                if (status == DownloadManager.STATUS_FAILED) {
+                    withContext(Dispatchers.Main) { Toast.makeText(context, "Pips-life update download failed.", Toast.LENGTH_LONG).show() }
+                    return@launch
+                }
+                delay(700)
             }
         }
     }
 
     private fun install(activity: Activity, downloadedUri: Uri) {
-        val source = if (downloadedUri.scheme == "file") FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(downloadedUri.path!!)) else downloadedUri
-        val intent = Intent(Intent.ACTION_VIEW).apply {
+        val source = if (downloadedUri.scheme == "file") {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(downloadedUri.path!!))
+        } else downloadedUri
+        activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(source, APK_MIME)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        activity.startActivity(intent)
+        })
     }
 }
