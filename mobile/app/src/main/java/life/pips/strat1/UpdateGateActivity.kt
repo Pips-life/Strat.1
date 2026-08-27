@@ -29,10 +29,19 @@ class UpdateGateActivity : android.app.Activity() {
     private var pendingApk: File? = null
     private var downloadId = -1L
     private var receiverRegistered = false
+    private var awaitingInstallPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkLatestRelease()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (awaitingInstallPermission && canInstallPackages()) {
+            awaitingInstallPermission = false
+            pendingApk?.let { installApk(it) }
+        }
     }
 
     override fun onDestroy() {
@@ -109,8 +118,12 @@ class UpdateGateActivity : android.app.Activity() {
         }
     }
 
+    private fun canInstallPackages(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
+
     private fun installApk(file: File) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+        if (!canInstallPackages()) {
+            awaitingInstallPermission = true
             Toast.makeText(this, "Allow Pips-life to install updates, then return to continue.", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
             return
