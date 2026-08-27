@@ -24,11 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout tagged release source
+      - name: Checkout release source
         uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.version_name }}
+          ref: main
           fetch-depth: 0
+          token: ${{ github.token }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -60,6 +61,29 @@ jobs:
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Create numbered release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            TAG_SHA=$(git rev-list -n 1 "$TAG")
+            HEAD_SHA=$(git rev-parse HEAD)
+            test "$TAG_SHA" = "$HEAD_SHA" || {
+              echo "Tag $TAG already exists at $TAG_SHA, but main is $HEAD_SHA"
+              exit 1
+            }
+            echo "Using existing tag $TAG at $HEAD_SHA"
+          else
+            git tag -a "$TAG" -m "Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})" HEAD
+            git push origin "$TAG"
+            echo "Created and pushed $TAG at $(git rev-parse HEAD)"
+          fi
+          git checkout --detach "$TAG"
 
       - name: Stamp release.properties
         working-directory: mobile
