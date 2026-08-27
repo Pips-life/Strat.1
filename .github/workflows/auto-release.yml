@@ -14,9 +14,29 @@ concurrency:
 
 jobs:
   prepare-release:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && !startsWith(github.event.workflow_run.head_commit.message, 'chore(release): prepare') }}
+    # Only gate on the upstream build result here. Branch/recursion checks are
+    # performed as explicit steps so a bad condition cannot silently skip the job.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Validate triggering Android build
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+        run: |
+          set -euo pipefail
+          test "$HEAD_BRANCH" = "main" || {
+            echo "Android build completed successfully, but branch '$HEAD_BRANCH' is not main; no release will be created."
+            exit 0
+          }
+          case "$HEAD_MESSAGE" in
+            "chore(release): prepare"*)
+              echo "Release-preparation commit detected; no second release will be created."
+              exit 0
+              ;;
+          esac
+          echo "Eligible successful Android build on main."
+
       - name: Checkout main
         uses: actions/checkout@v4
         with:
@@ -43,27 +63,20 @@ jobs:
 
           latest_code="$(python3 - <<'PY'
           import json, re, subprocess
-
-          tags = subprocess.check_output(
-              ['gh', 'release', 'list', '--limit', '100', '--json', 'tagName'],
-              text=True,
-          )
-          rows = json.loads(tags)
-          codes = []
+          rows=json.loads(subprocess.check_output(
+              ['gh','release','list','--limit','100','--json','tagName'], text=True))
+          codes=[]
           for row in rows:
-              tag = row.get('tagName')
+              tag=row.get('tagName')
               if not tag:
                   continue
               try:
-                  assets = json.loads(subprocess.check_output(
-                      ['gh', 'release', 'view', tag, '--json', 'assets'],
-                      text=True,
-                  )).get('assets', [])
+                  assets=json.loads(subprocess.check_output(
+                      ['gh','release','view',tag,'--json','assets'], text=True)).get('assets',[])
               except subprocess.CalledProcessError:
                   continue
               for asset in assets:
-                  name = asset.get('name', '')
-                  m = re.search(r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$', name)
+                  m=re.search(r'pips-life-[0-9]+\\.[0-9]+\\.[0-9]+-(\\d+)\\.apk$', asset.get('name',''))
                   if m:
                       codes.append(int(m.group(1)))
           print(max(codes) if codes else 4)
