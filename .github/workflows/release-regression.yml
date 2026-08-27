@@ -49,13 +49,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          FILE=mobile/app/src/main/java/life/pips/strat1/UpdateGateActivity.kt
-          grep -Fq 'private const val RELEASE_LATEST_PATH = "/api/app/release/latest"' "$FILE"
-          grep -Fq 'private const val RELEASE_DOWNLOAD_PATH = "/api/app/release/download?asset="' "$FILE"
-          grep -Fq 'versionCode > BuildConfig.VERSION_CODE.toLong()' "$FILE"
-          grep -Fq 'showUpdateDialog(versionName, assetId, releaseUrl)' "$FILE"
-          grep -Fq 'BuildConfig.BACKEND_BASE_URL' "$FILE"
-          grep -Fq 'buildConfigField("String", "BACKEND_BASE_URL", "\\"https://strat-1.vercel.app\\"")' mobile/app/build.gradle.kts
+          python3 - <<'PY'
+          from pathlib import Path
+
+          updater = Path('mobile/app/src/main/java/life/pips/strat1/UpdateGateActivity.kt').read_text()
+          gradle = Path('mobile/app/build.gradle.kts').read_text()
+
+          required_updater = [
+              'RELEASE_LATEST_PATH = "/api/app/release/latest"',
+              'RELEASE_DOWNLOAD_PATH = "/api/app/release/download?asset="',
+              'versionCode > BuildConfig.VERSION_CODE.toLong()',
+              'showUpdateDialog(versionName, assetId, releaseUrl)',
+              'BuildConfig.BACKEND_BASE_URL',
+          ]
+          missing = [item for item in required_updater if item not in updater]
+          assert not missing, f'updater source contract missing: {missing}'
+          assert 'buildConfigField("String", "BACKEND_BASE_URL"' in gradle, 'BACKEND_BASE_URL BuildConfig field missing'
+          assert 'https://strat-1.vercel.app' in gradle, 'production backend URL missing'
+          print('Updater source contract OK')
+          PY
 
       - name: Compile Android debug build
         working-directory: mobile
@@ -85,7 +97,8 @@ jobs:
           assert 'release-manifest.json' in assets, 'latest release is missing release-manifest.json'
 
           manifest_url = assets['release-manifest.json']['browserDownloadUrl']
-          req = urllib.request.Request(manifest_url, headers={'Authorization': f"Bearer {subprocess.check_output(['gh','auth','token'], text=True).strip()}", 'Accept': 'application/octet-stream'})
+          token = subprocess.check_output(['gh', 'auth', 'token'], text=True).strip()
+          req = urllib.request.Request(manifest_url, headers={'Authorization': f'Bearer {token}', 'Accept': 'application/octet-stream'})
           manifest = json.load(urllib.request.urlopen(req))
           assert manifest['tag'] == tag
           assert manifest['apk'] == apk
