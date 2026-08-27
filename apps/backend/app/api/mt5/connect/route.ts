@@ -38,17 +38,9 @@ export async function POST(request: NextRequest) {
         'auth-token': token,
         'transaction-id': transactionId
       },
-      body: JSON.stringify({
-        login,
-        password,
-        server,
-        name,
-        platform: 'mt5',
-        magic: 0,
-        type: 'cloud-g2',
-        keywords
-      }),
-      cache: 'no-store'
+      body: JSON.stringify({ login, password, server, name, platform: 'mt5', magic: 0, type: 'cloud-g2', keywords }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000)
     });
 
     const body = await upstream.text();
@@ -62,18 +54,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (!upstream.ok) {
-      return NextResponse.json(
-        { error: 'MT5 connection validation failed', details: safeMetaApiError(body) },
-        { status: upstream.status }
-      );
+      return NextResponse.json({ error: 'MT5 connection validation failed', details: safeMetaApiError(body) }, { status: upstream.status });
     }
 
     const result = JSON.parse(body) as { id?: string; state?: string };
-    return NextResponse.json({
-      accountId: result.id ?? null,
-      state: result.state ?? 'UNKNOWN',
-      server
-    });
+    return NextResponse.json({ accountId: result.id ?? null, state: result.state ?? 'UNKNOWN', broker, server });
   } catch {
     return NextResponse.json({ error: 'Unable to reach MetaApi account provisioning service' }, { status: 502 });
   }
