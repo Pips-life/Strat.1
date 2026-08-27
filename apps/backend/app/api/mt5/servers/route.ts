@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { metaApi } from '@/lib/metaapi';
+import { verifyAccountSession } from '@/lib/session';
 
 export const runtime = 'nodejs';
 
@@ -19,7 +20,7 @@ async function discover(query: string) {
 }
 
 async function closeConnection(connection: { close: () => Promise<void> }) {
-  try { await connection.close(); } catch { /* connection cleanup must not mask data */ }
+  try { await connection.close(); } catch { /* cleanup must not mask data */ }
 }
 
 export async function GET(request: Request) {
@@ -30,6 +31,7 @@ export async function GET(request: Request) {
   try {
     if (action === 'status' || action === 'positions') {
       if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
+      verifyAccountSession(request, accountId);
       const account = await metaApi().then(api => api.metatraderAccountApi.getAccount(accountId));
       const connection = account.getRPCConnection();
       try {
@@ -45,27 +47,29 @@ export async function GET(request: Request) {
             bot: { running: false, controlAvailable: Boolean(process.env.PIPSLIFE_BOT_CONTROL_URL), strategy: '001', activity: process.env.PIPSLIFE_BOT_CONTROL_URL ? 'BACKEND CONNECTED — BOT CONTROL READY' : 'BACKEND CONNECTED — BOT CONTROL SERVICE NOT CONFIGURED' }
           }, { headers: { 'cache-control': 'no-store' } });
         }
-        const positions = await connection.getPositions();
-        return NextResponse.json({ positions }, { headers: { 'cache-control': 'no-store' } });
+        return NextResponse.json({ positions: await connection.getPositions() }, { headers: { 'cache-control': 'no-store' } });
       } finally { await closeConnection(connection); }
     }
 
     const query = (url.searchParams.get('q') ?? '').trim().toLowerCase();
     return NextResponse.json(await discover(query), { headers: { 'cache-control': 'public, max-age=300, stale-while-revalidate=3600' } });
   } catch (error) {
+    if (error instanceof Response) return error;
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Backend request failed' }, { status: 502 });
   }
 }
 
 export async function POST(request: Request) {
-  const body = await request.json() as { action?: string; login?: string; password?: string; server?: string; name?: string; accountId?: string; running?: boolean };
+  const body = await request.json() as { action?: string; accountId?: string; running?: boolean; login?: string; password?: string; server?: string; name?: string };
   try {
     if (body.action === 'bot') {
+      if (!body.accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
+      verifyAccountSession(request, body.accountId);
       if (!process.env.PIPSLIFE_BOT_CONTROL_URL) return NextResponse.json({ error: 'Bot control service is not configured' }, { status: 503 });
       const response = await fetch(process.env.PIPSLIFE_BOT_CONTROL_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...(process.env.PIPSLIFE_BOT_CONTROL_TOKEN ? { authorization: `Bearer ${process.env.PIPSLIFE_BOT_CONTROL_TOKEN}` } : {}) },
-        body: JSON.stringify({ running: body.running === true, strategy: '001' })
+        body: JSON.stringify({ running: body.running === true, strategy: '001', accountId: body.accountId })
       });
       const data = await response.json().catch(() => ({}));
       return NextResponse.json(data, { status: response.status });
@@ -86,9 +90,7 @@ export async function POST(request: Request) {
       quoteStreamingIntervalInSeconds: 2.5, tags: ['pips-life', 'strategy-001']
     });
 
-    if (existing) {
-      await account.update({ password, name: body.name?.trim() || `Pips-life MT5 ${login}`, server, quoteStreamingIntervalInSeconds: 2.5 });
-    }
+    if (existing) await account.update({ password, name: body.name?.trim() || `Pips-life MT5 ${login}`, server, quoteStreamingIntervalInSeconds: 2.5 });
     if (account.state !== 'DEPLOYED') await account.deploy();
     return NextResponse.json({ accountId: account.id, state: account.state, connectionStatus: account.connectionStatus, server: account.server, login: account.login });
   } catch (error) {
