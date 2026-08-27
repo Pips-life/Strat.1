@@ -35,6 +35,8 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.2.0")
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("androidx.browser:browser:1.9.0")
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:5.1.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
