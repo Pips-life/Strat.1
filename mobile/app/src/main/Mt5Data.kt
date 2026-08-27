@@ -10,7 +10,11 @@ class Mt5PreferenceStore(context: Context) {
     val account: String get() = prefs.getString("account", "") ?: ""
 
     fun save(broker: String, server: String, account: String) {
-        prefs.edit().putString("broker", broker.trim()).putString("server", server.trim()).putString("account", account.trim()).apply()
+        prefs.edit()
+            .putString("broker", broker.trim())
+            .putString("server", server.trim())
+            .putString("account", account.trim())
+            .apply()
     }
 
     fun clear() = prefs.edit().clear().apply()
@@ -18,16 +22,9 @@ class Mt5PreferenceStore(context: Context) {
 
 data class Mt5Server(val id: String, val broker: String, val name: String)
 
-/** Replace the local adapter with the backend broker-directory API without changing the UI. */
-class Mt5ServerRepository {
-    private val known = listOf(
-        Mt5Server("demo-1", "Exness", "Exness-MT5Trial"),
-        Mt5Server("real-1", "Exness", "Exness-MT5Real"),
-        Mt5Server("demo-2", "IC Markets", "ICMarketsSC-Demo"),
-        Mt5Server("real-2", "IC Markets", "ICMarketsSC-Live"),
-        Mt5Server("demo-3", "XM", "XMGlobal-MT5 4"),
-        Mt5Server("real-3", "XM", "XMGlobal-MT5 5")
-    )
-
-    fun search(broker: String): List<Mt5Server> = if (broker.isBlank()) emptyList() else known.filter { it.broker.contains(broker.trim(), ignoreCase = true) }
+/** Backend-backed broker/server discovery. */
+class Mt5ServerRepository(private val api: Mt5ApiClient = Mt5ApiClient()) {
+    fun search(broker: String, callback: (Result<List<Mt5Server>>) -> Unit) {
+        api.searchServers(broker, callback)
+    }
 }
