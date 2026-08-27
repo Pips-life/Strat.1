@@ -26,11 +26,10 @@ class Mt5ApiClient(
             buildList {
                 for (i in 0 until brokers.length()) {
                     val broker = brokers.getJSONObject(i)
-                    val brokerName = broker.optString("broker")
-                    val servers = broker.optJSONArray("servers") ?: JSONArray()
-                    for (j in 0 until servers.length()) {
-                        val serverName = servers.optString(j)
-                        add(Mt5Server("$brokerName:$serverName", brokerName, serverName, if (serverName.contains("demo", true)) "demo" else "real"))
+                    val brokerName = broker.optString("brokerName", broker.optString("broker", "Unknown broker"))
+                    val serverName = broker.optString("serverName")
+                    if (serverName.isNotBlank()) {
+                        add(Mt5Server("${brokerName}:${serverName}", brokerName, serverName, broker.optString("environment", "real")))
                     }
                 }
             }
@@ -44,12 +43,13 @@ class Mt5ApiClient(
         }
     }
 
-    suspend fun connect(login: String, password: String, server: String): Mt5ConnectionResult = withContext(Dispatchers.IO) {
+    suspend fun connect(login: String, password: String, server: String, broker: String? = null): Mt5ConnectionResult = withContext(Dispatchers.IO) {
         val json = JSONObject().apply {
             put("login", login)
             put("password", password)
             put("server", server)
             put("name", "Pips-life MT5 $login")
+            if (!broker.isNullOrBlank()) put("broker", broker)
         }
         val request = Request.Builder().url("$baseUrl/api/mt5/connect")
             .post(json.toString().toRequestBody("application/json".toMediaType())).build()
@@ -57,13 +57,13 @@ class Mt5ApiClient(
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException(extractError(body, "MT5 connection failed"))
             val result = JSONObject(body)
-            Mt5ConnectionResult(result.optString("accountId").ifBlank { null }, result.optString("state", "UNKNOWN"), result.optString("server", server))
+            Mt5ConnectionResult(result.optString("accountId").ifBlank { null }, result.optString("state", "UNKNOWN"), result.optString("connectionStatus", "CONNECTING"), result.optString("server", server))
         }
     }
 
-    fun connect(login: String, password: String, server: String, onResult: (Result<Mt5ConnectionResult>) -> Unit) {
+    fun connect(login: String, password: String, server: String, broker: String?, onResult: (Result<Mt5ConnectionResult>) -> Unit) {
         CoroutineScope(Dispatchers.IO).launch {
-            val result = runCatching { connect(login, password, server) }
+            val result = runCatching { connect(login, password, server, broker) }
             withContext(Dispatchers.Main) { onResult(result) }
         }
     }
@@ -73,4 +73,4 @@ class Mt5ApiClient(
     }.getOrDefault(fallback)
 }
 
-data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String)
+data class Mt5ConnectionResult(val accountId: String?, val state: String, val connectionStatus: String, val server: String)
