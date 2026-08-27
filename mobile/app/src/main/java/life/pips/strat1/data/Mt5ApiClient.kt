@@ -1,5 +1,6 @@
 package life.pips.strat1.data
 
+import life.pips.strat1.BuildConfig
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -13,10 +14,10 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String, val message: String? = null)
+data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String, val message: String? = null, val reused: Boolean = false)
 
 class Mt5ApiClient(
-    private val baseUrl: String = "https://strat-1.vercel.app",
+    private val baseUrl: String = BuildConfig.BACKEND_BASE_URL,
     private val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
 ) {
     fun searchServers(query: String, callback: (Result<List<Mt5Server>>) -> Unit) {
@@ -76,7 +77,8 @@ class Mt5ApiClient(
                             json.optString("accountId").ifBlank { null },
                             json.optString("state", "UNKNOWN"),
                             json.optString("server", server),
-                            json.optString("message").ifBlank { null }
+                            json.optString("message").ifBlank { null },
+                            json.optBoolean("reused", false)
                         )))
                     } catch (e: Exception) { callback(Result.failure(IOException("Invalid MT5 connection response", e))) }
                 }
