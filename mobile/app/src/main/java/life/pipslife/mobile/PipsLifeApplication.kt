@@ -104,10 +104,10 @@ class ReleaseUpdater(private val context: Context) {
             .setMimeType(APK_MIME)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "Pips-life-${release.versionName}-${release.versionCode}.apk")
-        val id = (context.getSystemService(DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val id = dm.enqueue(request)
         Toast.makeText(context, "Update download started.", Toast.LENGTH_SHORT).show()
         CoroutineScope(Dispatchers.IO).launch {
-            val dm = context.getSystemService(DOWNLOAD_SERVICE) as DownloadManager
             while (true) {
                 val cursor = dm.query(DownloadManager.Query().setFilterById(id))
                 if (!cursor.moveToFirst()) { cursor.close(); return@launch }
