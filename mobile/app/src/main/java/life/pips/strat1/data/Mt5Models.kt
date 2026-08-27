@@ -5,7 +5,11 @@ data class Mt5Server(
     val brokerName: String,
     val serverName: String,
     val environment: String,
-)
+) {
+    // Compatibility aliases for older mobile UI code.
+    val broker: String get() = brokerName
+    val name: String get() = serverName
+}
 
 data class Mt5AccountPreference(
     val brokerName: String,
