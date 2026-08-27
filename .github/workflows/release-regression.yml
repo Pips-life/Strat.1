@@ -6,10 +6,30 @@ on:
     paths:
       - '.github/workflows/**'
       - 'mobile/**'
+      - 'app/**'
+      - 'apps/**'
+      - 'lib/**'
+      - 'strat/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'pyproject.toml'
+      - 'vercel.json'
+      - 'next.config.ts'
+      - 'tsconfig.json'
   pull_request:
     paths:
       - '.github/workflows/**'
       - 'mobile/**'
+      - 'app/**'
+      - 'apps/**'
+      - 'lib/**'
+      - 'strat/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'pyproject.toml'
+      - 'vercel.json'
+      - 'next.config.ts'
+      - 'tsconfig.json'
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * *'
