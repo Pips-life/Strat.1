@@ -1,9 +1,6 @@
 name: Pips-life Android Release
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version_name:
@@ -19,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: pips-life-mobile-release-${{ github.ref }}
+  group: pips-life-mobile-release-${{ inputs.version_name }}
   cancel-in-progress: false
 
 jobs:
@@ -27,9 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout
+      - name: Checkout tagged release source
         uses: actions/checkout@v4
         with:
+          ref: v${{ inputs.version_name }}
           fetch-depth: 0
 
       - name: Set up JDK 17
@@ -55,15 +53,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION_NAME="${{ inputs.version_name }}"
-            VERSION_CODE="${{ inputs.version_code }}"
-          else
-            VERSION_NAME="${GITHUB_REF_NAME#v}"
-            FILE_VERSION="$(sed -n 's/^versionName=//p' mobile/release.properties)"
-            VERSION_CODE="$(sed -n 's/^versionCode=//p' mobile/release.properties)"
-            [[ "$VERSION_NAME" == "$FILE_VERSION" ]] || { echo "Tag $VERSION_NAME does not match mobile/release.properties $FILE_VERSION"; exit 1; }
-          fi
+          VERSION_NAME="${{ inputs.version_name }}"
+          VERSION_CODE="${{ inputs.version_code }}"
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version name'; exit 1; }
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo 'Invalid version code'; exit 1; }
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
@@ -137,7 +128,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release list --limit 1 --json tagName > /tmp/latest-release.json; then exit 0; fi
+          gh release list --limit 1 --json tagName > /tmp/latest-release.json
           python3 - <<'PY'
           import json, os, re, subprocess
           rows=json.load(open('/tmp/latest-release.json'))
@@ -163,7 +154,7 @@ jobs:
             release-manifest.json \
             --title "Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})" \
             --notes "Version: ${{ steps.version.outputs.version_name }}\nVersionCode: ${{ steps.version.outputs.version_code }}\n\nOfficial Pips-life Android release. The app checks this GitHub Releases feed for newer versions." \
-            --target "${{ github.sha }}"
+            --target "v${{ steps.version.outputs.version_name }}"
 
       - name: Verify published release
         env:
