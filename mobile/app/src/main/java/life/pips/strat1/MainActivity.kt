@@ -255,17 +255,79 @@ private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: Backe
 }
 
 @Composable private fun Mt5Screen(modifier: Modifier, api: BackendApiClient, existing: BackendSession?, onConnected: (BackendSession) -> Unit) {
-    val scope = rememberCoroutineScope(); var broker by remember { mutableStateOf("") }; var login by remember { mutableStateOf("") }; var password by remember { mutableStateOf("") }; var server by remember { mutableStateOf(existing?.server.orEmpty()) }; var servers by remember { mutableStateOf(emptyList<Mt5Server>()) }; var busy by remember { mutableStateOf(false) }; var status by remember { mutableStateOf(if (existing != null) "Account linked and ready." else "Find your broker to begin.") }
+    val scope = rememberCoroutineScope()
+    var brokerQuery by remember { mutableStateOf("") }
+    var login by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var server by remember { mutableStateOf(existing?.server.orEmpty()) }
+    var servers by remember { mutableStateOf(emptyList<Mt5Server>()) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf(if (existing != null) "Account linked and ready." else "Search your broker to choose its MT5 server.") }
+    var searchStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(brokerQuery) {
+        val query = brokerQuery.trim()
+        if (query.length < 2) {
+            servers = emptyList()
+            searchStarted = false
+            return@LaunchedEffect
+        }
+        delay(350)
+        if (query != brokerQuery.trim()) return@LaunchedEffect
+        busy = true
+        searchStarted = true
+        api.findServers(query).onSuccess {
+            servers = it
+            status = if (it.isEmpty()) "No matching MT5 servers found." else "Select the exact server used by your MT5 account."
+        }.onFailure {
+            servers = emptyList()
+            status = it.message ?: "Broker search failed"
+        }
+        busy = false
+    }
     LazyColumn(modifier.fillMaxSize().background(Ink).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp)) {
         item { TopBar("MT5", "SECURE ACCOUNT CONNECTION", existing != null) }
         if (existing != null) item { AccountCardMini(existing) }
-        item { Text("Find your broker", color = Primary, fontSize = 20.sp, fontWeight = FontWeight.Black) }
-        item { Text("Broker discovery stays dynamic through the backend, so server changes do not require an APK update.", color = Muted, fontSize = 11.sp) }
-        item { Field(broker, { broker = it }, "Broker or broker alias") }
-        item { Button(enabled = broker.length >= 2 && !busy, onClick = { busy = true; scope.launch { api.findServers(broker).onSuccess { servers = it; status = "Select the exact server used by your MT5 account." }.onFailure { status = it.message ?: "Broker search failed" }; busy = false } }, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple, contentColor = Ink)) { Text(if (busy) "SEARCHING…" else "FIND SERVERS", fontWeight = FontWeight.Black) } }
-        items(servers) { s -> Card(onClick = { server = s.serverName }, colors = CardDefaults.cardColors(containerColor = if (server == s.serverName) Panel2 else Panel), shape = RoundedCornerShape(17.dp), modifier = Modifier.border(1.dp, if (server == s.serverName) Cyan else Line, RoundedCornerShape(17.dp))) { Column(Modifier.padding(15.dp)) { Text(s.brokerName, color = Muted, fontSize = 10.sp); Text(s.serverName, color = Cyan, fontWeight = FontWeight.Bold); Text(s.environment.uppercase(), color = Muted, fontSize = 9.sp) } } }
-        item { Field(server, { server = it }, "MT5 server") }; item { Field(login, { login = it }, "Account number") }; item { OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(15.dp)) }
-        item { Button(enabled = login.isNotBlank() && password.isNotBlank() && server.isNotBlank() && !busy, onClick = { busy = true; status = "Connecting securely through backend…"; scope.launch { api.connect(login, password, server, broker).onSuccess { s -> password = ""; onConnected(s); status = "Connected. Live account sync is active." }.onFailure { status = it.message ?: "MT5 connection failed" }; busy = false } }, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Ink)) { Text(if (busy) "CONNECTING…" else "CONNECT SECURELY", fontWeight = FontWeight.Black) } }
+        item { Text("MT5 server", color = Primary, fontSize = 20.sp, fontWeight = FontWeight.Black) }
+        item { Text("Type your broker name. Matching MT5 servers appear automatically; no separate search field is needed.", color = Muted, fontSize = 11.sp) }
+        item {
+            OutlinedTextField(
+                value = brokerQuery,
+                onValueChange = { value -> brokerQuery = value; if (value.isBlank()) { server = ""; servers = emptyList() } },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("MT5 server") },
+                placeholder = { Text("Search broker name…") },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = Cyan) },
+                trailingIcon = { if (busy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Cyan) },
+                singleLine = true,
+                shape = RoundedCornerShape(15.dp),
+                colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Panel, focusedContainerColor = Panel, unfocusedBorderColor = Line, focusedBorderColor = Cyan)
+            )
+        }
+        if (server.isNotBlank()) item {
+            Text("SELECTED SERVER", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(server, color = Green, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        if (servers.isNotEmpty()) {
+            items(servers) { s ->
+                Card(
+                    onClick = { server = s.serverName; brokerQuery = s.brokerName },
+                    colors = CardDefaults.cardColors(containerColor = if (server == s.serverName) Panel2 else Panel),
+                    shape = RoundedCornerShape(17.dp),
+                    modifier = Modifier.border(1.dp, if (server == s.serverName) Cyan else Line, RoundedCornerShape(17.dp))
+                ) {
+                    Column(Modifier.padding(15.dp)) {
+                        Text(s.brokerName, color = Muted, fontSize = 10.sp)
+                        Text(s.serverName, color = Cyan, fontWeight = FontWeight.Bold)
+                        Text(s.environment.uppercase(), color = Muted, fontSize = 9.sp)
+                    }
+                }
+            }
+        } else if (searchStarted && !busy && brokerQuery.trim().length >= 2) {
+            item { Text(status, color = Muted, fontSize = 11.sp) }
+        }
+        item { Field(login, { login = it }, "Account number") }
+        item { OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(15.dp)) }
+        item { Button(enabled = login.isNotBlank() && password.isNotBlank() && server.isNotBlank() && !busy, onClick = { busy = true; status = "Connecting securely through backend…"; scope.launch { api.connect(login, password, server, brokerQuery.trim()).onSuccess { s -> password = ""; onConnected(s); status = "Connected. Live account sync is active." }.onFailure { status = it.message ?: "MT5 connection failed" }; busy = false } }, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Ink)) { Text(if (busy) "CONNECTING…" else "CONNECT SECURELY", fontWeight = FontWeight.Black) } }
         item { Text(status, color = if (status.contains("Connected", true)) Green else Muted, fontSize = 12.sp) }
     }
 }
