@@ -22,14 +22,16 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
+    private val mt5Store by lazy { Mt5PreferenceStore(SecurePreferences(this)) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { Strat1App() }
+        setContent { Strat1App(mt5Store) }
     }
 }
 
 @Composable
-private fun Strat1App() {
+private fun Strat1App(mt5Store: Mt5PreferenceStore) {
     var selectedTab by remember { mutableIntStateOf(0) }
     Scaffold { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -38,7 +40,7 @@ private fun Strat1App() {
                 Tab(selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Dashboard") })
                 Tab(selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("MT5") })
             }
-            if (selectedTab == 0) DashboardTab() else Mt5Tab()
+            if (selectedTab == 0) DashboardTab() else Mt5Tab(mt5Store)
         }
     }
 }
@@ -53,10 +55,11 @@ private fun DashboardTab() {
 }
 
 @Composable
-private fun Mt5Tab() {
-    var broker by remember { mutableStateOf("") }
-    var server by remember { mutableStateOf("") }
-    var account by remember { mutableStateOf("") }
+private fun Mt5Tab(store: Mt5PreferenceStore) {
+    val saved = remember { store.load() }
+    var broker by remember { mutableStateOf(saved.broker) }
+    var server by remember { mutableStateOf(saved.server) }
+    var account by remember { mutableStateOf(saved.accountNumber) }
     var password by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Not connected") }
     var servers by remember { mutableStateOf(listOf<String>()) }
@@ -64,14 +67,18 @@ private fun Mt5Tab() {
     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("MT5 account", style = MaterialTheme.typography.titleLarge)
         OutlinedTextField(broker, { broker = it; servers = emptyList() }, Modifier.fillMaxWidth(), label = { Text("Broker name") })
-        Button(onClick = { servers = listOf("Search results will come from the backend") }) { Text("Find broker servers") }
+        Button(onClick = { servers = listOf("Server discovery will come from the backend") }) { Text("Find broker servers") }
         servers.forEach { Text(it, Modifier.padding(vertical = 4.dp)) }
         OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), label = { Text("MT5 server") })
         OutlinedTextField(account, { account = it }, Modifier.fillMaxWidth(), label = { Text("MT5 account number") })
         OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, visualTransformation = PasswordVisualTransformation())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { status = "Connection request ready for backend validation" }) { Text("Connect") }
-            Button(onClick = { broker = ""; server = ""; account = ""; password = ""; status = "Credentials cleared" }) { Text("Forget") }
+            Button(onClick = {
+                store.save(Mt5Preference(broker, server, account))
+                status = "Connection request ready for backend validation"
+                password = ""
+            }) { Text("Connect") }
+            Button(onClick = { store.clear(); broker = ""; server = ""; account = ""; password = ""; status = "Saved account preference cleared" }) { Text("Forget") }
         }
         Text(status)
     }
