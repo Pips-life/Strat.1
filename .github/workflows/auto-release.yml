@@ -36,7 +36,6 @@ jobs:
           fi
           IFS=. read -r major minor patch <<< "$latest_version"
           next_version="$major.$minor.$((patch + 1))"
-
           latest_code=$(python3 - <<'PY'
           import json, subprocess, re
           try:
@@ -65,7 +64,7 @@ jobs:
           if git tag --points-at "${{ github.event.workflow_run.head_sha }}" | grep -q '^v'; then
             echo "already_released=true" >> "$GITHUB_OUTPUT"
           else
-            echo "already_released=false" >> "$GITHUB_OUTPUT
+            echo "already_released=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Update release properties
