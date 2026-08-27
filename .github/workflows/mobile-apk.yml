@@ -32,12 +32,18 @@ jobs:
         run: gradle -p mobile :app:assembleDebug --stacktrace
 
       - name: Verify APK exists
-        run: test -f mobile/app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          set -euo pipefail
+          APK="mobile/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
+          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
+          grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-0.2.0-2-debug-apk
+          name: pips-life-debug-${{ github.sha }}
           path: mobile/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
