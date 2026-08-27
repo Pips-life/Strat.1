@@ -42,14 +42,7 @@ class Mt5ApiClient(
                                 val servers = brokerObject.optJSONArray("servers") ?: JSONArray()
                                 for (j in 0 until servers.length()) {
                                     val server = servers.optString(j)
-                                    if (server.isNotBlank()) add(
-                                        Mt5Server(
-                                            id = "$broker:$server",
-                                            brokerName = broker,
-                                            serverName = server,
-                                            environment = if (server.contains("demo", true)) "demo" else "live"
-                                        )
-                                    )
+                                    if (server.isNotBlank()) add(Mt5Server("$broker:$server", broker, server, if (server.contains("demo", true)) "demo" else "live"))
                                 }
                             }
                         }))
@@ -59,8 +52,9 @@ class Mt5ApiClient(
         })
     }
 
-    fun connect(login: String, password: String, server: String, callback: (Result<Mt5ConnectionResult>) -> Unit) {
+    fun connect(broker: String, login: String, password: String, server: String, callback: (Result<Mt5ConnectionResult>) -> Unit) {
         val payload = JSONObject().apply {
+            put("broker", broker.trim())
             put("login", login.trim())
             put("password", password)
             put("server", server.trim())
@@ -81,16 +75,14 @@ class Mt5ApiClient(
                         if (!it.isSuccessful) {
                             val details = json.optJSONObject("details")
                             val message = details?.optString("message")?.takeIf { value -> value.isNotBlank() }
-                                ?: json.optString("error").ifBlank { "MT5 connection failed" }
+                                ?: json.optString("message").ifBlank { json.optString("error").ifBlank { "MT5 connection failed" } }
                             callback(Result.failure(IOException(message))); return
                         }
-                        callback(Result.success(
-                            Mt5ConnectionResult(
-                                json.optString("accountId").ifBlank { null },
-                                json.optString("state", "UNKNOWN"),
-                                json.optString("server", server)
-                            )
-                        ))
+                        callback(Result.success(Mt5ConnectionResult(
+                            json.optString("accountId").ifBlank { null },
+                            json.optString("state", "UNKNOWN"),
+                            json.optString("server", server)
+                        )))
                     } catch (e: Exception) { callback(Result.failure(IOException("Invalid MT5 connection response", e))) }
                 }
             }
