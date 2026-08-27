@@ -4,9 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val releaseProps = java.util.Properties().apply { file("../release.properties").inputStream().use(::load) }
-val releaseVersionName = providers.gradleProperty("APP_VERSION_NAME").orElse(releaseProps.getProperty("versionName")).get()
-val releaseVersionCode = providers.gradleProperty("APP_VERSION_CODE").orElse(releaseProps.getProperty("versionCode")).get().toInt()
+val releaseProps = java.util.Properties().apply {
+    file("../release.properties").inputStream().use(::load)
+}
 
 android {
     namespace = "life.pips.strat1"
@@ -15,8 +15,8 @@ android {
         applicationId = "life.pipslife.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = releaseVersionCode
-        versionName = releaseVersionName
+        versionCode = releaseProps.getProperty("versionCode").toInt()
+        versionName = releaseProps.getProperty("versionName")
         buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -24,11 +24,13 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     // Production release signing is CI-only. The keystore is never committed.
-    val storeFile = System.getenv("PIPS_LIFE_KEYSTORE_PATH")
-    val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD")
-    val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS")
-    val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD")
-    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+    // Accept both the current PIPS_LIFE_* workflow names and the legacy PIPSLIFE_* names.
+    val storeFile = System.getenv("PIPS_LIFE_KEYSTORE_PATH") ?: System.getenv("PIPSLIFE_KEYSTORE_FILE")
+    val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD") ?: System.getenv("PIPSLIFE_KEYSTORE_PASSWORD")
+    val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS") ?: System.getenv("PIPSLIFE_KEY_ALIAS")
+    val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD") ?: System.getenv("PIPSLIFE_KEY_PASSWORD")
+    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() &&
+        !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
         signingConfigs {
             create("release") {
                 this.storeFile = file(storeFile)
@@ -53,5 +55,6 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.core:core:1.15.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
