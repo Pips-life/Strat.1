@@ -67,9 +67,11 @@ class ConfluenceEngine:
         edge=abs(long_score-short_score); direction="LONG" if long_score>short_score else "SHORT" if short_score>long_score else "NONE"; score=max(long_score,short_score); missing=sorted(set(long_missing+short_missing))
         grade="EXCEPTIONAL" if score>=self.config.exceptional_score else "STRONG" if score>=self.config.strong_score else "VALID" if score>=self.config.minimum_score else "WATCH" if score>=50.0 else "WEAK"
         tradable=direction!="NONE" and score>=self.config.minimum_score and edge>=self.config.minimum_directional_edge
-        selected=long_components if direction=="LONG" else short_components
         combined_derived=dict(derived or {})
-        combined_derived.update({"long_interaction_bonus":long_interactions["interaction_bonus"],"short_interaction_bonus":short_interactions["interaction_bonus"],"inferred_conflicts":float(len(inferred)),"total_contradiction_penalty":total_penalty})
-        return ConfluenceResult(round(score,2),grade,tradable,direction,round(long_score,2),round(short_score,2),round(edge,2),{k:self._normalize(v) for k,v in selected.items() if v is not None},sorted(set(contradiction_list+inferred)),missing,combined_derived)
+        combined_derived.update(long_interactions)
+        combined_derived.update({f"long_{k}": v for k, v in long_interactions.items()})
+        combined_derived.update({f"short_{k}": v for k, v in short_interactions.items()})
+        combined_derived.update({"inferred_conflicts":float(len(inferred)),"total_contradiction_penalty":total_penalty})
+        return ConfluenceResult(round(score,2),grade,tradable,direction,round(long_score,2),round(short_score,2),round(edge,2),{k:self._normalize(v) for k,v in (long_components if direction=="LONG" else short_components).items() if v is not None},sorted(set(contradiction_list+inferred)),missing,combined_derived)
     def evaluate(self,components:Dict[str,float],contradictions=()):
         inverse={name:100.0-self._normalize(value) for name,value in components.items()}; return self.evaluate_directional(components,inverse,contradictions)
