@@ -16,10 +16,17 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 
-private const val LATEST_PATH = "/api/app/release/latest"
-private const val DOWNLOAD_PATH = "/api/app/release/download?asset="
+private const val LATEST_RELEASE_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
 
-data class AppRelease(val tag: String, val name: String, val versionName: String, val versionCode: Int, val assetId: Long, val assetName: String)
+data class AppRelease(
+    val tag: String,
+    val name: String,
+    val versionName: String,
+    val versionCode: Int,
+    val assetId: Long,
+    val assetName: String,
+    val downloadUrl: String
+)
 
 class ReleaseUpdateManager(private val context: Context) {
     private val client = OkHttpClient()
@@ -30,16 +37,36 @@ class ReleaseUpdateManager(private val context: Context) {
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
-                .url(BuildConfig.BACKEND_BASE_URL + LATEST_PATH)
+                .url(LATEST_RELEASE_URL)
                 .get()
-                .header("Accept", "application/json")
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
                 .build()
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("Release check failed (${response.code})")
+                if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
                 val json = JSONObject(response.body?.string().orEmpty())
-                val versionCode = json.optInt("versionCode", 0)
-                if (versionCode <= BuildConfig.VERSION_CODE) return@use null
-                AppRelease(json.optString("tag"), json.optString("name"), json.optString("versionName"), versionCode, json.getLong("assetId"), json.optString("assetName"))
+                if (json.optBoolean("draft") || json.optBoolean("prerelease")) error("Latest release is not stable")
+                val assets = json.optJSONArray("assets") ?: error("Latest release has no assets")
+                for (i in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(i)
+                    val name = asset.optString("name")
+                    val match = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE).matchEntire(name) ?: continue
+                    val versionName = match.groupValues[1]
+                    val versionCode = match.groupValues[2].toInt()
+                    if (versionCode <= BuildConfig.VERSION_CODE) return@use null
+                    val downloadUrl = asset.optString("browser_download_url")
+                    if (!downloadUrl.startsWith("https://github.com/")) error("Invalid GitHub APK URL")
+                    return@use AppRelease(
+                        tag = json.optString("tag_name"),
+                        name = json.optString("name", "Pips-life update"),
+                        versionName = versionName,
+                        versionCode = versionCode,
+                        assetId = asset.optLong("id", 0L),
+                        assetName = name,
+                        downloadUrl = downloadUrl
+                    )
+                }
+                error("Latest release has no numbered Pips-life APK")
             }
         }.also { result ->
             result.getOrNull()?.let { UpdateNotifications.notifyUpdateAvailable(context, it) }
@@ -49,9 +76,9 @@ class ReleaseUpdateManager(private val context: Context) {
     fun downloadAndInstall(release: AppRelease) {
         receiver?.let { runCatching { context.unregisterReceiver(it) } }
         val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
-        val request = DownloadManager.Request(Uri.parse(BuildConfig.BACKEND_BASE_URL + DOWNLOAD_PATH + release.assetId))
+        val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
             .setTitle("Pips-life ${release.versionName}")
-            .setDescription("Downloading update from GitHub release")
+            .setDescription("Downloading the official Pips-life GitHub release")
             .setMimeType("application/vnd.android.package-archive")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
