@@ -23,11 +23,11 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 
-    // Production release signing is CI-only. Never commit the keystore.
-    val storeFile = System.getenv("PIPS_LIFE_KEYSTORE_PATH")
-    val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD")
-    val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS")
-    val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD")
+    // Production release signing is CI-only. The keystore is never committed.
+    val storeFile = System.getenv("PIPSLIFE_KEYSTORE_FILE")
+    val storePassword = System.getenv("PIPSLIFE_KEYSTORE_PASSWORD")
+    val keyAlias = System.getenv("PIPSLIFE_KEY_ALIAS")
+    val keyPassword = System.getenv("PIPSLIFE_KEY_PASSWORD")
     if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() &&
         !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
         signingConfigs {
