@@ -22,6 +22,27 @@ android {
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+
+    val injectedStore = providers.gradleProperty("android.injected.signing.store.file")
+    val injectedStorePassword = providers.gradleProperty("android.injected.signing.store.password")
+    val injectedKeyAlias = providers.gradleProperty("android.injected.signing.key.alias")
+    val injectedKeyPassword = providers.gradleProperty("android.injected.signing.key.password")
+
+    signingConfigs {
+        create("release") {
+            if (injectedStore.isPresent && injectedStorePassword.isPresent && injectedKeyAlias.isPresent && injectedKeyPassword.isPresent) {
+                storeFile = file(injectedStore.get())
+                storePassword = injectedStorePassword.get()
+                keyAlias = injectedKeyAlias.get()
+                keyPassword = injectedKeyPassword.get()
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 }
 
 dependencies {
