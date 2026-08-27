@@ -130,6 +130,7 @@ private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: Backe
         item { SectionTitle("ACTIVE POSITIONS", "${state?.positions?.size ?: 0} OPEN") }
         if (state?.positions?.isNotEmpty() == true) items(state!!.positions) { PositionCard(it) } else item { EmptyCard("No live positions right now.") }
         item { EngineHealthCard(session != null, bot) }
+        item { AppUpdateCard() }
     }
 }
 
