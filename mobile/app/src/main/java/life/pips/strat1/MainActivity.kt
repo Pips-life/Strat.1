@@ -23,6 +23,7 @@ import life.pips.strat1.network.BackendDiscovery
 import life.pips.strat1.network.BackendEndpoint
 import life.pips.strat1.network.BackendPreferenceStore
 import life.pips.strat1.ui.theme.Strat1Theme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private val Context.preferencesDataStore by preferencesDataStore("strat1_preferences")
@@ -90,9 +91,7 @@ private fun BackendScreen(context: Context, modifier: Modifier = Modifier) {
                 manualEndpoint = found.baseUrl
                 preferences.save(found)
                 status = "Connected: ${found.baseUrl}"
-            } else {
-                status = "No backend found. You can enter an endpoint manually."
-            }
+            } else status = "No backend found. You can enter an endpoint manually."
         } else {
             val saved = BackendEndpoint(endpoint)
             val healthy = discovery.check(saved)
@@ -103,59 +102,30 @@ private fun BackendScreen(context: Context, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Backend", style = MaterialTheme.typography.headlineSmall)
         Text("The app discovers a compatible backend by calling /api/health. No MetaApi secret is stored in the APK.")
-
-        OutlinedTextField(
-            value = manualEndpoint,
-            onValueChange = { manualEndpoint = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Backend URL") },
-            singleLine = true,
-            placeholder = { Text("https://your-backend.example.com") }
-        )
-
+        OutlinedTextField(manualEndpoint, { manualEndpoint = it }, Modifier.fillMaxWidth(), label = { Text("Backend URL") }, singleLine = true, placeholder = { Text("https://your-backend.example.com") })
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(enabled = !busy, onClick = {
                 scope.launch {
-                    busy = true
-                    status = "Discovering backend…"
+                    busy = true; status = "Discovering backend…"
                     val found = discovery.discover(BackendDefaults.candidates)
                     busy = false
-                    if (found != null) {
-                        endpoint = found.baseUrl
-                        manualEndpoint = found.baseUrl
-                        preferences.save(found)
-                        status = "Connected: ${found.baseUrl}"
-                    } else status = "No compatible backend discovered."
+                    if (found != null) { endpoint = found.baseUrl; manualEndpoint = found.baseUrl; preferences.save(found); status = "Connected: ${found.baseUrl}" }
+                    else status = "No compatible backend discovered."
                 }
             }) { Text(if (busy) "Checking…" else "Discover") }
-
             Button(enabled = !busy && manualEndpoint.isNotBlank(), onClick = {
                 scope.launch {
-                    busy = true
-                    status = "Testing backend…"
+                    busy = true; status = "Testing backend…"
                     val candidate = BackendEndpoint(manualEndpoint.trim().removeSuffix("/"))
                     val healthy = discovery.check(candidate)
                     busy = false
-                    if (healthy) {
-                        endpoint = candidate.baseUrl
-                        preferences.save(candidate)
-                        status = "Connected: ${candidate.baseUrl}"
-                    } else status = "Backend health check failed."
+                    if (healthy) { endpoint = candidate.baseUrl; preferences.save(candidate); status = "Connected: ${candidate.baseUrl}" }
+                    else status = "Backend health check failed."
                 }
             }) { Text("Connect") }
         }
-
-        OutlinedButton(enabled = endpoint.isNotBlank(), onClick = {
-            preferences.clear()
-            endpoint = ""
-            manualEndpoint = ""
-            status = "Backend disconnected and saved endpoint cleared."
-        }) { Text("Disconnect") }
-
-        Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) {
-            Text("Connection status", style = MaterialTheme.typography.titleMedium)
-            Text(status)
-        } }
+        OutlinedButton(enabled = endpoint.isNotBlank(), onClick = { preferences.clear(); endpoint = ""; manualEndpoint = ""; status = "Backend disconnected and saved endpoint cleared." }) { Text("Disconnect") }
+        Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Connection status", style = MaterialTheme.typography.titleMedium); Text(status) } }
     }
 }
 
@@ -173,64 +143,23 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) {
         val prefs = context.preferencesDataStore.data.first()
-        broker = prefs[PreferenceKeys.BROKER].orEmpty()
-        account = prefs[PreferenceKeys.ACCOUNT].orEmpty()
-        selectedServer = prefs[PreferenceKeys.SERVER].orEmpty()
+        broker = prefs[PreferenceKeys.BROKER].orEmpty(); account = prefs[PreferenceKeys.ACCOUNT].orEmpty(); selectedServer = prefs[PreferenceKeys.SERVER].orEmpty()
         status = if (broker.isBlank()) "Enter your broker to find MT5 servers." else "Saved MT5 preference loaded."
     }
 
     LazyColumn(modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            Text("MT5 Account", style = MaterialTheme.typography.headlineSmall)
-            Text("Search the live MetaApi server directory, select the exact server, then connect.")
-        }
+        item { Text("MT5 Account", style = MaterialTheme.typography.headlineSmall); Text("Search the live MetaApi server directory, select the exact server, then connect.") }
         item { OutlinedTextField(broker, { broker = it }, Modifier.fillMaxWidth(), label = { Text("Broker name") }, singleLine = true) }
         item {
-            Button(enabled = broker.trim().length >= 2 && !busy, onClick = {
-                busy = true
-                status = "Searching MetaApi for broker servers…"
-                api.searchServers(broker) { result ->
-                    scope.launch {
-                        busy = false
-                        result.onSuccess { matches -> serverList = matches; status = if (matches.isEmpty()) "No known servers found." else "Select the server matching your MT5 account." }
-                            .onFailure { status = "Server discovery failed: ${it.message ?: "network error"}" }
-                    }
-                }
-            }) { Text(if (busy) "Searching…" else "Find servers") }
+            Button(enabled = broker.trim().length >= 2 && !busy, onClick = { busy = true; status = "Searching MetaApi for broker servers…"; api.searchServers(broker) { result -> scope.launch { busy = false; result.onSuccess { matches -> serverList = matches; status = if (matches.isEmpty()) "No known servers found." else "Select the server matching your MT5 account." }.onFailure { status = "Server discovery failed: ${it.message ?: "network error"}" } } } }) { Text(if (busy) "Searching…" else "Find servers") }
         }
-        items(serverList, key = { it.id }) { server ->
-            Card(onClick = { selectedServer = server.id }, Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp)) {
-                    Text(server.brokerName, style = MaterialTheme.typography.labelMedium)
-                    Text(server.serverName, style = MaterialTheme.typography.titleMedium)
-                    Text(server.environment.uppercase(), style = MaterialTheme.typography.labelSmall)
-                    if (server.id == selectedServer) Text("Selected", style = MaterialTheme.typography.labelMedium)
-                }
-            }
-        }
+        items(serverList, key = { it.id }) { server -> Card(onClick = { selectedServer = server.id }, Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Text(server.brokerName, style = MaterialTheme.typography.labelMedium); Text(server.serverName, style = MaterialTheme.typography.titleMedium); Text(server.environment.uppercase(), style = MaterialTheme.typography.labelSmall); if (server.id == selectedServer) Text("Selected", style = MaterialTheme.typography.labelMedium) } } }
         item { OutlinedTextField(serverList.firstOrNull { it.id == selectedServer }?.serverName.orEmpty(), {}, Modifier.fillMaxWidth(), label = { Text("Selected server") }, readOnly = true, singleLine = true) }
         item { OutlinedTextField(account, { account = it }, Modifier.fillMaxWidth(), label = { Text("MT5 account number") }, singleLine = true) }
         item { OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) }
         item {
             val selected = serverList.firstOrNull { it.id == selectedServer }
-            Button(enabled = account.matches(Regex("\\d+")) && password.isNotEmpty() && selected != null && !busy, onClick = {
-                busy = true
-                status = "Validating MT5 account securely…"
-                api.connect(selected!!.brokerName, account, password, selected.serverName) { result ->
-                    scope.launch {
-                        busy = false
-                        result.onSuccess { connection ->
-                            password = ""
-                            status = "MT5 account: ${connection.state}"
-                            if (connection.state != "PROCESSING") context.preferencesDataStore.edit { prefs ->
-                                prefs[PreferenceKeys.BROKER] = selected.brokerName
-                                prefs[PreferenceKeys.SERVER] = selected.id
-                                prefs[PreferenceKeys.ACCOUNT] = account.trim()
-                            }
-                        }.onFailure { status = "MT5 connection failed: ${it.message ?: "unknown error"}" }
-                    }
-                }
-            }) { Text(if (busy) "Connecting…" else "Connect MT5") }
+            Button(enabled = account.matches(Regex("\\d+")) && password.isNotEmpty() && selected != null && !busy, onClick = { busy = true; status = "Validating MT5 account securely…"; api.connect(selected!!.brokerName, account, password, selected.serverName) { result -> scope.launch { busy = false; result.onSuccess { connection -> password = ""; status = "MT5 account: ${connection.state}"; if (connection.state != "PROCESSING") context.preferencesDataStore.edit { prefs -> prefs[PreferenceKeys.BROKER] = selected.brokerName; prefs[PreferenceKeys.SERVER] = selected.id; prefs[PreferenceKeys.ACCOUNT] = account.trim() } }.onFailure { status = "MT5 connection failed: ${it.message ?: "unknown error"}" } } } }) { Text(if (busy) "Connecting…" else "Connect MT5") }
         }
         item { Text(status) }
         item { Text("The password is not saved in app preferences.", style = MaterialTheme.typography.bodySmall) }
