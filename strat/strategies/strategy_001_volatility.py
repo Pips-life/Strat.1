@@ -13,23 +13,25 @@ class VolatilityConfluenceEngine(ConfluenceEngine):
         vol = components.get("volatility")
         velocity = components.get("velocity")
         gamma = components.get("gamma")
+        volatility_bonus = 0.0
         if vol is not None and velocity is not None:
             v, m = self._normalize(vol), self._normalize(velocity)
             if v >= 70.0 and m >= 70.0:
-                bonus += min(v, m) / 100.0 * 2.0
+                volatility_bonus += min(v, m) / 100.0 * 2.0
             elif v >= 75.0 and m <= 30.0:
                 conflicts.append("volatility_velocity_conflict")
         if vol is not None and gamma is not None:
             v, g = self._normalize(vol), self._normalize(gamma)
             if v >= 70.0 and g >= 70.0:
-                bonus += min(v, g) / 100.0 * 2.0
-        bonus = min(self.config.interaction_bonus_cap, bonus)
-        derived["volatility_interaction_bonus"] = round(max(0.0, bonus), 3)
-        return bonus, conflicts, derived
+                volatility_bonus += min(v, g) / 100.0 * 2.0
+        total_bonus = min(self.config.interaction_bonus_cap, bonus + volatility_bonus)
+        derived["volatility_interaction_bonus"] = round(max(0.0, volatility_bonus), 3)
+        derived["interaction_bonus_with_volatility"] = round(max(0.0, total_bonus), 3)
+        return total_bonus, conflicts, derived
 
 
 class Strategy001Volatility(BaseStrategy001):
-    version = "4.4.0"
+    version = "4.4.1"
 
     def __init__(self, config=None) -> None:
         super().__init__(config)
@@ -86,14 +88,10 @@ class Strategy001Volatility(BaseStrategy001):
     def _component_scores(self, market, intelligence, zones):
         long_scores, short_scores = super()._component_scores(market, intelligence, zones)
         volatility_score = float(intelligence.get("volatility_score", 50.0))
-        supplied = market.get("evidence", {}) or {}
-        if supplied.get("long") or supplied.get("short"):
-            for scores in (long_scores, short_scores):
-                if "volatility" not in scores:
-                    scores["volatility"] = scores.get("iv", volatility_score)
-        else:
-            long_scores.pop("iv", None)
-            short_scores.pop("iv", None)
-            long_scores["volatility"] = volatility_score
-            short_scores["volatility"] = volatility_score
+        # The volatility/Greeks layer is exactly one confluence group. Supplied
+        # legacy `iv` evidence is not allowed to bypass the new neutral fallback.
+        long_scores.pop("iv", None)
+        short_scores.pop("iv", None)
+        long_scores["volatility"] = volatility_score
+        short_scores["volatility"] = volatility_score
         return long_scores, short_scores
