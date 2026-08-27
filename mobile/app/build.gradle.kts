@@ -14,6 +14,7 @@ android {
         versionCode = 3
         versionName = "0.2.1"
         // Pips-life 0.2.1: authenticated live MT5 backend integration.
+        // Build intentionally targets the live-control dashboard baseline.
         buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
     buildFeatures { compose = true; buildConfig = true }
