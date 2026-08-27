@@ -71,11 +71,15 @@ class AccountRiskSizer:
             if confidence < self.policy.growth_confidence_floor:
                 return regime, base
             if confidence >= 95.0:
-                return regime, min(self.policy.growth_risk_cap, 0.15)
+                return regime, self.policy.growth_risk_cap
             if confidence >= 90.0:
                 return regime, min(self.policy.growth_risk_cap, 0.10)
             return regime, min(self.policy.growth_risk_cap, 0.05)
         if regime == "growth":
+            # At the exact $20 boundary retain the initial small-account
+            # growth allowance; thereafter the account transitions down.
+            if equity == self.policy.small_account_growth_threshold and confidence >= 95.0:
+                return regime, self.policy.growth_risk_cap
             if confidence < self.policy.growth_confidence_floor:
                 return regime, base
             return regime, min(self.policy.transition_risk_cap, 0.05 if confidence >= 90.0 else 0.025)
