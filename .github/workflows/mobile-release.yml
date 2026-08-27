@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Release version, e.g. 0.2.2'
+        description: 'Release version matching mobile/release.properties, e.g. 0.2.2'
         required: true
         type: string
       version_code:
@@ -19,12 +19,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: pips-life-mobile-release
+  group: pips-life-mobile-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,19 +37,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android platform/build tools
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.10.2'
 
-      - name: Resolve release version
+      - name: Resolve and validate release number
         id: version
         shell: bash
         run: |
@@ -57,8 +59,7 @@ jobs:
             VERSION_CODE="${{ inputs.version_code }}"
           else
             VERSION_NAME="${GITHUB_REF_NAME#v}"
-            # Deterministic monotonic code for tag-based releases.
-            VERSION_CODE="$(echo "$VERSION_NAME" | awk -F. '{print (($1*1000000)+($2*1000)+$3)}')"
+            VERSION_CODE="$(sed -n 's/^versionCode=//p' mobile/release.properties)"
           fi
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version name'; exit 1; }
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo 'Invalid version code'; exit 1; }
@@ -66,81 +67,100 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Check release numbering
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! gh release view --json assets >/tmp/latest-release.json 2>/dev/null; then
-            echo "No previous GitHub release; numbering check starts at this release."
-            exit 0
-          fi
-          python3 - <<'PY'
-          import json, re, os
-          data=json.load(open('/tmp/latest-release.json'))
-          codes=[]
-          for asset in data.get('assets',[]):
-              m=re.search(r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$', asset.get('name',''))
-              if m: codes.append(int(m.group(1)))
-          if codes and int(os.environ['VERSION_CODE']) <= max(codes):
-              raise SystemExit(f"versionCode {os.environ['VERSION_CODE']} must be greater than previous release code {max(codes)}")
-          PY
-
-      - name: Stamp Android version
+      - name: Stamp release.properties for manual release
+        if: github.event_name == 'workflow_dispatch'
         working-directory: mobile
         env:
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
+
+      - name: Validate tagged release against release.properties
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import os, re
-          p = Path('app/build.gradle.kts')
-          s = p.read_text()
-          s = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {os.environ["VERSION_CODE"]}', s, count=1)
-          s = re.sub(r'versionName\s*=\s*"[^"]+"', f'versionName = "{os.environ["VERSION_NAME"]}"', s, count=1)
-          p.write_text(s)
-          PY
+          FILE_VERSION=$(sed -n 's/^versionName=//p' mobile/release.properties)
+          FILE_CODE=$(sed -n 's/^versionCode=//p' mobile/release.properties)
+          test "$FILE_VERSION" = "${{ steps.version.outputs.version_name }}"
+          test "$FILE_CODE" = "${{ steps.version.outputs.version_code }}"
+
+      - name: Require stable release signing secrets
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo 'Missing PIPS_LIFE_KEYSTORE_BASE64'; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo 'Missing PIPS_LIFE_KEYSTORE_PASSWORD'; exit 1; }
+          test -n "$KEY_ALIAS" || { echo 'Missing PIPS_LIFE_KEY_ALIAS'; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo 'Missing PIPS_LIFE_KEY_PASSWORD'; exit 1; }
+          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.keystore"
+          test -s "$RUNNER_TEMP/pips-life-release.keystore"
+          echo "PIPS_LIFE_KEYSTORE_PATH=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
 
       - name: Check Android project
         working-directory: mobile
         run: |
           test -f settings.gradle.kts
           test -f build.gradle.kts
+          test -f release.properties
           test -f app/build.gradle.kts
           gradle --version
 
-      - name: Build release APK
+      - name: Build signed release APK
         working-directory: mobile
-        run: gradle --no-daemon :app:assembleRelease --stacktrace
+        env:
+          PIPS_LIFE_KEYSTORE_PATH: ${{ env.PIPS_LIFE_KEYSTORE_PATH }}
+          PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+        run: gradle --no-daemon clean assembleRelease --stacktrace
 
       - name: Locate and verify APK
         shell: bash
         run: |
-          APK="$(find mobile/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -1)"
-          test -n "$APK" && test -s "$APK"
-          NAME="pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk"
-          cp "$APK" "$NAME"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$NAME" | tee /tmp/pips-badging.txt
+          APK="mobile/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
           grep -q "versionCode='${{ steps.version.outputs.version_code }}'" /tmp/pips-badging.txt
           grep -q "versionName='${{ steps.version.outputs.version_name }}'" /tmp/pips-badging.txt
+          grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          NAME="pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk"
+          cp "$APK" "$NAME"
           sha256sum "$NAME" > "$NAME.sha256"
+          SHA=$(cut -d' ' -f1 "$NAME.sha256")
           cat > release-manifest.json <<EOF
-          {
-            "app": "Pips-life",
-            "versionName": "${{ steps.version.outputs.version_name }}",
-            "versionCode": ${{ steps.version.outputs.version_code }},
-            "tag": "${{ steps.version.outputs.tag }}",
-            "apk": "$NAME",
-            "sha256": "$(cut -d' ' -f1 "$NAME.sha256")"
-          }
+          {"app":"Pips-life","versionName":"${{ steps.version.outputs.version_name }}","versionCode":${{ steps.version.outputs.version_code }},"tag":"${{ steps.version.outputs.tag }}","apk":"$NAME","sha256":"$SHA"}
           EOF
-          cat release-manifest.json
+
+      - name: Verify release numbering against existing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release list --limit 1 --json tagName,isDraft,isPrerelease > /tmp/latest-release.json; then
+            python3 - <<'PY'
+          import json, re, os, subprocess
+          rows=json.load(open('/tmp/latest-release.json'))
+          if not rows: raise SystemExit(0)
+          tag=rows[0]['tagName']
+          try:
+              latest=int(subprocess.check_output(['gh','release','view',tag,'--json','assets','-q','.assets[]?.name'],text=True).split('-')[-1].split('.')[0])
+          except Exception:
+              latest=0
+          if latest and int(os.environ['VERSION_CODE']) <= latest:
+              raise SystemExit(f"versionCode {os.environ['VERSION_CODE']} must exceed previous release code {latest}")
+          PY
+          fi
 
       - name: Publish numbered GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -152,7 +172,7 @@ jobs:
             --generate-notes
 
       - name: Verify published release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "${{ steps.version.outputs.tag }}" --json tagName,name,assets
+        run: gh release view "${{ steps.version.outputs.tag }}" --json tagName,name,assets
