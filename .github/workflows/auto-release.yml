@@ -1,0 +1,89 @@
+name: Pips-life Automatic Release
+
+on:
+  workflow_run:
+    workflows: ["Pips-life Android"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pips-life-auto-release
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Determine next release number
+        id: next
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest_tag=$(git tag --list 'v*.*.*' --sort=-version:refname | head -n1 || true)
+          if [[ -n "$latest_tag" ]]; then
+            latest_version="${latest_tag#v}"
+          else
+            latest_version="0.2.2"
+          fi
+          IFS=. read -r major minor patch <<< "$latest_version"
+          next_version="$major.$minor.$((patch + 1))"
+
+          latest_code=$(python3 - <<'PY'
+          import json, subprocess, re
+          try:
+              rows=json.loads(subprocess.check_output(['gh','release','list','--limit','100','--json','assets'], text=True))
+          except Exception:
+              rows=[]
+          codes=[]
+          for row in rows:
+              for asset in row.get('assets', []):
+                  m=re.search(r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$', asset.get('name',''))
+                  if m: codes.append(int(m.group(1)))
+          print(max(codes) if codes else 4)
+          PY
+          )
+          next_code=$((latest_code + 1))
+          echo "version=$next_version" >> "$GITHUB_OUTPUT"
+          echo "code=$next_code" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Check whether this commit already has a release
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git tag --points-at "${{ github.event.workflow_run.head_sha }}" | grep -q '^v'; then
+            echo "already_released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_released=false" >> "$GITHUB_OUTPUT
+          fi
+
+      - name: Update release properties
+        if: steps.guard.outputs.already_released != 'true'
+        run: |
+          printf 'versionName=%s\nversionCode=%s\n' "${{ steps.next.outputs.version }}" "${{ steps.next.outputs.code }}" > mobile/release.properties
+
+      - name: Commit release version
+        if: steps.guard.outputs.already_released != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mobile/release.properties
+          git commit -m "chore(release): prepare Pips-life ${{ steps.next.outputs.version }} (${{ steps.next.outputs.code }})"
+          git push origin main
+
+      - name: Create numbered release tag
+        if: steps.guard.outputs.already_released != 'true'
+        run: |
+          git tag "v${{ steps.next.outputs.version }}"
+          git push origin "v${{ steps.next.outputs.version }}"
