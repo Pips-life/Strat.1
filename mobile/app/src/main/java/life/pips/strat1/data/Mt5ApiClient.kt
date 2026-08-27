@@ -4,17 +4,26 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+
+data class Mt5ConnectionResult(
+    val accountId: String?,
+    val state: String,
+    val server: String
+)
 
 class Mt5ApiClient(
     private val baseUrl: String = "https://strat-1.vercel.app",
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build()
 ) {
     fun searchServers(query: String, callback: (Result<List<Mt5Server>>) -> Unit) {
@@ -24,17 +33,11 @@ class Mt5ApiClient(
             return
         }
 
-        val url = baseUrl.trimEnd('/') + "/api/mt5/servers?q=" + java.net.URLEncoder.encode(q, "UTF-8")
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .header("Accept", "application/json")
-            .build()
+        val url = baseUrl.trimEnd('/') + "/api/mt5/servers?q=" + URLEncoder.encode(q, "UTF-8")
+        val request = Request.Builder().url(url).get().header("Accept", "application/json").build()
 
         http.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                callback(Result.failure(e))
-            }
+            override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
 
             override fun onResponse(call: Call, response: Response) {
                 response.use {
@@ -46,26 +49,59 @@ class Mt5ApiClient(
                     try {
                         val root = JSONObject(body)
                         val brokers = root.optJSONArray("brokers") ?: JSONArray()
-                        val result = buildList {
+                        callback(Result.success(buildList {
                             for (i in 0 until brokers.length()) {
                                 val broker = brokers.getJSONObject(i)
                                 val brokerName = broker.optString("broker")
                                 val servers = broker.optJSONArray("servers") ?: JSONArray()
                                 for (j in 0 until servers.length()) {
                                     val server = servers.optString(j)
-                                    if (server.isNotBlank()) {
-                                        add(Mt5Server(
-                                            id = "$brokerName:$server",
-                                            broker = brokerName,
-                                            name = server
-                                        ))
-                                    }
+                                    if (server.isNotBlank()) add(Mt5Server("$brokerName:$server", brokerName, server))
                                 }
                             }
-                        }
-                        callback(Result.success(result))
+                        }))
                     } catch (e: Exception) {
                         callback(Result.failure(IOException("Invalid server discovery response", e)))
+                    }
+                }
+            }
+        })
+    }
+
+    fun connect(login: String, password: String, server: String, callback: (Result<Mt5ConnectionResult>) -> Unit) {
+        val payload = JSONObject().apply {
+            put("login", login.trim())
+            put("password", password)
+            put("server", server)
+            put("name", "Strat.1 MT5 account")
+        }
+        val body = payload.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url(baseUrl.trimEnd('/') + "/api/mt5/connect")
+            .post(body)
+            .header("Accept", "application/json")
+            .build()
+
+        http.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    val raw = it.body?.string().orEmpty()
+                    try {
+                        val json = JSONObject(raw)
+                        if (!it.isSuccessful) {
+                            val message = json.optString("error").ifBlank { "MT5 connection failed" }
+                            callback(Result.failure(IOException(message)))
+                            return
+                        }
+                        callback(Result.success(Mt5ConnectionResult(
+                            accountId = json.optString("accountId").ifBlank { null },
+                            state = json.optString("state", "UNKNOWN"),
+                            server = json.optString("server", server)
+                        )))
+                    } catch (e: Exception) {
+                        callback(Result.failure(IOException("Invalid MT5 connection response", e)))
                     }
                 }
             }
