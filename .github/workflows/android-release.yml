@@ -1,0 +1,98 @@
+name: Pips-life Android Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK 35
+        run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Install Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Read and validate release numbering
+        shell: bash
+        working-directory: mobile
+        run: |
+          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
+          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
+          test -n "$VERSION_NAME"
+          test -n "$VERSION_CODE"
+          if [[ "$GITHUB_REF_NAME" == v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            test "$VERSION_NAME" = "$TAG_VERSION" || { echo "Tag $TAG_VERSION does not match versionName $VERSION_NAME"; exit 1; }
+          fi
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        working-directory: mobile
+        run: gradle --no-daemon --stacktrace clean assembleRelease
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK="mobile/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          echo "APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "APK_SIZE=$(stat -c%s "$APK")" >> "$GITHUB_ENV"
+
+      - name: Rename release APK
+        shell: bash
+        run: cp "mobile/app/build/outputs/apk/release/app-release.apk" "mobile/app/build/outputs/apk/release/Pips-life-${VERSION_NAME}.apk"
+
+      - name: Create numbered GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}.apk
+          body: |
+            # Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
+
+            Stable Android release for Pips-life.
+
+            - App version: `${{ env.VERSION_NAME }}`
+            - Android version code: `${{ env.VERSION_CODE }}`
+            - APK SHA-256: `${{ env.APK_SHA256 }}`
+            - The Pips-life app checks this GitHub Releases feed for newer stable versions.
+
+            ## Update path
+            Install over the existing Pips-life app. Android will preserve the app's local data when the APK is signed with the same release key.
+
+      - name: Upload release artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pips-life-${{ env.VERSION_NAME }}-${{ env.VERSION_CODE }}-release
+          path: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}.apk
+          if-no-files-found: error
