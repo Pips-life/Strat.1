@@ -20,10 +20,9 @@ class RiskLimits:
     """
 
     risk_per_trade: float = 0.01
-    # Never use 100% of the nominal risk budget for the minimum executable
-    # quantity. This small reserve makes low-equity accounts safer while still
-    # allowing the smallest broker-supported size whenever it fits comfortably.
-    risk_budget_utilization: float = 0.95
+    # AccountRiskSizer owns the broker-aware small-account safety reserve.
+    # Keep the strategy-independent engine's sizing contract deterministic.
+    risk_budget_utilization: float = 1.0
     max_positions: int = 1
     max_daily_loss: float = 0.03
     max_trades_per_day: int = 5
@@ -83,7 +82,6 @@ class RiskEngine:
         return reward / risk if risk > 0 else 0.0
 
     def in_session(self, now: datetime) -> bool:
-        """Return whether new entries are allowed during the configured session."""
         current = now.time()
         start, end = self.limits.session_start, self.limits.session_end
         if start <= end:
@@ -91,7 +89,6 @@ class RiskEngine:
         return current >= start or current < end
 
     def near_session_close(self, now: datetime) -> bool:
-        """Return true when a new position should no longer be opened."""
         current = now.time()
         end = self.limits.session_end
         minutes = current.hour * 60 + current.minute + current.second / 60
@@ -110,10 +107,8 @@ class RiskEngine:
     ) -> float:
         """Calculate quantity from account equity and stop distance.
 
-        The configured risk-budget utilization leaves a small reserve so a
-        broker minimum cannot consume the entire per-trade risk allowance.
-        Quantity is rounded down to the configured broker step, so rounding
-        can never increase requested risk.
+        This generic engine deliberately performs no account-regime adjustment.
+        Broker-aware small-account policy belongs in AccountRiskSizer.
         """
         if equity <= 0 or point_value <= 0:
             return 0.0
@@ -132,7 +127,6 @@ class RiskEngine:
         return round(quantity, 10)
 
     def evaluate(self, request: RiskRequest) -> RiskDecision:
-        """Perform all pre-trade checks and return a fully sized decision."""
         limits = self.limits
         side = request.side.upper()
 
@@ -158,7 +152,6 @@ class RiskEngine:
             if self.near_session_close(request.now):
                 return RiskDecision(False, reason="too close to session close for new entry")
 
-        # Validate directional stop/target placement.
         if side == "BUY":
             if not (request.stop_loss < request.entry < request.take_profit):
                 return RiskDecision(False, reason="invalid BUY stop/target geometry")
@@ -187,7 +180,6 @@ class RiskEngine:
         return RiskDecision(True, quantity, risk_amount, rr, "approved")
 
     def approve(self, *, confidence: float, current_positions: int, daily_loss: float) -> bool:
-        """Backward-compatible lightweight gate used by older callers."""
         return (
             0 <= confidence <= 100
             and confidence >= self.limits.min_confidence
@@ -196,7 +188,6 @@ class RiskEngine:
         )
 
     def should_flatten(self, now: datetime) -> bool:
-        """Enforce the default same-day/no-overnight policy."""
         if self.limits.allow_overnight:
             return False
         return now.time() >= self.limits.session_end
