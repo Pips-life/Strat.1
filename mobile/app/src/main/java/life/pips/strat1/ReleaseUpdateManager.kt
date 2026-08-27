@@ -11,12 +11,13 @@ import android.os.Environment
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val RELEASES_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases?per_page=20"
+private const val UPDATE_LATEST_PATH = "/api/app/release/latest"
+private const val UPDATE_DOWNLOAD_PATH = "/api/app/release/download"
 
 data class AppRelease(
     val tag: String,
@@ -30,53 +31,46 @@ data class AppRelease(
 
 class ReleaseUpdateManager(private val context: Context) {
     private var receiver: BroadcastReceiver? = null
+    private val baseUrl = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 
     init { UpdateNotifications.ensureChannel(context) }
 
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
-            val connection = (URL(RELEASES_URL).openConnection() as HttpURLConnection).apply {
+            val connection = (URL(baseUrl + UPDATE_LATEST_PATH).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 10_000
                 readTimeout = 10_000
-                setRequestProperty("Accept", "application/vnd.github+json")
-                setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                setRequestProperty("Accept", "application/json")
                 setRequestProperty("User-Agent", "Pips-life-Android/${BuildConfig.VERSION_NAME}")
             }
             try {
-                if (connection.responseCode !in 200..299) {
-                    val detail = if (connection.responseCode == 403 || connection.responseCode == 429) "GitHub rate limit" else "GitHub HTTP ${connection.responseCode}"
-                    error(detail)
+                val code = connection.responseCode
+                val body = (if (code in 200..299) connection.inputStream else connection.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                if (code !in 200..299) {
+                    val detail = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
+                    error(if (detail.isBlank()) "Update service unavailable (HTTP $code)" else detail)
                 }
-                val releases = JSONArray(connection.inputStream.bufferedReader().use { it.readText() })
-                var best: AppRelease? = null
-                for (i in 0 until releases.length()) {
-                    val json = releases.getJSONObject(i)
-                    if (json.optBoolean("draft") || json.optBoolean("prerelease")) continue
-                    val assets = json.optJSONArray("assets") ?: continue
-                    for (j in 0 until assets.length()) {
-                        val asset = assets.getJSONObject(j)
-                        val name = asset.optString("name")
-                        val match = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE).matchEntire(name) ?: continue
-                        val versionName = match.groupValues[1]
-                        val versionCode = match.groupValues[2].toIntOrNull() ?: continue
-                        if (versionCode <= BuildConfig.VERSION_CODE) continue
-                        val downloadUrl = asset.optString("browser_download_url")
-                        if (!downloadUrl.startsWith("https://github.com/")) continue
-                        val candidate = AppRelease(
-                            tag = json.optString("tag_name"),
-                            name = json.optString("name", "Pips-life update"),
-                            versionName = versionName,
-                            versionCode = versionCode,
-                            assetId = asset.optLong("id", 0L),
-                            assetName = name,
-                            downloadUrl = downloadUrl
-                        )
-                        if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
-                    }
+                val json = JSONObject(body)
+                val versionName = json.optString("versionName").trim()
+                val versionCode = json.optInt("versionCode", 0)
+                val assetId = json.optLong("assetId", 0L)
+                val assetName = json.optString("assetName").trim()
+                if (versionName.isBlank() || versionCode <= 0 || assetId <= 0L || assetName.isBlank()) {
+                    error("Update service returned incomplete release information")
                 }
-                best?.let { UpdateNotifications.notifyUpdateAvailable(context, it) }
-                best
+                if (versionCode <= BuildConfig.VERSION_CODE) return@runCatching null
+                val release = AppRelease(
+                    tag = json.optString("tag"),
+                    name = json.optString("name", "Pips-life update"),
+                    versionName = versionName,
+                    versionCode = versionCode,
+                    assetId = assetId,
+                    assetName = assetName,
+                    downloadUrl = baseUrl + UPDATE_DOWNLOAD_PATH + "?asset=" + assetId
+                )
+                UpdateNotifications.notifyUpdateAvailable(context, release)
+                release
             } finally {
                 connection.disconnect()
             }
@@ -88,7 +82,7 @@ class ReleaseUpdateManager(private val context: Context) {
         val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
         val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
             .setTitle("Pips-life ${release.versionName}")
-            .setDescription("Downloading the official Pips-life GitHub release")
+            .setDescription("Downloading the official Pips-life release")
             .setMimeType("application/vnd.android.package-archive")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
