@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { requireBackendKey } from '@/lib/auth';
 
 const querySchema = z.object({ query: z.string().trim().min(1).max(100) });
 const METAAPI_PROVISIONING_URL = 'https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai';
 
 export async function GET(request: Request) {
   try {
-    requireBackendKey(request);
     const token = process.env.METAAPI_TOKEN;
     if (!token) return NextResponse.json({ error: 'MetaApi token is not configured' }, { status: 503 });
 
@@ -19,7 +17,7 @@ export async function GET(request: Request) {
     upstream.searchParams.set('query', parsed.data.query);
     const response = await fetch(upstream, {
       headers: { Accept: 'application/json', 'auth-token': token },
-      cache: 'no-store'
+      next: { revalidate: 60 }
     });
 
     const body = await response.text();
@@ -38,8 +36,7 @@ export async function GET(request: Request) {
     );
 
     return NextResponse.json({ servers });
-  } catch (error) {
-    if (error instanceof Response) return error;
+  } catch {
     return NextResponse.json({ error: 'Unable to discover MT5 servers' }, { status: 502 });
   }
 }
