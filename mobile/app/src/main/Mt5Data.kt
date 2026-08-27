@@ -18,7 +18,8 @@ class Mt5PreferenceStore(context: Context) {
     fun clear() = prefs.edit().clear().apply()
 }
 
-data class Mt5Server(val id: String, val broker: String, val name: String)
+data class Mt5Server(val id: String, val broker: String, val name: String, val environment: String)
+data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String)
 
 /** Backend-backed broker/server discovery and MT5 connection. */
 class Mt5ServerRepository(private val api: Mt5ApiClient = Mt5ApiClient()) {
