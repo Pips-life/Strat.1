@@ -13,10 +13,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 
-private const val LATEST_RELEASE_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
+private const val RELEASES_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases?per_page=20"
 
 data class AppRelease(
     val tag: String,
@@ -37,39 +37,56 @@ class ReleaseUpdateManager(private val context: Context) {
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
-                .url(LATEST_RELEASE_URL)
+                .url(RELEASES_URL)
                 .get()
                 .header("Accept", "application/vnd.github+json")
-                .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .header("User-Agent", "Pips-life-Android/${BuildConfig.VERSION_NAME}")
                 .build()
+
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
-                val json = JSONObject(response.body?.string().orEmpty())
-                if (json.optBoolean("draft") || json.optBoolean("prerelease")) error("Latest release is not stable")
-                val assets = json.optJSONArray("assets") ?: error("Latest release has no assets")
-                for (i in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(i)
-                    val name = asset.optString("name")
-                    val match = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE).matchEntire(name) ?: continue
-                    val versionName = match.groupValues[1]
-                    val versionCode = match.groupValues[2].toInt()
-                    if (versionCode <= BuildConfig.VERSION_CODE) return@use null
-                    val downloadUrl = asset.optString("browser_download_url")
-                    if (!downloadUrl.startsWith("https://github.com/")) error("Invalid GitHub APK URL")
-                    return@use AppRelease(
-                        tag = json.optString("tag_name"),
-                        name = json.optString("name", "Pips-life update"),
-                        versionName = versionName,
-                        versionCode = versionCode,
-                        assetId = asset.optLong("id", 0L),
-                        assetName = name,
-                        downloadUrl = downloadUrl
-                    )
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val detail = if (response.code == 403 || response.code == 429) "GitHub rate limit" else "HTTP ${response.code}"
+                    error("$detail")
                 }
-                error("Latest release has no numbered Pips-life APK")
+
+                val releases = JSONArray(body)
+                var best: AppRelease? = null
+
+                for (i in 0 until releases.length()) {
+                    val json = releases.getJSONObject(i)
+                    if (json.optBoolean("draft") || json.optBoolean("prerelease")) continue
+
+                    val assets = json.optJSONArray("assets") ?: continue
+                    for (j in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(j)
+                        val name = asset.optString("name")
+                        val match = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE).matchEntire(name)
+                            ?: continue
+                        val versionName = match.groupValues[1]
+                        val versionCode = match.groupValues[2].toIntOrNull() ?: continue
+                        if (versionCode <= BuildConfig.VERSION_CODE) continue
+
+                        val downloadUrl = asset.optString("browser_download_url")
+                        if (!downloadUrl.startsWith("https://github.com/")) continue
+
+                        val candidate = AppRelease(
+                            tag = json.optString("tag_name"),
+                            name = json.optString("name", "Pips-life update"),
+                            versionName = versionName,
+                            versionCode = versionCode,
+                            assetId = asset.optLong("id", 0L),
+                            assetName = name,
+                            downloadUrl = downloadUrl
+                        )
+                        if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
+                    }
+                }
+
+                best?.let { UpdateNotifications.notifyUpdateAvailable(context, it) }
+                best
             }
-        }.also { result ->
-            result.getOrNull()?.let { UpdateNotifications.notifyUpdateAvailable(context, it) }
         }
     }
 
