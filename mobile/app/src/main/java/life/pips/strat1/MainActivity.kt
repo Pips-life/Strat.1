@@ -129,7 +129,7 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
             Button(enabled = account.matches(Regex("\\d+")) && password.isNotEmpty() && selected != null && !busy, onClick = {
                 busy = true
                 status = "Validating MT5 account securely…"
-                api.connect(account, password, selected!!.serverName) { result ->
+                api.connect(selected!!.brokerName, account, password, selected.serverName) { result ->
                     scope.launch {
                         busy = false
                         result.onSuccess { connection ->
