@@ -17,6 +17,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import life.pips.strat1.data.Mt5ApiClient
+import life.pips.strat1.data.Mt5Server
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -71,7 +72,7 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
     var broker by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var serverList by remember { mutableStateOf(emptyList<life.pips.strat1.data.Mt5Server>()) }
+    var serverList by remember { mutableStateOf(emptyList<Mt5Server>()) }
     var selectedServer by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Loading saved MT5 preference…") }
     var busy by remember { mutableStateOf(false) }
@@ -107,30 +108,35 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
                 }
             }) { Text(if (busy) "Searching…" else "Find servers") }
         }
-        items(serverList) { server ->
-            Card(onClick = { selectedServer = server.name }, Modifier.fillMaxWidth()) {
+        items(serverList, key = { it.id }) { server ->
+            Card(onClick = { selectedServer = server.id }, Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
-                    Text(server.broker, style = MaterialTheme.typography.labelMedium)
-                    Text(server.name, style = MaterialTheme.typography.titleMedium)
-                    if (server.name == selectedServer) Text("Selected", style = MaterialTheme.typography.labelMedium)
+                    Text(server.brokerName, style = MaterialTheme.typography.labelMedium)
+                    Text(server.serverName, style = MaterialTheme.typography.titleMedium)
+                    Text(server.environment.uppercase(), style = MaterialTheme.typography.labelSmall)
+                    if (server.id == selectedServer) Text("Selected", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
-        item { OutlinedTextField(selectedServer, { selectedServer = it }, Modifier.fillMaxWidth(), label = { Text("Selected server") }, singleLine = true) }
+        item {
+            val selectedName = serverList.firstOrNull { it.id == selectedServer }?.serverName.orEmpty()
+            OutlinedTextField(selectedName, {}, Modifier.fillMaxWidth(), label = { Text("Selected server") }, readOnly = true, singleLine = true)
+        }
         item { OutlinedTextField(account, { account = it }, Modifier.fillMaxWidth(), label = { Text("MT5 account number") }, singleLine = true) }
         item { OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) }
         item {
-            Button(enabled = account.isNotBlank() && password.isNotBlank() && selectedServer.isNotBlank() && !busy, onClick = {
+            val selected = serverList.firstOrNull { it.id == selectedServer }
+            Button(enabled = account.matches(Regex("\\d+")) && password.isNotEmpty() && selected != null && !busy, onClick = {
                 busy = true
                 status = "Validating MT5 account securely…"
-                api.connect(account, password, selectedServer) { result ->
+                api.connect(account, password, selected!!.serverName) { result ->
                     scope.launch {
                         busy = false
                         result.onSuccess { connection ->
                             context.preferencesDataStore.edit { prefs ->
-                                prefs[PreferenceKeys.BROKER] = broker
-                                prefs[PreferenceKeys.SERVER] = selectedServer
-                                prefs[PreferenceKeys.ACCOUNT] = account
+                                prefs[PreferenceKeys.BROKER] = selected.brokerName
+                                prefs[PreferenceKeys.SERVER] = selected.id
+                                prefs[PreferenceKeys.ACCOUNT] = account.trim()
                             }
                             password = ""
                             status = "Connected: ${connection.state}"
@@ -140,6 +146,7 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
             }) { Text(if (busy) "Connecting…" else "Connect MT5") }
         }
         item { Text(status) }
+        item { Text("The password is not saved in the app preferences.", style = MaterialTheme.typography.bodySmall) }
     }
 }
 
