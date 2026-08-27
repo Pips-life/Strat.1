@@ -137,8 +137,9 @@ class ConfluenceEngine:
         else:
             grade = "WEAK"
         tradable = direction != "NONE" and score >= self.config.minimum_score and edge >= self.config.minimum_directional_edge
-        selected = long_components if direction == "LONG" else short_components
         combined_derived = dict(derived or {})
+        # Preserve subclass-specific interaction diagnostics (e.g. volatility
+        # + velocity/gamma) as well as the canonical engine diagnostics.
         combined_derived.update({
             "long_interaction_bonus": long_interactions["interaction_bonus"],
             "short_interaction_bonus": short_interactions["interaction_bonus"],
