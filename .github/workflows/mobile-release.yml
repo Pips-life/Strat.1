@@ -67,15 +67,15 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Stamp release.properties for manual release
-        if: github.event_name == 'workflow_dispatch'
+      - name: Stamp Android version
         working-directory: mobile
         env:
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
-        run: printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
+        run: |
+          printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
 
-      - name: Validate tagged release against release.properties
+      - name: Validate tagged release against repository version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
@@ -98,7 +98,10 @@ jobs:
           test -n "$KEY_PASSWORD" || { echo 'Missing PIPS_LIFE_KEY_PASSWORD'; exit 1; }
           echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.keystore"
           test -s "$RUNNER_TEMP/pips-life-release.keystore"
-          echo "PIPS_LIFE_KEYSTORE_PATH=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
+          echo "PIPSLIFE_KEYSTORE_FILE=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
+          echo "PIPSLIFE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "PIPSLIFE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "PIPSLIFE_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Check Android project
         working-directory: mobile
@@ -111,11 +114,6 @@ jobs:
 
       - name: Build signed release APK
         working-directory: mobile
-        env:
-          PIPS_LIFE_KEYSTORE_PATH: ${{ env.PIPS_LIFE_KEYSTORE_PATH }}
-          PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
-          PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
-          PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: gradle --no-daemon clean assembleRelease --stacktrace
 
       - name: Locate and verify APK
@@ -134,7 +132,7 @@ jobs:
           sha256sum "$NAME" > "$NAME.sha256"
           SHA=$(cut -d' ' -f1 "$NAME.sha256")
           cat > release-manifest.json <<EOF
-          {"app":"Pips-life","versionName":"${{ steps.version.outputs.version_name }}","versionCode":${{ steps.version.outputs.version_code }},"tag":"${{ steps.version.outputs.tag }}","apk":"$NAME","sha256":"$SHA"}
+          {"app":"Pips-life","versionName":"${{ steps.version.outputs.version_name }}","versionCode":${{ steps.version.outputs.version_code}},"tag":"${{ steps.version.outputs.tag }}","apk":"$NAME","sha256":"$SHA"}
           EOF
 
       - name: Verify release numbering against existing releases
@@ -144,20 +142,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release list --limit 1 --json tagName,isDraft,isPrerelease > /tmp/latest-release.json; then
-            python3 - <<'PY'
-          import json, re, os, subprocess
+          if ! gh release list --limit 1 --json tagName > /tmp/latest-release.json; then exit 0; fi
+          python3 - <<'PY'
+          import json, os, re, subprocess
           rows=json.load(open('/tmp/latest-release.json'))
           if not rows: raise SystemExit(0)
           tag=rows[0]['tagName']
-          try:
-              latest=int(subprocess.check_output(['gh','release','view',tag,'--json','assets','-q','.assets[]?.name'],text=True).split('-')[-1].split('.')[0])
-          except Exception:
-              latest=0
-          if latest and int(os.environ['VERSION_CODE']) <= latest:
-              raise SystemExit(f"versionCode {os.environ['VERSION_CODE']} must exceed previous release code {latest}")
+          names=subprocess.check_output(['gh','release','view',tag,'--json','assets','-q','.assets[]?.name'],text=True).splitlines()
+          codes=[]
+          for name in names:
+              m=re.search(r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$',name)
+              if m: codes.append(int(m.group(1)))
+          if codes and int(os.environ['VERSION_CODE']) <= max(codes):
+              raise SystemExit(f"versionCode {os.environ['VERSION_CODE']} must exceed previous release code {max(codes)}")
           PY
-          fi
 
       - name: Publish numbered GitHub release
         if: startsWith(github.ref, 'refs/tags/')
