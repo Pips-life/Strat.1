@@ -12,8 +12,8 @@ android {
         applicationId = "life.pipslife.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
         buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-j3lztnkx5-pips-life.vercel.app\"")
     }
 
