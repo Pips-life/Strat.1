@@ -11,9 +11,7 @@ on:
 jobs:
   build-and-verify:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mobile
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,7 +24,9 @@ jobs:
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Install Android SDK packages
         run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
@@ -37,11 +37,12 @@ jobs:
           gradle-version: '8.10.2'
 
       - name: Build debug APK
+        working-directory: mobile
         run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Verify APK metadata
         run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="mobile/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pipslife-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pipslife-badging.txt
@@ -58,7 +59,7 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r mobile/app/build/outputs/apk/debug/app-debug.apk
             adb shell monkey -p life.pipslife.mobile 1
             sleep 5
             adb shell pidof life.pipslife.mobile
