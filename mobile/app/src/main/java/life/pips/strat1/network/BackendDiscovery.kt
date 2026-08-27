@@ -11,33 +11,55 @@ import java.util.concurrent.TimeUnit
 class BackendDiscovery(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
         .build()
 ) {
     suspend fun discover(candidates: List<String>): BackendEndpoint? = withContext(Dispatchers.IO) {
         candidates.asSequence()
-            .mapNotNull { normalize(it) }
-            .firstOrNull { endpoint -> checkHealth(endpoint) }
+            .mapNotNull(::normalize)
+            .distinct()
+            .mapNotNull(::probe)
+            .firstOrNull()
     }
 
     suspend fun check(endpoint: BackendEndpoint): Boolean = withContext(Dispatchers.IO) {
-        checkHealth(endpoint)
+        probe(endpoint) != null
     }
 
-    private fun checkHealth(endpoint: BackendEndpoint): Boolean {
-        return runCatching {
+    private fun probe(candidate: BackendEndpoint): BackendEndpoint? {
+        // First allow a future backend to advertise its canonical API URL.
+        runCatching {
             val request = Request.Builder()
-                .url(endpoint.baseUrl.trimEnd('/') + "/api/health")
+                .url(candidate.baseUrl + "/.well-known/strat1-backend.json")
+                .header("Accept", "application/json")
                 .get()
                 .build()
             client.newCall(request).execute().use { response ->
-                response.isSuccessful
+                if (response.isSuccessful) {
+                    val raw = response.body?.string().orEmpty()
+                    val advertised = Regex("\\\"baseUrl\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"")
+                        .find(raw)?.groupValues?.getOrNull(1)
+                    val resolved = normalize(advertised)?.let(::health)
+                    if (resolved != null) return resolved
+                }
             }
-        }.getOrDefault(false)
+        }
+        return health(candidate)
     }
 
-    private fun normalize(raw: String): BackendEndpoint? = runCatching {
-        val value = raw.trim().trimEnd('/')
+    private fun health(endpoint: BackendEndpoint): BackendEndpoint? = runCatching {
+        val request = Request.Builder()
+            .url(endpoint.baseUrl + "/api/health")
+            .get()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) endpoint else null
+        }
+    }.getOrNull()
+
+    private fun normalize(raw: String?): BackendEndpoint? = runCatching {
+        val value = raw?.trim()?.removeSuffix("/") ?: return null
         if (value.isBlank()) return null
         val uri = URI(value)
         if (uri.scheme != "https" || uri.host.isNullOrBlank()) return null
