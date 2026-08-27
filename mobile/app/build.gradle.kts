@@ -4,9 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val releaseProps = java.util.Properties().apply {
-    file("../release.properties").inputStream().use(::load)
-}
+val releaseProps = java.util.Properties().apply { file("../release.properties").inputStream().use(::load) }
+val releaseVersionName = providers.gradleProperty("APP_VERSION_NAME").orElse(releaseProps.getProperty("versionName")).get()
+val releaseVersionCode = providers.gradleProperty("APP_VERSION_CODE").orElse(releaseProps.getProperty("versionCode")).get().toInt()
 
 android {
     namespace = "life.pips.strat1"
@@ -15,8 +15,8 @@ android {
         applicationId = "life.pipslife.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = releaseProps.getProperty("versionCode").toInt()
-        versionName = releaseProps.getProperty("versionName")
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
         buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -24,12 +24,11 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     // Production release signing is CI-only. The keystore is never committed.
-    val storeFile = System.getenv("PIPSLIFE_KEYSTORE_FILE")
-    val storePassword = System.getenv("PIPSLIFE_KEYSTORE_PASSWORD")
-    val keyAlias = System.getenv("PIPSLIFE_KEY_ALIAS")
-    val keyPassword = System.getenv("PIPSLIFE_KEY_PASSWORD")
-    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() &&
-        !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+    val storeFile = System.getenv("PIPS_LIFE_KEYSTORE_PATH")
+    val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD")
+    val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS")
+    val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD")
+    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
         signingConfigs {
             create("release") {
                 this.storeFile = file(storeFile)
