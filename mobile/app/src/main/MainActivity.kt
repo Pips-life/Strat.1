@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import life.pips.strat1.data.Mt5PreferenceStore
 import life.pips.strat1.data.Mt5Server
 import life.pips.strat1.data.Mt5ServerRepository
@@ -19,8 +20,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val store = Mt5PreferenceStore(this)
-        val servers = Mt5ServerRepository()
-        setContent { MaterialTheme { Strat1App(store, servers) } }
+        setContent { MaterialTheme { Strat1App(store, Mt5ServerRepository()) } }
     }
 }
 
@@ -52,6 +52,7 @@ private fun Strat1App(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
 
 @Composable
 private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
+    val scope = rememberCoroutineScope()
     var broker by remember { mutableStateOf(store.broker) }
     var serverName by remember { mutableStateOf(store.server) }
     var account by remember { mutableStateOf(store.account) }
@@ -61,60 +62,23 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
     var connecting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Not connected") }
 
-    fun discover() {
-        if (broker.trim().length < 2) {
-            serverList = emptyList()
-            status = "Enter at least 2 broker characters"
-            return
-        }
-        loading = true
-        status = "Searching MetaApi broker servers…"
-        servers.search(broker) { result ->
-            loading = false
-            result.onSuccess {
-                serverList = it
-                status = if (it.isEmpty()) "No matching MT5 servers found" else "Found ${it.size} server(s)"
-            }.onFailure {
-                serverList = emptyList()
-                status = "Server discovery unavailable: ${it.message ?: "network error"}"
-            }
-        }
-    }
-
-    fun connect() {
-        if (broker.isBlank() || serverName.isBlank() || account.isBlank() || password.isBlank()) {
-            status = "Complete broker, server, account and password first"
-            return
-        }
-        connecting = true
-        status = "Validating MT5 credentials…"
-        servers.connect(account, password, serverName) { result ->
-            connecting = false
-            result.onSuccess {
-                store.save(broker, serverName, account)
-                password = ""
-                status = "MT5 connected • ${it.server} • ${it.state}"
-            }.onFailure {
-                status = it.message ?: "MT5 connection failed"
-            }
-        }
-    }
-
     LazyColumn(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("MT5", style = MaterialTheme.typography.headlineSmall) }
-        item { Text("Enter your broker name, then select the exact MT5 server returned by the live backend.") }
+        item { Text("Search the live MetaApi server directory, select your exact server, then connect the account securely through the backend.") }
         item {
-            OutlinedTextField(
-                value = broker,
-                onValueChange = { broker = it },
-                label = { Text("MT5 broker") },
-                modifier = Modifier.fillMaxWidth()
-            )
+            OutlinedTextField(broker, { broker = it }, label = { Text("MT5 broker") }, modifier = Modifier.fillMaxWidth())
         }
         item {
-            Button(onClick = ::discover, enabled = !loading && broker.trim().length >= 2, modifier = Modifier.fillMaxWidth()) {
-                Text(if (loading) "Searching…" else "Find MT5 servers")
-            }
+            Button(
+                onClick = {
+                    loading = true; status = "Searching MetaApi…"
+                    scope.launch {
+                        runCatching { servers.search(broker) }.onSuccess { serverList = it; status = "Found ${it.size} server(s)" }
+                            .onFailure { status = "Discovery failed: ${it.message ?: "network error"}" }
+                        loading = false
+                    }
+                }, enabled = !loading && broker.trim().length >= 2, modifier = Modifier.fillMaxWidth()
+            ) { Text(if (loading) "Searching…" else "Find MT5 servers") }
         }
         item { Text("Servers", style = MaterialTheme.typography.titleMedium) }
         items(serverList) { server ->
@@ -124,36 +88,20 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
                 label = { Text("${server.broker} — ${server.name}") }
             )
         }
-        item {
-            OutlinedTextField(
-                value = serverName,
-                onValueChange = { serverName = it },
-                label = { Text("Selected server") },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = account,
-                onValueChange = { account = it.filter(Char::isDigit) },
-                label = { Text("MT5 account number") },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        item {
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("MT5 password") },
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+        item { OutlinedTextField(serverName, { serverName = it }, label = { Text("Selected server") }, modifier = Modifier.fillMaxWidth()) }
+        item { OutlinedTextField(account, { account = it.filter(Char::isDigit) }, label = { Text("MT5 account number") }, modifier = Modifier.fillMaxWidth()) }
+        item { OutlinedTextField(password, { password = it }, label = { Text("MT5 password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()) }
         item {
             Button(
-                onClick = ::connect,
-                enabled = !connecting && broker.isNotBlank() && serverName.isNotBlank() && account.isNotBlank() && password.isNotBlank(),
-                modifier = Modifier.fillMaxWidth()
+                onClick = {
+                    connecting = true; status = "Validating MT5 credentials…"
+                    scope.launch {
+                        runCatching { servers.connect(account, password, serverName, broker) }
+                            .onSuccess { store.save(broker, serverName, account); password = ""; status = "MetaApi: ${it.state}" }
+                            .onFailure { status = it.message ?: "MT5 connection failed" }
+                        connecting = false
+                    }
+                }, enabled = !connecting && broker.isNotBlank() && serverName.isNotBlank() && account.isNotBlank() && password.isNotBlank(), modifier = Modifier.fillMaxWidth()
             ) { Text(if (connecting) "Connecting…" else "Save & Connect") }
         }
         item { Text("Status: $status") }
