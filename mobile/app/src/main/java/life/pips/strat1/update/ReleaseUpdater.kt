@@ -1,6 +1,7 @@
 package life.pips.strat1.update
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
@@ -15,7 +16,7 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 
-/** Checks GitHub Releases and installs a newer signed APK asset. */
+/** Checks GitHub Releases and installs a newer APK asset. */
 object ReleaseUpdater {
     private const val LATEST_RELEASE_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
     private const val APK_PREFIX = "Pips-life-"
@@ -61,7 +62,7 @@ object ReleaseUpdater {
     }
 
     fun prompt(activity: Activity, release: Release) {
-        androidx.appcompat.app.AlertDialog.Builder(activity)
+        AlertDialog.Builder(activity)
             .setTitle("Pips-life update available")
             .setMessage("Version ${release.versionName} is available on GitHub. Download and install it now?")
             .setNegativeButton("Later", null)
@@ -70,11 +71,12 @@ object ReleaseUpdater {
     }
 
     private fun download(context: Context, release: Release) {
+        val fileName = "Pips-life-${release.versionName}.apk"
         val request = DownloadManager.Request(Uri.parse(release.apkUrl))
             .setTitle("Pips-life ${release.versionName}")
             .setDescription("Downloading the Pips-life update from GitHub Releases")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "Pips-life-${release.versionName}.apk")
+            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
             .setMimeType("application/vnd.android.package-archive")
         val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val id = manager.enqueue(request)
@@ -82,9 +84,8 @@ object ReleaseUpdater {
             override fun onReceive(ctx: Context, intent: Intent) {
                 if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != id) return
                 ctx.unregisterReceiver(this)
-                val file = File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Pips-life-${release.versionName}.apk")
-                if (!file.exists()) return
-                install(ctx, file)
+                val file = File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
+                if (file.exists()) install(ctx, file)
             }
         }
         context.registerReceiver(receiver, android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_NOT_EXPORTED)
