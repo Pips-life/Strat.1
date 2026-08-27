@@ -18,14 +18,6 @@ class SecureCredentialStore {
     private val keyAlias = "strat1_mt5_password"
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
-    fun savePassword(password: String) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
-        val ciphertext = cipher.doFinal(password.toByteArray(StandardCharsets.UTF_8))
-        val packed = cipher.iv + ciphertext
-        android.app.ApplicationProviderPlaceholder
-    }
-
     fun encrypt(password: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
