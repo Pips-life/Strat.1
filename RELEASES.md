@@ -4,32 +4,34 @@ Pips-life uses numbered Android releases published as GitHub Releases.
 
 ## Numbering
 
-- Release tag: `vMAJOR.MINOR.PATCH`
-- Android `versionName`: same semantic version.
-- Android `versionCode`: derived monotonically from the semantic version for tag-triggered releases (`major * 1,000,000 + minor * 1,000 + patch`).
+- Release tag: `vMAJOR.MINOR.PATCH` (for example `v0.2.2`).
+- Android `versionName`: must match the release tag.
+- Android `versionCode`: a positive integer that **must increase for every release**. It is the primary value the app uses to detect an update.
 - APK asset: `pips-life-<versionName>-<versionCode>.apk`.
-- Each release also publishes `release-manifest.json` containing version, tag, APK name and SHA-256.
+- Each release also publishes `release-manifest.json` with version, tag, APK name and SHA-256.
 
 ## Publishing
 
-Create a tag such as `v0.2.2` and push it. The `mobile-release.yml` workflow then:
+Create and push a tag such as `v0.2.2`, with `mobile/release.properties` containing the intended version and monotonically higher `versionCode`. The `mobile-release.yml` workflow then:
 
 1. Sets up Java 17 and Android SDK 35.
-2. Verifies the version format.
+2. Validates the tag and release numbering.
 3. Stamps the Android version into the release build.
-4. Builds the release APK with Gradle.
-5. Verifies package name, version name and version code.
+4. Builds the signed release APK with Gradle.
+5. Verifies package name, app label, version name, version code and APK signature.
 6. Calculates the APK SHA-256.
-7. Creates the numbered GitHub Release and uploads the APK plus release manifest.
+7. Publishes the APK, checksum and release manifest to the numbered GitHub Release.
 
 The workflow can also be started manually when a specific version name and version code are required.
 
 ## In-app updating
 
-Release builds run `PipsLifeApplication` at launch. It checks GitHub's public `releases/latest` endpoint. If the latest semantic version is newer than the installed version and contains an APK asset, Pips-life prompts the user to **DOWNLOAD & INSTALL**. The APK is downloaded through Android's `DownloadManager`, then Android's package installer is opened. Android may require the user to allow Pips-life to install unknown-source updates once.
+Release builds run `PipsLifeApplication` at launch/resume. It checks GitHub's public `releases/latest` endpoint periodically. If the latest stable release has a higher `versionCode` and a numbered Pips-life APK asset, Pips-life prompts the user to **DOWNLOAD & INSTALL**.
+
+The APK is downloaded through Android's `DownloadManager`, then Android's package installer is opened. Android may require the user to allow Pips-life to install updates from this source once. The app never silently installs an APK.
 
 No MetaApi token, backend secret, broker password, or other server secret is used by the release checker.
 
-## First release
+## Current state
 
-The repository currently has no published GitHub Release, so a first numbered release must be published before an installed app can detect an update. The release checker treats GitHub's 404/no-release state as "no update" rather than an app error.
+The release infrastructure is now consolidated around one in-app updater and one numbered mobile-release workflow. There are currently **no published GitHub Releases**, so the first release still needs to be published. With the current mobile baseline (`0.2.1`, versionCode `3`), the first release can be `v0.2.1`; the next release should use a higher versionCode (for example `0.2.2`, versionCode `4`).
