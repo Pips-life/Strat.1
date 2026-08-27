@@ -13,14 +13,11 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String)
+data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String, val message: String? = null)
 
 class Mt5ApiClient(
     private val baseUrl: String = "https://strat-1.vercel.app",
-    private val http: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
 ) {
     fun searchServers(query: String, callback: (Result<List<Mt5Server>>) -> Unit) {
         val q = query.trim()
@@ -60,11 +57,8 @@ class Mt5ApiClient(
             put("server", server.trim())
             put("name", "Strat.1 MT5 account")
         }
-        val request = Request.Builder()
-            .url(baseUrl.trimEnd('/') + "/api/mt5/connect")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .header("Accept", "application/json")
-            .build()
+        val request = Request.Builder().url(baseUrl.trimEnd('/') + "/api/mt5/connect")
+            .post(payload.toString().toRequestBody("application/json".toMediaType())).header("Accept", "application/json").build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
             override fun onResponse(call: Call, response: Response) {
@@ -72,7 +66,7 @@ class Mt5ApiClient(
                     val raw = it.body?.string().orEmpty()
                     try {
                         val json = JSONObject(raw)
-                        if (!it.isSuccessful) {
+                        if (!it.isSuccessful && it.code != 202) {
                             val details = json.optJSONObject("details")
                             val message = details?.optString("message")?.takeIf { value -> value.isNotBlank() }
                                 ?: json.optString("message").ifBlank { json.optString("error").ifBlank { "MT5 connection failed" } }
@@ -81,7 +75,8 @@ class Mt5ApiClient(
                         callback(Result.success(Mt5ConnectionResult(
                             json.optString("accountId").ifBlank { null },
                             json.optString("state", "UNKNOWN"),
-                            json.optString("server", server)
+                            json.optString("server", server),
+                            json.optString("message").ifBlank { null }
                         )))
                     } catch (e: Exception) { callback(Result.failure(IOException("Invalid MT5 connection response", e))) }
                 }
