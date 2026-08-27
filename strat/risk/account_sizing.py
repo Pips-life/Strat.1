@@ -15,7 +15,6 @@ from math import floor
 
 @dataclass(frozen=True)
 class BrokerSymbolSpec:
-    """Broker contract constraints for one tradable symbol."""
     leverage: float
     tick_size: float
     tick_value: float
@@ -64,12 +63,17 @@ class AccountRiskSizer:
 
     def evaluate(
         self,
-        *,
         account: AccountSpec,
         broker: BrokerSymbolSpec,
         entry: float,
         stop_loss: float,
     ) -> SizingDecision:
+        """Evaluate a trade.
+
+        Positional arguments are intentionally accepted for backward
+        compatibility with existing integrations; new callers may still pass
+        the same four arguments by keyword.
+        """
         if account.equity <= 0 or account.balance <= 0 or account.free_margin < 0:
             return SizingDecision(False, reason="invalid account state")
         if min(broker.leverage, broker.tick_size, broker.tick_value, broker.min_volume, broker.max_volume, broker.volume_step) <= 0:
