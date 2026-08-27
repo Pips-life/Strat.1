@@ -1,0 +1,15 @@
+{
+  "channel": "stable",
+  "versionName": "0.1.0",
+  "versionCode": 1,
+  "minimumSupportedVersionCode": 1,
+  "releaseNotes": [
+    "Initial mobile architecture",
+    "MT5 account connection flow scaffold"
+  ],
+  "updatePolicy": {
+    "checkOnLaunch": true,
+    "promptBeforeInstall": true,
+    "forceUpdate": false
+  }
+}
