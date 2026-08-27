@@ -4,6 +4,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseProps = java.util.Properties().apply {
+    file("../release.properties").inputStream().use(::load)
+}
+
 android {
     namespace = "life.pips.strat1"
     compileSdk = 35
@@ -11,10 +15,8 @@ android {
         applicationId = "life.pipslife.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.1"
-        // Pips-life 0.2.1: authenticated live MT5 backend integration.
-        // Build intentionally targets the verified live-control dashboard.
+        versionCode = releaseProps.getProperty("versionCode").toInt()
+        versionName = releaseProps.getProperty("versionName")
         buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
     buildFeatures { compose = true; buildConfig = true }
