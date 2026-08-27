@@ -53,15 +53,16 @@ jobs:
 
       - name: Read and validate release numbering
         shell: bash
-        working-directory: mobile
         run: |
-          VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
-          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' release.properties | head -1)
+          VERSION_NAME=$(sed -n 's/^versionName=//p' mobile/release.properties | head -1)
+          VERSION_CODE=$(sed -n 's/^versionCode=//p' mobile/release.properties | head -1)
           test -n "$VERSION_NAME"
           test -n "$VERSION_CODE"
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$VERSION_CODE" =~ ^[0-9]+$ ]]
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
             TAG_VERSION="${GITHUB_REF_NAME#v}"
-            test "$VERSION_NAME" = "$TAG_VERSION" || { echo "Tag $TAG_VERSION does not match versionName $VERSION_NAME"; exit 1; }
+            test "$VERSION_NAME" = "$TAG_VERSION" || { echo "Tag $TAG_VERSION does not match release.properties versionName $VERSION_NAME"; exit 1; }
           fi
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
@@ -70,18 +71,19 @@ jobs:
         working-directory: mobile
         run: gradle --no-daemon --stacktrace clean assembleRelease
 
-      - name: Verify APK and release signature
+      - name: Verify APK, package, version and release signature
         shell: bash
         run: |
           APK="mobile/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep -F "package: name='life.pipslife.mobile' versionName='${VERSION_NAME}' versionCode='${VERSION_CODE}'"
           echo "APK_SHA256=$(sha256sum "$APK" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "APK_SIZE=$(stat -c%s "$APK")" >> "$GITHUB_ENV"
 
       - name: Rename release APK
         shell: bash
-        run: cp "mobile/app/build/outputs/apk/release/app-release.apk" "mobile/app/build/outputs/apk/release/Pips-life-${VERSION_NAME}.apk"
+        run: cp "mobile/app/build/outputs/apk/release/app-release.apk" "mobile/app/build/outputs/apk/release/Pips-life-${VERSION_NAME}-${VERSION_CODE}.apk"
 
       - name: Create numbered GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -91,7 +93,7 @@ jobs:
           name: Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}.apk
+          files: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}-${{ env.VERSION_CODE }}.apk
           body: |
             # Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
 
@@ -108,5 +110,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Pips-life-${{ env.VERSION_NAME }}-${{ env.VERSION_CODE }}-release
-          path: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}.apk
+          path: mobile/app/build/outputs/apk/release/Pips-life-${{ env.VERSION_NAME }}-${{ env.VERSION_CODE }}.apk
           if-no-files-found: error
