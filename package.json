@@ -1,12 +1,15 @@
 {
   "name": "pips-life-workspace",
   "private": true,
+  "workspaces": ["apps/backend"],
   "scripts": {
     "build": "cd apps/backend && npm run build",
     "dev": "cd apps/backend && npm run dev",
     "start": "cd apps/backend && npm run start"
   },
   "dependencies": {
-    "next": "^15.5.0"
+    "next": "15.5.24",
+    "react": "19.1.7",
+    "react-dom": "19.1.7"
   }
 }
