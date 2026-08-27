@@ -13,6 +13,7 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "0.2.1"
+        // Live Pips-life backend integration is enabled in this release.
         buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
     buildFeatures { compose = true; buildConfig = true }
