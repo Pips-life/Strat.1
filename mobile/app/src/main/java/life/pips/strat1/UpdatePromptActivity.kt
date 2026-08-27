@@ -1,9 +1,9 @@
 package life.pips.strat1
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.os.Bundle
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,12 +21,8 @@ class UpdatePromptActivity : Activity() {
 
     private fun check() {
         scope.launch {
-            val result = ReleaseManager.checkForUpdate()
-            val release = result.getOrNull()
-            if (release == null) {
-                finish()
-                return@launch
-            }
+            val release = ReleaseManager.checkForUpdate().getOrNull()
+            if (release == null) { finish(); return@launch }
             AlertDialog.Builder(this@UpdatePromptActivity)
                 .setTitle("Pips-life update available")
                 .setMessage("Version ${release.version} is available on GitHub Releases.\n\n${release.notes.take(600)}")
@@ -41,15 +37,10 @@ class UpdatePromptActivity : Activity() {
         Toast.makeText(this, "Downloading Pips-life ${release.version}…", Toast.LENGTH_LONG).show()
         scope.launch {
             val result = ReleaseManager.downloadAndInstall(this@UpdatePromptActivity, release)
-            if (result.isFailure) {
-                Toast.makeText(this@UpdatePromptActivity, result.exceptionOrNull()?.message ?: "Update failed", Toast.LENGTH_LONG).show()
-            }
+            if (result.isFailure) Toast.makeText(this@UpdatePromptActivity, result.exceptionOrNull()?.message ?: "Update failed", Toast.LENGTH_LONG).show()
             finish()
         }
     }
 
-    override fun onDestroy() {
-        job.cancel()
-        super.onDestroy()
-    }
+    override fun onDestroy() { job.cancel(); super.onDestroy() }
 }
