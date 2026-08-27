@@ -21,22 +21,18 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Checks the public GitHub Releases feed. Secrets are never embedded in the APK. */
+/** Checks GitHub Releases and offers user-approved APK updates. */
 class PipsLifeApplication : Application() {
-    private var resumedActivity: Activity? = null
-    private var receiverRegistered = false
     private val handler = Handler(Looper.getMainLooper())
+    private var receiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(activity: Activity) {
-                resumedActivity = activity
-                if (activity is MainActivity) {
-                    handler.postDelayed({ checkForUpdate(activity) }, 1200)
-                }
+                if (activity is MainActivity) handler.postDelayed({ checkForUpdate(activity) }, 1200)
             }
-            override fun onActivityPaused(activity: Activity) { if (resumedActivity === activity) resumedActivity = null }
+            override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivityCreated(a: Activity, s: android.os.Bundle?) = Unit
             override fun onActivityStarted(a: Activity) = Unit
             override fun onActivityStopped(a: Activity) = Unit
@@ -49,19 +45,19 @@ class PipsLifeApplication : Application() {
         if (activity.isFinishing || activity.isDestroyed) return
         Thread {
             val release = runCatching { fetchLatestRelease() }.getOrNull() ?: return@Thread
-            val latest = release.version ?: return@Thread
-            if (!isNewer(latest, BuildConfig.VERSION_NAME)) return@Thread
+            if (release.versionCode <= BuildConfig.VERSION_CODE) return@Thread
             val apk = release.apkUrl ?: return@Thread
-            val lastPrompted = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_PROMPTED, null)
-            if (lastPrompted == latest) return@Thread
+            val releaseKey = "${release.versionName}+${release.versionCode}"
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (prefs.getString(LAST_PROMPTED, null) == releaseKey) return@Thread
             handler.post {
                 if (activity.isFinishing || activity.isDestroyed) return@post
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(LAST_PROMPTED, latest).apply()
+                prefs.edit().putString(LAST_PROMPTED, releaseKey).apply()
                 AlertDialog.Builder(activity)
                     .setTitle("Pips-life update available")
-                    .setMessage("Pips-life ${latest} is available. Your current version is ${BuildConfig.VERSION_NAME}. Download the new APK from GitHub?")
+                    .setMessage("Pips-life ${release.versionName} (${release.versionCode}) is available. You have ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}). Download and install the update from GitHub?")
                     .setNegativeButton("LATER", null)
-                    .setPositiveButton("DOWNLOAD & INSTALL") { _, _ -> downloadAndInstall(activity, latest, apk) }
+                    .setPositiveButton("DOWNLOAD & INSTALL") { _, _ -> downloadAndInstall(activity, release, apk) }
                     .show()
             }
         }.start()
@@ -78,47 +74,53 @@ class PipsLifeApplication : Application() {
         return connection.use {
             if (it.responseCode !in 200..299) error("GitHub releases request failed: ${it.responseCode}")
             val json = JSONObject(it.inputStream.bufferedReader().use { r -> r.readText() })
-            val tag = json.optString("tag_name").removePrefix("v")
-            val assets = json.optJSONArray("assets") ?: return@use ReleaseInfo(null, null)
-            var apk: String? = null
+            val tagVersion = json.optString("tag_name").removePrefix("v")
+            val releaseName = json.optString("name")
+            val assets = json.optJSONArray("assets") ?: return@use ReleaseInfo(tagVersion, 0, null)
+            var apkUrl: String? = null
+            var assetVersionCode = 0
+            var assetVersionName = tagVersion
+            val pattern = Regex("Pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE)
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
-                if (asset.optString("name").endsWith(".apk", true)) {
-                    apk = asset.optString("browser_download_url").takeIf { u -> u.startsWith("https://github.com/") }
-                    break
+                val name = asset.optString("name")
+                if (!name.endsWith(".apk", true)) continue
+                val match = pattern.find(name)
+                if (match != null) {
+                    assetVersionName = match.groupValues[1]
+                    assetVersionCode = match.groupValues[2].toIntOrNull() ?: 0
                 }
+                apkUrl = asset.optString("browser_download_url").takeIf { u -> u.startsWith("https://github.com/") }
+                if (apkUrl != null) break
             }
-            ReleaseInfo(tag.takeIf { it.isNotBlank() }, apk)
+            val versionName = if (assetVersionName.isBlank()) releaseName else assetVersionName
+            ReleaseInfo(versionName, assetVersionCode, apkUrl)
         }
     }
 
-    private fun downloadAndInstall(activity: Activity, version: String, apkUrl: String) {
+    private fun downloadAndInstall(activity: Activity, release: ReleaseInfo, apkUrl: String) {
+        val filename = "Pips-life-${release.versionName}-${release.versionCode}.apk"
         val request = DownloadManager.Request(Uri.parse(apkUrl))
-            .setTitle("Pips-life $version")
+            .setTitle("Pips-life ${release.versionName}")
             .setDescription("Downloading Pips-life update")
             .setMimeType("application/vnd.android.package-archive")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "Pips-life-$version.apk")
+            .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, filename)
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
-
         val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = manager.enqueue(request)
-
-        if (!receiverRegistered) {
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
-                    val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-                    if (id != downloadId) return
-                    openDownloadedApk(activity, manager, id)
-                }
+        val id = manager.enqueue(request)
+        receiver?.let { runCatching { unregisterReceiver(it) } }
+        receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+                if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != id) return
+                openDownloadedApk(activity, manager, id)
             }
-            val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
-            else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
-            receiverRegistered = true
         }
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
         Toast.makeText(this, "Pips-life update downloading…", Toast.LENGTH_LONG).show()
     }
 
@@ -133,30 +135,18 @@ class PipsLifeApplication : Application() {
             }
             val uri = manager.getUriForDownloadedFile(id) ?: return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-                Toast.makeText(this, "Allow Pips-life to install updates, then open the downloaded APK.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Allow Pips-life to install updates, then tap the downloaded APK notification.", Toast.LENGTH_LONG).show()
                 startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 return
             }
-            val install = Intent(Intent.ACTION_VIEW).apply {
+            activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            activity.startActivity(install)
+            })
         }
     }
 
-    private fun isNewer(latest: String, current: String): Boolean {
-        val a = latest.split(".").map { it.toIntOrNull() ?: 0 }
-        val b = current.split(".").map { it.toIntOrNull() ?: 0 }
-        for (i in 0..2) {
-            val av = a.getOrElse(i) { 0 }
-            val bv = b.getOrElse(i) { 0 }
-            if (av != bv) return av > bv
-        }
-        return false
-    }
-
-    private data class ReleaseInfo(val version: String?, val apkUrl: String?)
+    private data class ReleaseInfo(val versionName: String, val versionCode: Int, val apkUrl: String?)
 
     companion object {
         private const val LATEST_RELEASE_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
