@@ -14,21 +14,14 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     private val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 
     suspend fun connect(login: String, password: String, server: String, broker: String): Result<BackendSession> = runCatching {
-        requestJson("POST", "/api/mt5/connect", JSONObject().apply { put("login", login); put("password", password); put("server", server); put("broker", broker); put("name", "Pips-life MT5 $login") }).toString()
-            .let { json -> BackendSession(JSONObject(json).getString("accountId"), JSONObject(json).getString("sessionToken"), JSONObject(json).optString("server", server)) }
+        val root = JSONObject(requestJson("POST", "/api/mt5/connect", JSONObject().apply { put("login", login); put("password", password); put("server", server); put("broker", broker); put("name", "Pips-life MT5 $login") }.toString()))
+        BackendSession(root.getString("accountId"), root.getString("sessionToken"), root.optString("server", server))
     }
 
     suspend fun liveState(session: BackendSession): Result<LiveState> = runCatching {
-        val json = requestJson("GET", "/api/mt5/connect?accountId=${java.net.URLEncoder.encode(session.accountId, "UTF-8")}", null, session.token)
-        val root = JSONObject(json); val info = root.optJSONObject("accountInformation") ?: JSONObject(); val positions = root.optJSONArray("positions") ?: JSONArray()
-        LiveState(
-            accountId = session.accountId,
-            login = root.optJSONObject("account")?.optString("login").orEmpty(),
-            server = root.optJSONObject("account")?.optString("server").orEmpty(),
-            connectionStatus = root.optJSONObject("account")?.optString("connectionStatus").orEmpty(),
-            state = root.optJSONObject("account")?.optString("state").orEmpty(),
-            balance = info.optDouble("balance", Double.NaN), equity = info.optDouble("equity", Double.NaN), freeMargin = info.optDouble("freeMargin", Double.NaN), currency = info.optString("currency", ""), positions = parsePositions(positions)
-        )
+        val root = JSONObject(requestJson("GET", "/api/mt5/servers?action=status&accountId=${java.net.URLEncoder.encode(session.accountId, "UTF-8")}", null, session.token))
+        val info = root.optJSONObject("accountInformation") ?: JSONObject(); val account = root.optJSONObject("account") ?: JSONObject(); val positions = root.optJSONArray("positions") ?: JSONArray()
+        LiveState(session.accountId, account.optString("login"), account.optString("server"), account.optString("connectionStatus"), account.optString("state"), info.optDouble("balance", Double.NaN), info.optDouble("equity", Double.NaN), info.optDouble("freeMargin", Double.NaN), info.optString("currency", ""), parsePositions(positions))
     }
 
     suspend fun botStatus(session: BackendSession): Result<BotState> = runCatching {
@@ -47,7 +40,7 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
         if (body != null) builder.method(method, body.toRequestBody("application/json".toMediaType())) else builder.method(method, null)
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException(JSONObject(text).optString("error").ifBlank { "Backend request failed (${response.code})" })
+            if (!response.isSuccessful) throw IllegalStateException(runCatching { JSONObject(text).optString("error") }.getOrDefault("").ifBlank { "Backend request failed (${response.code})" })
             text
         }
     }
