@@ -1,6 +1,8 @@
 package life.pips.strat1.data
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -34,6 +36,13 @@ class Mt5ApiClient(
         }
     }
 
+    fun searchServers(query: String, onResult: (Result<List<Mt5Server>>) -> Unit) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = runCatching { findServers(query) }
+            withContext(Dispatchers.Main) { onResult(result) }
+        }
+    }
+
     suspend fun connect(login: String, password: String, server: String): Mt5ConnectionResult = withContext(Dispatchers.IO) {
         val json = JSONObject().apply {
             put("login", login)
@@ -48,6 +57,13 @@ class Mt5ApiClient(
             if (!response.isSuccessful) throw IllegalStateException(extractError(body, "MT5 connection failed"))
             val result = JSONObject(body)
             Mt5ConnectionResult(result.optString("accountId").ifBlank { null }, result.optString("state", "UNKNOWN"), result.optString("server", server))
+        }
+    }
+
+    fun connect(login: String, password: String, server: String, onResult: (Result<Mt5ConnectionResult>) -> Unit) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = runCatching { connect(login, password, server) }
+            withContext(Dispatchers.Main) { onResult(result) }
         }
     }
 
