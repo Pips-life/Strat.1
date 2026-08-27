@@ -1,17 +1,12 @@
 """Account-aware, broker-aware position sizing for all strategies.
 
-The sizing policy is risk-first, not account-size-first: a small account is
-not rejected merely because it is small. The engine searches for a better,
-more precise QOF setup and evaluates the actual broker minimum volume against
-the stop distance. A wider stop is acceptable when the setup warrants it,
-because risk is controlled by monetary loss at the stop, not by an arbitrary
-maximum pip distance.
+Small accounts remain tradable when the broker minimum genuinely fits inside
+a conservative risk budget. The sizer never uses leverage to increase
+stop-loss risk and leaves a configurable reserve inside the nominal budget.
 """
 from __future__ import annotations
-
 from dataclasses import dataclass
 from math import floor
-
 
 @dataclass(frozen=True)
 class BrokerSymbolSpec:
@@ -23,13 +18,11 @@ class BrokerSymbolSpec:
     volume_step: float
     contract_size: float = 1.0
 
-
 @dataclass(frozen=True)
 class AccountSpec:
     balance: float
     equity: float
     free_margin: float
-
 
 @dataclass(frozen=True)
 class SizingPolicy:
@@ -37,7 +30,7 @@ class SizingPolicy:
     max_notional_pct: float = 1.0
     min_survival_equity_pct: float = 0.50
     min_margin_buffer_pct: float = 0.20
-
+    risk_budget_utilization: float = 0.95
 
 @dataclass(frozen=True)
 class SizingDecision:
@@ -48,10 +41,8 @@ class SizingDecision:
     notional: float = 0.0
     reason: str = ""
 
-
 class AccountRiskSizer:
     """Find the safest executable broker volume for a proposed trade."""
-
     def __init__(self, policy: SizingPolicy | None = None) -> None:
         self.policy = policy or SizingPolicy()
 
@@ -61,34 +52,24 @@ class AccountRiskSizer:
             return 0.0
         return floor(value / step) * step
 
-    def evaluate(
-        self,
-        account: AccountSpec,
-        broker: BrokerSymbolSpec,
-        entry: float,
-        stop_loss: float,
-    ) -> SizingDecision:
-        """Evaluate a trade.
-
-        Positional arguments are intentionally accepted for backward
-        compatibility with existing integrations; new callers may still pass
-        the same four arguments by keyword.
-        """
+    def evaluate(self, account: AccountSpec, broker: BrokerSymbolSpec, entry: float, stop_loss: float) -> SizingDecision:
         if account.equity <= 0 or account.balance <= 0 or account.free_margin < 0:
             return SizingDecision(False, reason="invalid account state")
         if min(broker.leverage, broker.tick_size, broker.tick_value, broker.min_volume, broker.max_volume, broker.volume_step) <= 0:
             return SizingDecision(False, reason="invalid broker symbol specification")
         if broker.min_volume > broker.max_volume:
             return SizingDecision(False, reason="broker volume bounds are invalid")
-
         stop_distance = abs(entry - stop_loss)
         if stop_distance <= 0:
             return SizingDecision(False, reason="zero stop distance")
+        utilization = self.policy.risk_budget_utilization
+        if not 0 < utilization <= 1:
+            return SizingDecision(False, reason="invalid risk budget utilization")
 
-        risk_budget = account.equity * self.policy.risk_per_trade
+        nominal_budget = account.equity * self.policy.risk_per_trade
         survival_floor = account.balance * self.policy.min_survival_equity_pct
         survival_budget = max(0.0, account.equity - survival_floor)
-        risk_budget = min(risk_budget, survival_budget)
+        risk_budget = min(nominal_budget * utilization, survival_budget)
         if risk_budget <= 0:
             return SizingDecision(False, reason="no account-survival risk budget available")
 
@@ -101,6 +82,9 @@ class AccountRiskSizer:
 
         volume = max(broker.min_volume, volume)
         risk_amount = risk_per_volume * volume
+        if risk_amount > risk_budget + 1e-12:
+            return SizingDecision(False, reason="broker minimum volume exceeds safe stop-loss risk budget")
+
         notional = abs(entry * broker.contract_size * volume)
         max_notional = account.equity * self.policy.max_notional_pct
         if notional > max_notional:
