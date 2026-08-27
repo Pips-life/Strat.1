@@ -5,7 +5,7 @@ import { metaApi } from '@/lib/metaapi';
 export async function GET(request: Request) {
   try {
     requireBackendKey(request);
-    const accounts = await metaApi().metatraderAccountApi.getAccounts();
+    const accounts = await metaApi().metatraderAccountApi.getAccountsWithInfiniteScrollPagination();
     return NextResponse.json(accounts.map((a: any) => ({
       id: a.id,
       name: a.name,
