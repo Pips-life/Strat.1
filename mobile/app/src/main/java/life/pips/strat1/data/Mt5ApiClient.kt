@@ -22,7 +22,7 @@ class Mt5ApiClient(
     fun searchServers(query: String, callback: (Result<List<Mt5Server>>) -> Unit) {
         val q = query.trim()
         if (q.length < 2) { callback(Result.success(emptyList())); return }
-        val request = Request.Builder().url(baseUrl.trimEnd('/') + "/api/mt5/servers?q=" + URLEncoder.encode(q, "UTF-8")).get().build()
+        val request = Request.Builder().url(baseUrl.trimEnd('/') + "/api/mt5/servers?query=" + URLEncoder.encode(q, "UTF-8")).get().build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
             override fun onResponse(call: Call, response: Response) {
@@ -49,7 +49,12 @@ class Mt5ApiClient(
     }
 
     fun connect(login: String, password: String, server: String, callback: (Result<Mt5ConnectionResult>) -> Unit) {
-        val payload = JSONObject().apply { put("login", login.trim()); put("password", password); put("server", server.substringAfter(':', server)); put("name", "Strat.1 MT5 account") }
+        val payload = JSONObject().apply {
+            put("login", login.trim())
+            put("password", password)
+            put("server", server.substringAfter(':', server))
+            put("name", "Strat.1 MT5 account")
+        }
         val request = Request.Builder().url(baseUrl.trimEnd('/') + "/api/mt5/connect").post(payload.toString().toRequestBody("application/json".toMediaType())).build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
