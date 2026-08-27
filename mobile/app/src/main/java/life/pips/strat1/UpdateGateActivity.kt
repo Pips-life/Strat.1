@@ -67,10 +67,10 @@ class UpdateGateActivity : android.app.Activity() {
                 connection.disconnect()
 
                 val versionName = jsonString(body, "versionName") ?: return@thread openApp()
-                val versionCode = jsonNumber(body, "versionCode") ?: 0
+                val versionCode = jsonNumber(body, "versionCode") ?: 0L
                 val assetId = jsonNumber(body, "assetId") ?: return@thread openApp()
                 val releaseUrl = jsonString(body, "releaseUrl") ?: "https://github.com/Pips-life/Strat.1/releases/latest"
-                if (versionCode > BuildConfig.VERSION_CODE || (versionCode == 0 && isNewer(versionName, BuildConfig.VERSION_NAME))) {
+                if (versionCode > BuildConfig.VERSION_CODE.toLong() || (versionCode == 0L && isNewer(versionName, BuildConfig.VERSION_NAME))) {
                     runOnUiThread { showUpdateDialog(versionName, assetId, releaseUrl) }
                 } else openApp()
             } catch (_: Exception) {
@@ -104,7 +104,7 @@ class UpdateGateActivity : android.app.Activity() {
             .setDestinationUri(Uri.fromFile(file))
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
-        val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         downloadId = manager.enqueue(request)
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(downloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
