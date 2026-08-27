@@ -31,7 +31,9 @@ export async function GET() {
 
     const notes = release.body ?? '';
     const versionName = /^Version:\s*([^\r\n]+)/mi.exec(notes)?.[1]?.trim() ?? release.tag_name?.replace(/^v/, '') ?? '';
-    const versionCode = Number(/^VersionCode:\s*(\d+)/mi.exec(notes)?.[1] ?? 0);
+    const noteVersionCode = /^VersionCode:\s*(\d+)/mi.exec(notes)?.[1];
+    const assetVersionCode = /^pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$/i.exec(asset.name ?? '')?.[1];
+    const versionCode = Number(noteVersionCode ?? assetVersionCode ?? 0);
 
     return NextResponse.json({
       tag: release.tag_name ?? '',
