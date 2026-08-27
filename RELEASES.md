@@ -1,4 +1,4 @@
-# Pips-life Android Release System
+# Pips-life numbered Android release system
 
 Pips-life uses numbered Android releases published as GitHub Releases.
 
@@ -6,30 +6,48 @@ Pips-life uses numbered Android releases published as GitHub Releases.
 
 - Release tag: `vMAJOR.MINOR.PATCH`
 - Android `versionName`: same semantic version.
-- Android `versionCode`: derived monotonically from the semantic version for tag-triggered releases (`major * 1,000,000 + minor * 1,000 + patch`).
-- APK asset: `pips-life-<versionName>-<versionCode>.apk`.
-- Each release also publishes `release-manifest.json` containing version, tag, APK name and SHA-256.
+- Android `versionCode`: a monotonically increasing integer stored in `mobile/release.properties`.
+- APK asset: `Pips-life-<versionName>-<versionCode>.apk`.
+- Each release also publishes a SHA-256 checksum and `release-manifest.json`.
+
+`versionCode` is the authoritative update number. Never reuse it.
 
 ## Publishing
 
-Create a tag such as `v0.2.2` and push it. The `mobile-release.yml` workflow then:
+For a normal release:
 
-1. Sets up Java 17 and Android SDK 35.
-2. Verifies the version format.
-3. Stamps the Android version into the release build.
-4. Builds the release APK with Gradle.
-5. Verifies package name, version name and version code.
-6. Calculates the APK SHA-256.
-7. Creates the numbered GitHub Release and uploads the APK plus release manifest.
+1. Update `mobile/release.properties` with the new `versionName` and a higher `versionCode`.
+2. Commit the change.
+3. Push a matching tag such as `v0.2.2`.
+4. The `mobile-release.yml` workflow validates the tag against `release.properties`.
+5. It verifies that the new versionCode is greater than published releases.
+6. It builds a signed release APK.
+7. It verifies package name, app label, version name, version code and APK signature.
+8. It publishes the numbered GitHub Release and its APK/checksum/manifest.
 
-The workflow can also be started manually when a specific version name and version code are required.
+The workflow also supports manual release creation with explicit `version_name` and `version_code` inputs.
+
+## Signing
+
+Production updates must use the same signing certificate every time. The release workflow therefore expects these GitHub repository secrets:
+
+- `PIPSLIFE_KEYSTORE_BASE64`
+- `PIPSLIFE_KEYSTORE_PASSWORD`
+- `PIPSLIFE_KEY_ALIAS`
+- `PIPSLIFE_KEY_PASSWORD`
+
+The keystore is never committed to the repository.
 
 ## In-app updating
 
-Release builds run `PipsLifeApplication` at launch. It checks GitHub's public `releases/latest` endpoint. If the latest semantic version is newer than the installed version and contains an APK asset, Pips-life prompts the user to **DOWNLOAD & INSTALL**. The APK is downloaded through Android's `DownloadManager`, then Android's package installer is opened. Android may require the user to allow Pips-life to install unknown-source updates once.
+Release builds run `PipsLifeApplication` at launch/resume. It checks GitHub's public `releases/latest` endpoint. Drafts and prereleases are ignored.
 
-No MetaApi token, backend secret, broker password, or other server secret is used by the release checker.
+The updater looks for the official `Pips-life-<version>-<versionCode>.apk` asset and compares the release `versionCode` with the installed Android `BuildConfig.VERSION_CODE`.
 
-## First release
+If the release is newer, Pips-life prompts the user to **DOWNLOAD & INSTALL** or **LATER**. The APK is downloaded from the GitHub Release and handed to Android's package installer. Android may require the user to allow Pips-life to install updates from this source once.
 
-The repository currently has no published GitHub Release, so a first numbered release must be published before an installed app can detect an update. The release checker treats GitHub's 404/no-release state as "no update" rather than an app error.
+No MetaApi token, backend secret, broker password, or GitHub credential is shipped in the APK.
+
+## First published release
+
+The repository may have no GitHub Release yet. In that case the updater simply treats the absence of a latest release as "no update". Once the first numbered release is published, installed Pips-life builds can discover later releases automatically.
