@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import life.pips.strat1.data.Mt5PreferenceStore
 import life.pips.strat1.data.Mt5Server
@@ -57,6 +58,7 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
     var password by remember { mutableStateOf("") }
     var serverList by remember { mutableStateOf<List<Mt5Server>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
+    var connecting by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Not connected") }
 
     fun discover() {
@@ -79,9 +81,28 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
         }
     }
 
+    fun connect() {
+        if (broker.isBlank() || serverName.isBlank() || account.isBlank() || password.isBlank()) {
+            status = "Complete broker, server, account and password first"
+            return
+        }
+        connecting = true
+        status = "Validating MT5 credentials…"
+        servers.connect(account, password, serverName) { result ->
+            connecting = false
+            result.onSuccess {
+                store.save(broker, serverName, account)
+                password = ""
+                status = "MT5 connected • ${it.server} • ${it.state}"
+            }.onFailure {
+                status = it.message ?: "MT5 connection failed"
+            }
+        }
+    }
+
     LazyColumn(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("MT5", style = MaterialTheme.typography.headlineSmall) }
-        item { Text("Enter your broker name, then select the exact MT5 server returned by the backend.") }
+        item { Text("Enter your broker name, then select the exact MT5 server returned by the live backend.") }
         item {
             OutlinedTextField(
                 value = broker,
@@ -114,7 +135,7 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
         item {
             OutlinedTextField(
                 value = account,
-                onValueChange = { account = it },
+                onValueChange = { account = it.filter(Char::isDigit) },
                 label = { Text("MT5 account number") },
                 modifier = Modifier.fillMaxWidth()
             )
@@ -124,19 +145,16 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
                 value = password,
                 onValueChange = { password = it },
                 label = { Text("MT5 password") },
+                visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth()
             )
         }
         item {
             Button(
-                onClick = {
-                    store.save(broker, serverName, account)
-                    password = ""
-                    status = "Broker, server and account preference saved. Secure connection endpoint next."
-                },
-                enabled = broker.isNotBlank() && serverName.isNotBlank() && account.isNotBlank(),
+                onClick = ::connect,
+                enabled = !connecting && broker.isNotBlank() && serverName.isNotBlank() && account.isNotBlank() && password.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Save & Connect") }
+            ) { Text(if (connecting) "Connecting…" else "Save & Connect") }
         }
         item { Text("Status: $status") }
     }
