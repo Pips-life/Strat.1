@@ -1,0 +1,6 @@
+import { NextResponse } from 'next/server';
+import { requireMobileSession } from '@/lib/mobileAuth';
+import { deployAccount, undeployAccount } from '@/lib/metaapi';
+import { readAccount } from '@/lib/trading';
+export async function GET(request:Request){ try{ const id=requireMobileSession(request); const a=await readAccount(id); return NextResponse.json({mode:'MT5_CONNECTION_CONTROL',running:a?.state==='DEPLOYED',state:a?.state,connectionStatus:a?.connectionStatus}); }catch(e){ if(e instanceof Response)return e; return NextResponse.json({error:e instanceof Error?e.message:'Unable to read bot state'},{status:502}); } }
+export async function POST(request:Request){ try{ const id=requireMobileSession(request); const body=await request.json(); const action=body?.action; if(action!=='start'&&action!=='stop')return NextResponse.json({error:'action must be start or stop'},{status:400}); const result=action==='start'?await deployAccount(id):await undeployAccount(id); return NextResponse.json({mode:'MT5_CONNECTION_CONTROL',running:action==='start',...result}); }catch(e){ if(e instanceof Response)return e; return NextResponse.json({error:e instanceof Error?e.message:'Unable to change bot state'},{status:502}); } }
