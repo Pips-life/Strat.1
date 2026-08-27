@@ -1,0 +1,5 @@
+import { NextResponse } from 'next/server';
+const control=()=>process.env.PIPSLIFE_BOT_CONTROL_URL;
+export const runtime='nodejs';
+export async function GET(){return NextResponse.json({configured:Boolean(control()),state:'UNKNOWN',strategy:'001',activity:control()?'Strategy 001 runner control online':'Strategy 001 runner control not configured'});}
+export async function POST(request:Request){const url=control();if(!url)return NextResponse.json({configured:false,state:'RUNNER_NOT_CONFIGURED',strategy:'001',error:'PIPSLIFE_BOT_CONTROL_URL is not configured'},{status:503});try{const body=await request.json();const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json',...(process.env.PIPSLIFE_BOT_CONTROL_TOKEN?{authorization:`Bearer ${process.env.PIPSLIFE_BOT_CONTROL_TOKEN}`}:{})},body:JSON.stringify({action:body.action,strategy:'001',accountId:body.accountId})});const data=await r.json().catch(()=>({}));return NextResponse.json(data,{status:r.status})}catch(e){return NextResponse.json({configured:true,state:'ERROR',strategy:'001',error:e instanceof Error?e.message:'Bot control failed'},{status:502})}}
