@@ -40,18 +40,28 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Read mobile version
+        id: version
+        working-directory: mobile
+        run: |
+          echo "version_name=$(sed -n 's/^versionName=//p' release.properties)" >> "$GITHUB_OUTPUT"
+          echo "version_code=$(sed -n 's/^versionCode=//p' release.properties)" >> "$GITHUB_OUTPUT"
+
       - name: Build debug APK
         working-directory: mobile
         run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Verify APK metadata
+        env:
+          EXPECTED_NAME: ${{ steps.version.outputs.version_name }}
+          EXPECTED_CODE: ${{ steps.version.outputs.version_code }}
         run: |
           APK="mobile/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pipslife-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pipslife-badging.txt
-          grep -q "versionCode='3'" /tmp/pipslife-badging.txt
-          grep -q "versionName='0.2.1'" /tmp/pipslife-badging.txt
+          grep -q "versionCode='$EXPECTED_CODE'" /tmp/pipslife-badging.txt
+          grep -q "versionName='$EXPECTED_NAME'" /tmp/pipslife-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pipslife-badging.txt
           grep -q "ic_launcher.xml" /tmp/pipslife-badging.txt
 
@@ -59,7 +69,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Pips-life-0.2.1-3-debug
+          name: Pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}-debug
           path: mobile/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -75,6 +85,7 @@ jobs:
           emulator-boot-timeout: 600
           script: |
             adb install -r mobile/app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm grant life.pipslife.mobile android.permission.POST_NOTIFICATIONS || true
             adb shell monkey -p life.pipslife.mobile 1
             sleep 5
             adb shell pidof life.pipslife.mobile
