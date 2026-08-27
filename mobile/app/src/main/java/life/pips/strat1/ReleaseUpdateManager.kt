@@ -11,10 +11,10 @@ import android.os.Environment
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONArray
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 private const val RELEASES_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases?per_page=20"
 
@@ -29,48 +29,40 @@ data class AppRelease(
 )
 
 class ReleaseUpdateManager(private val context: Context) {
-    private val client = OkHttpClient()
     private var receiver: BroadcastReceiver? = null
 
     init { UpdateNotifications.ensureChannel(context) }
 
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = Request.Builder()
-                .url(RELEASES_URL)
-                .get()
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .header("User-Agent", "Pips-life-Android/${BuildConfig.VERSION_NAME}")
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    val detail = if (response.code == 403 || response.code == 429) "GitHub rate limit" else "HTTP ${response.code}"
-                    error("$detail")
+            val connection = (URL(RELEASES_URL).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 10_000
+                readTimeout = 10_000
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                setRequestProperty("User-Agent", "Pips-life-Android/${BuildConfig.VERSION_NAME}")
+            }
+            try {
+                if (connection.responseCode !in 200..299) {
+                    val detail = if (connection.responseCode == 403 || connection.responseCode == 429) "GitHub rate limit" else "GitHub HTTP ${connection.responseCode}"
+                    error(detail)
                 }
-
-                val releases = JSONArray(body)
+                val releases = JSONArray(connection.inputStream.bufferedReader().use { it.readText() })
                 var best: AppRelease? = null
-
                 for (i in 0 until releases.length()) {
                     val json = releases.getJSONObject(i)
                     if (json.optBoolean("draft") || json.optBoolean("prerelease")) continue
-
                     val assets = json.optJSONArray("assets") ?: continue
                     for (j in 0 until assets.length()) {
                         val asset = assets.getJSONObject(j)
                         val name = asset.optString("name")
-                        val match = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE).matchEntire(name)
-                            ?: continue
+                        val match = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE).matchEntire(name) ?: continue
                         val versionName = match.groupValues[1]
                         val versionCode = match.groupValues[2].toIntOrNull() ?: continue
                         if (versionCode <= BuildConfig.VERSION_CODE) continue
-
                         val downloadUrl = asset.optString("browser_download_url")
                         if (!downloadUrl.startsWith("https://github.com/")) continue
-
                         val candidate = AppRelease(
                             tag = json.optString("tag_name"),
                             name = json.optString("name", "Pips-life update"),
@@ -83,9 +75,10 @@ class ReleaseUpdateManager(private val context: Context) {
                         if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
                     }
                 }
-
                 best?.let { UpdateNotifications.notifyUpdateAvailable(context, it) }
                 best
+            } finally {
+                connection.disconnect()
             }
         }
     }
