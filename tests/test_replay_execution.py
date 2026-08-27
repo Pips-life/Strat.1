@@ -9,29 +9,19 @@ from strat.strategies.base import Signal, Strategy
 
 class OneShotStrategy(Strategy):
     id = "test_one_shot"
-
-    def __init__(self):
-        self.sent = False
-
-    def analyze(self, market):
-        return market
-
+    def __init__(self): self.sent = False
+    def analyze(self, market): return market
     def generate_signal(self, analysis):
-        if self.sent:
-            return Signal("WAIT")
+        if self.sent: return Signal("WAIT")
         self.sent = True
         return Signal("BUY", 100, entry=100, stop_loss=98, take_profit=102)
 
 
 def test_replay_runner_uses_real_strategy_and_fills_target():
     t0 = datetime(2026, 1, 1, 10, 0)
-    bars = [
-        Bar(t0, 100, 101, 99, 100, metadata={"symbol": "XAUUSD"}),
-        Bar(t0 + timedelta(minutes=1), 100, 103, 100, 102, metadata={"symbol": "XAUUSD"}),
-    ]
+    bars = [Bar(t0, 100, 101, 99, 100, metadata={"symbol": "XAUUSD"}), Bar(t0 + timedelta(minutes=1), 100, 103, 100, 102, metadata={"symbol": "XAUUSD"})]
     execution = SimulatedExecution(SimulationConfig())
-    events = ReplayRunner(bars, execution, OneShotStrategy()).run()
-
+    events = ReplayRunner(bars, execution, OneShotStrategy(), account_equity=1000.0).run()
     assert any(e.kind == "SIGNAL" for e in events)
     assert any(e.kind == "ENTRY" for e in events)
     assert any(e.kind == "PROTECTIVE_EXIT" for e in events)
