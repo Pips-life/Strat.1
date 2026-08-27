@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { metaApi } from '@/app/lib/metaapi';
+import { metaApi } from '@/lib/metaapi';
 
 export const runtime = 'nodejs';
 
@@ -18,6 +18,10 @@ async function discover(query: string) {
   return { brokers, metadata: data.metadata ?? null };
 }
 
+async function closeConnection(connection: { close: () => Promise<void> }) {
+  try { await connection.close(); } catch { /* connection cleanup must not mask data */ }
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action');
@@ -26,30 +30,28 @@ export async function GET(request: Request) {
   try {
     if (action === 'status' || action === 'positions') {
       if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
-      const account = await metaApi.metatraderAccountApi.getAccount(accountId);
-      if (action === 'status') {
-        const connection = account.getRPCConnection();
+      const account = await metaApi().then(api => api.metatraderAccountApi.getAccount(accountId));
+      const connection = account.getRPCConnection();
+      try {
         await connection.connect();
         await connection.waitSynchronized();
-        const info = await connection.getAccountInformation();
-        await connection.close();
-        return NextResponse.json({
-          account: { id: account.id, login: account.login, server: account.server, state: account.state, connectionStatus: account.connectionStatus },
-          accountInformation: info,
-          bot: { running: false, controlAvailable: Boolean(process.env.PIPSLIFE_BOT_CONTROL_URL), strategy: '001', activity: 'BACKEND CONNECTED — BOT CONTROL NOT ENABLED' }
-        }, { headers: { 'cache-control': 'no-store' } });
-      }
-      const connection = account.getRPCConnection();
-      await connection.connect();
-      await connection.waitSynchronized();
-      const positions = await connection.getPositions();
-      await connection.close();
-      return NextResponse.json({ positions }, { headers: { 'cache-control': 'no-store' } });
+        if (action === 'status') {
+          const info = await connection.getAccountInformation();
+          const positions = await connection.getPositions();
+          return NextResponse.json({
+            account: { id: account.id, login: account.login, server: account.server, state: account.state, connectionStatus: account.connectionStatus },
+            accountInformation: info,
+            positions,
+            bot: { running: false, controlAvailable: Boolean(process.env.PIPSLIFE_BOT_CONTROL_URL), strategy: '001', activity: process.env.PIPSLIFE_BOT_CONTROL_URL ? 'BACKEND CONNECTED — BOT CONTROL READY' : 'BACKEND CONNECTED — BOT CONTROL SERVICE NOT CONFIGURED' }
+          }, { headers: { 'cache-control': 'no-store' } });
+        }
+        const positions = await connection.getPositions();
+        return NextResponse.json({ positions }, { headers: { 'cache-control': 'no-store' } });
+      } finally { await closeConnection(connection); }
     }
 
     const query = (url.searchParams.get('q') ?? '').trim().toLowerCase();
-    const result = await discover(query);
-    return NextResponse.json(result, { headers: { 'cache-control': 'public, max-age=300, stale-while-revalidate=3600' } });
+    return NextResponse.json(await discover(query), { headers: { 'cache-control': 'public, max-age=300, stale-while-revalidate=3600' } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Backend request failed' }, { status: 502 });
   }
@@ -60,7 +62,11 @@ export async function POST(request: Request) {
   try {
     if (body.action === 'bot') {
       if (!process.env.PIPSLIFE_BOT_CONTROL_URL) return NextResponse.json({ error: 'Bot control service is not configured' }, { status: 503 });
-      const response = await fetch(process.env.PIPSLIFE_BOT_CONTROL_URL, { method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.PIPSLIFE_BOT_CONTROL_TOKEN ? { authorization: `Bearer ${process.env.PIPSLIFE_BOT_CONTROL_TOKEN}` } : {}) }, body: JSON.stringify({ running: body.running, strategy: '001' }) });
+      const response = await fetch(process.env.PIPSLIFE_BOT_CONTROL_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(process.env.PIPSLIFE_BOT_CONTROL_TOKEN ? { authorization: `Bearer ${process.env.PIPSLIFE_BOT_CONTROL_TOKEN}` } : {}) },
+        body: JSON.stringify({ running: body.running === true, strategy: '001' })
+      });
       const data = await response.json().catch(() => ({}));
       return NextResponse.json(data, { status: response.status });
     }
@@ -71,7 +77,18 @@ export async function POST(request: Request) {
     if (!login || !password || !server) return NextResponse.json({ error: 'login, password and server are required' }, { status: 400 });
     if (!/^\d+$/.test(login)) return NextResponse.json({ error: 'MT5 login must contain digits only' }, { status: 400 });
 
-    const account = await metaApi.metatraderAccountApi.createAccount({ login, password, name: body.name?.trim() || `Pips-life MT5 ${login}`, server, platform: 'mt5', magic: 1001, type: 'cloud-g2', reliability: 'high', quoteStreamingIntervalInSeconds: 2.5, tags: ['pips-life', 'strategy-001'] });
+    const api = await metaApi();
+    const accounts = await api.metatraderAccountApi.getAccountsWithInfiniteScrollPagination({ limit: 100, offset: 0, query: login });
+    const existing = accounts.find(candidate => String(candidate.login) === login && candidate.server === server);
+    const account = existing ?? await api.metatraderAccountApi.createAccount({
+      login, password, name: body.name?.trim() || `Pips-life MT5 ${login}`, server,
+      platform: 'mt5', magic: 1001, type: 'cloud-g2', reliability: 'high',
+      quoteStreamingIntervalInSeconds: 2.5, tags: ['pips-life', 'strategy-001']
+    });
+
+    if (existing) {
+      await account.update({ password, name: body.name?.trim() || `Pips-life MT5 ${login}`, server, quoteStreamingIntervalInSeconds: 2.5 });
+    }
     if (account.state !== 'DEPLOYED') await account.deploy();
     return NextResponse.json({ accountId: account.id, state: account.state, connectionStatus: account.connectionStatus, server: account.server, login: account.login });
   } catch (error) {
