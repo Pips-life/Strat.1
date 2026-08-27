@@ -89,3 +89,5 @@ jobs:
             adb shell monkey -p life.pipslife.mobile 1
             sleep 5
             adb shell pidof life.pipslife.mobile
+
+      # Keep this workflow file in the release-gate path so CI-only release fixes can be verified.
