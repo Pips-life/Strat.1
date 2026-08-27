@@ -23,12 +23,19 @@ import java.net.URL
 class PipsLifeApplication : Application() {
     private val handler = Handler(Looper.getMainLooper())
     private var updateReceiver: BroadcastReceiver? = null
+    private var lastCheckAt = 0L
 
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(activity: Activity) {
-                if (activity is MainActivity) handler.postDelayed({ checkForUpdate(activity) }, 1200L)
+                if (activity is MainActivity) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastCheckAt >= CHECK_INTERVAL_MS) {
+                        lastCheckAt = now
+                        handler.postDelayed({ checkForUpdate(activity) }, 1200L)
+                    }
+                }
             }
             override fun onActivityPaused(a: Activity) = Unit
             override fun onActivityCreated(a: Activity, s: android.os.Bundle?) = Unit
@@ -48,12 +55,14 @@ class PipsLifeApplication : Application() {
             if (prefs.getInt(LAST_PROMPTED_CODE, -1) == release.versionCode) return@Thread
             handler.post {
                 if (activity.isFinishing || activity.isDestroyed) return@post
-                prefs.edit().putInt(LAST_PROMPTED_CODE, release.versionCode).apply()
                 AlertDialog.Builder(activity)
                     .setTitle("Pips-life update available")
                     .setMessage("Pips-life ${release.versionName} (build ${release.versionCode}) is available. You are running ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE}).")
                     .setNegativeButton("LATER", null)
-                    .setPositiveButton("DOWNLOAD & INSTALL") { _, _ -> downloadAndInstall(activity, release) }
+                    .setPositiveButton("DOWNLOAD & INSTALL") { _, _ ->
+                        prefs.edit().putInt(LAST_PROMPTED_CODE, release.versionCode).apply()
+                        downloadAndInstall(activity, release)
+                    }
                     .show()
             }
         }.start()
@@ -89,6 +98,7 @@ class PipsLifeApplication : Application() {
 
     private fun downloadAndInstall(activity: Activity, release: ReleaseInfo) {
         val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        updateReceiver?.let { runCatching { unregisterReceiver(it) } }
         val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
         val request = DownloadManager.Request(Uri.parse(release.apkUrl))
             .setTitle("Pips-life ${release.versionName}")
@@ -99,8 +109,6 @@ class PipsLifeApplication : Application() {
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
         val downloadId = manager.enqueue(request)
-
-        updateReceiver?.let { runCatching { unregisterReceiver(it) } }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != downloadId) return
@@ -146,9 +154,10 @@ class PipsLifeApplication : Application() {
     private data class ReleaseInfo(val versionName: String, val versionCode: Int, val apkUrl: String)
 
     companion object {
-        private val APK_NAME = Regex("pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE)
+        private val APK_NAME = Regex("Pips-life-(\\d+\\.\\d+\\.\\d+)-(\\d+)\\.apk", RegexOption.IGNORE_CASE)
         private const val LATEST_RELEASE_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
         private const val PREFS = "pips_life_updates"
         private const val LAST_PROMPTED_CODE = "last_prompted_version_code"
+        private const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
     }
 }
