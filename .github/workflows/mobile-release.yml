@@ -92,10 +92,7 @@ jobs:
           test -n "$KEY_PASSWORD" || { echo 'Missing PIPS_LIFE_KEY_PASSWORD'; exit 1; }
           echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.keystore"
           test -s "$RUNNER_TEMP/pips-life-release.keystore"
-          echo "PIPSLIFE_KEYSTORE_FILE=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
-          echo "PIPSLIFE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "PIPSLIFE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
-          echo "PIPSLIFE_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "PIPS_LIFE_KEYSTORE_PATH=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
 
       - name: Check Android project
         working-directory: mobile
@@ -108,6 +105,11 @@ jobs:
 
       - name: Build signed release APK
         working-directory: mobile
+        env:
+          PIPS_LIFE_KEYSTORE_PATH: ${{ env.PIPS_LIFE_KEYSTORE_PATH }}
+          PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: gradle --no-daemon clean assembleRelease --stacktrace
 
       - name: Locate and verify APK
