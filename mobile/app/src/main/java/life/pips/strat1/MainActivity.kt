@@ -133,13 +133,18 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
                     scope.launch {
                         busy = false
                         result.onSuccess { connection ->
-                            context.preferencesDataStore.edit { prefs ->
-                                prefs[PreferenceKeys.BROKER] = selected.brokerName
-                                prefs[PreferenceKeys.SERVER] = selected.id
-                                prefs[PreferenceKeys.ACCOUNT] = account.trim()
+                            if (connection.state == "PROCESSING") {
+                                status = connection.message ?: "MetaApi is still validating the account. Please try again shortly."
+                                password = ""
+                            } else {
+                                context.preferencesDataStore.edit { prefs ->
+                                    prefs[PreferenceKeys.BROKER] = selected.brokerName
+                                    prefs[PreferenceKeys.SERVER] = selected.id
+                                    prefs[PreferenceKeys.ACCOUNT] = account.trim()
+                                }
+                                password = ""
+                                status = "MT5 account: ${connection.state}"
                             }
-                            password = ""
-                            status = "Connected: ${connection.state}"
                         }.onFailure { status = "MT5 connection failed: ${it.message ?: "unknown error"}" }
                     }
                 }
