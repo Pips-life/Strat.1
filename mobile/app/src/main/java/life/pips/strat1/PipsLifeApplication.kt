@@ -1,8 +1,8 @@
 package life.pips.strat1
 
 import android.app.Activity
-import android.app.Application
 import android.app.AlertDialog
+import android.app.Application
 import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -21,22 +21,18 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Checks the public GitHub Releases feed. Secrets are never embedded in the APK. */
+/** Checks the public GitHub Releases feed. No secrets are embedded in the APK. */
 class PipsLifeApplication : Application() {
-    private var resumedActivity: Activity? = null
-    private var receiverRegistered = false
     private val handler = Handler(Looper.getMainLooper())
+    private var updateReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(activity: Activity) {
-                resumedActivity = activity
-                if (activity is MainActivity) {
-                    handler.postDelayed({ checkForUpdate(activity) }, 1200)
-                }
+                if (activity is MainActivity) handler.postDelayed({ checkForUpdate(activity) }, 1200)
             }
-            override fun onActivityPaused(activity: Activity) { if (resumedActivity === activity) resumedActivity = null }
+            override fun onActivityPaused(activity: Activity) = Unit
             override fun onActivityCreated(a: Activity, s: android.os.Bundle?) = Unit
             override fun onActivityStarted(a: Activity) = Unit
             override fun onActivityStopped(a: Activity) = Unit
@@ -50,16 +46,16 @@ class PipsLifeApplication : Application() {
         Thread {
             val release = runCatching { fetchLatestRelease() }.getOrNull() ?: return@Thread
             val latest = release.version ?: return@Thread
-            if (!isNewer(latest, BuildConfig.VERSION_NAME)) return@Thread
             val apk = release.apkUrl ?: return@Thread
-            val lastPrompted = getSharedPreferences(PREFS, MODE_PRIVATE).getString(LAST_PROMPTED, null)
-            if (lastPrompted == latest) return@Thread
+            if (!isNewer(latest, BuildConfig.VERSION_NAME)) return@Thread
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (prefs.getString(LAST_PROMPTED, null) == latest) return@Thread
             handler.post {
                 if (activity.isFinishing || activity.isDestroyed) return@post
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(LAST_PROMPTED, latest).apply()
+                prefs.edit().putString(LAST_PROMPTED, latest).apply()
                 AlertDialog.Builder(activity)
                     .setTitle("Pips-life update available")
-                    .setMessage("Pips-life ${latest} is available. Your current version is ${BuildConfig.VERSION_NAME}. Download the new APK from GitHub?")
+                    .setMessage("Pips-life $latest is available. You are running ${BuildConfig.VERSION_NAME}. Download and install the GitHub release?")
                     .setNegativeButton("LATER", null)
                     .setPositiveButton("DOWNLOAD & INSTALL") { _, _ -> downloadAndInstall(activity, latest, apk) }
                     .show()
@@ -68,31 +64,33 @@ class PipsLifeApplication : Application() {
     }
 
     private fun fetchLatestRelease(): ReleaseInfo {
-        val connection = (URL(LATEST_RELEASE_URL).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 8000
-            readTimeout = 8000
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
-        }
-        return connection.use {
-            if (it.responseCode !in 200..299) error("GitHub releases request failed: ${it.responseCode}")
-            val json = JSONObject(it.inputStream.bufferedReader().use { r -> r.readText() })
+        val connection = URL(LATEST_RELEASE_URL).openConnection() as HttpURLConnection
+        return try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 8000
+            connection.readTimeout = 8000
+            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.setRequestProperty("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+            if (connection.responseCode !in 200..299) error("GitHub releases request failed: ${connection.responseCode}")
+            val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             val tag = json.optString("tag_name").removePrefix("v")
-            val assets = json.optJSONArray("assets") ?: return@use ReleaseInfo(null, null)
+            val assets = json.optJSONArray("assets") ?: return ReleaseInfo(null, null)
             var apk: String? = null
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
                 if (asset.optString("name").endsWith(".apk", true)) {
-                    apk = asset.optString("browser_download_url").takeIf { u -> u.startsWith("https://github.com/") }
-                    break
+                    apk = asset.optString("browser_download_url").takeIf { it.startsWith("https://github.com/") }
+                    if (apk != null) break
                 }
             }
             ReleaseInfo(tag.takeIf { it.isNotBlank() }, apk)
+        } finally {
+            connection.disconnect()
         }
     }
 
     private fun downloadAndInstall(activity: Activity, version: String, apkUrl: String) {
+        val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
         val request = DownloadManager.Request(Uri.parse(apkUrl))
             .setTitle("Pips-life $version")
             .setDescription("Downloading Pips-life update")
@@ -101,24 +99,22 @@ class PipsLifeApplication : Application() {
             .setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "Pips-life-$version.apk")
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
-
-        val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = manager.enqueue(request)
 
-        if (!receiverRegistered) {
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
-                    val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-                    if (id != downloadId) return
-                    openDownloadedApk(activity, manager, id)
-                }
+        updateReceiver?.let { runCatching { unregisterReceiver(it) } }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+                if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != downloadId) return
+                runCatching { unregisterReceiver(this) }
+                updateReceiver = null
+                openDownloadedApk(activity, manager, downloadId)
             }
-            val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
-            else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
-            receiverRegistered = true
         }
+        updateReceiver = receiver
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+        else @Suppress("DEPRECATION") registerReceiver(receiver, filter)
         Toast.makeText(this, "Pips-life update downloading…", Toast.LENGTH_LONG).show()
     }
 
@@ -133,15 +129,14 @@ class PipsLifeApplication : Application() {
             }
             val uri = manager.getUriForDownloadedFile(id) ?: return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-                Toast.makeText(this, "Allow Pips-life to install updates, then open the downloaded APK.", Toast.LENGTH_LONG).show()
-                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                Toast.makeText(this, "Allow Pips-life to install updates, then tap the downloaded APK.", Toast.LENGTH_LONG).show()
+                activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 return
             }
-            val install = Intent(Intent.ACTION_VIEW).apply {
+            activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            activity.startActivity(install)
+            })
         }
     }
 
