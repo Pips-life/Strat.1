@@ -14,7 +14,7 @@ class OneShotStrategy(Strategy):
     def generate_signal(self, analysis):
         if self.sent: return Signal("WAIT")
         self.sent = True
-        return Signal("BUY", 100, entry=100, stop_loss=98, take_profit=102)
+        return Signal("BUY", 100, entry=100, stop_loss=98, take_profit=103)
 
 
 def test_replay_runner_uses_real_strategy_and_fills_target():
