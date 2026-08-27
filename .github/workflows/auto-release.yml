@@ -4,9 +4,11 @@ on:
   workflow_run:
     workflows: ["Pips-life Android"]
     types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: pips-life-auto-release
@@ -14,114 +16,77 @@ concurrency:
 
 jobs:
   prepare-release:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Validate triggering Android build
-        id: eligibility
+        if: github.event_name == 'workflow_run'
         env:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
-        shell: bash
         run: |
           set -euo pipefail
-          if [[ "$HEAD_BRANCH" != "main" ]]; then
-            echo "eligible=false" >> "$GITHUB_OUTPUT"
-            echo "Successful Android build was on '$HEAD_BRANCH', not main; skipping release."
-            exit 0
-          fi
-          if [[ "$HEAD_MESSAGE" == chore\(release\):\ prepare* ]]; then
-            echo "eligible=false" >> "$GITHUB_OUTPUT"
-            echo "Release-preparation commit detected; skipping recursive release."
-            exit 0
-          fi
-          echo "eligible=true" >> "$GITHUB_OUTPUT"
-          echo "Eligible successful Android build on main."
+          test "$HEAD_BRANCH" = "main"
+          case "$HEAD_MESSAGE" in
+            "chore(release): prepare"*) exit 1 ;;
+          esac
 
       - name: Checkout main
-        if: steps.eligibility.outputs.eligible == 'true'
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
       - name: Determine next release number
-        if: steps.eligibility.outputs.eligible == 'true'
         id: next
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
           latest_tag="$(git tag --list 'v*.*.*' --sort=-version:refname | head -n1 || true)"
-          if [[ -n "$latest_tag" ]]; then
-            latest_version="${latest_tag#v}"
-          else
-            latest_version="0.2.2"
-          fi
-
+          latest_version="${latest_tag#v}"
+          [[ -n "$latest_version" ]] || latest_version="0.2.2"
           IFS=. read -r major minor patch <<< "$latest_version"
           next_version="$major.$minor.$((patch + 1))"
-
           latest_code="$(python3 - <<'PY'
           import json, re, subprocess
-          rows = json.loads(subprocess.check_output(
-              ['gh', 'release', 'list', '--limit', '100', '--json', 'tagName'],
-              text=True,
-          ))
-          codes = []
+          rows=json.loads(subprocess.check_output(['gh','release','list','--limit','100','--json','tagName'],text=True))
+          codes=[]
           for row in rows:
-              tag = row.get('tagName')
-              if not tag:
-                  continue
+              tag=row.get('tagName')
+              if not tag: continue
               try:
-                  assets = json.loads(subprocess.check_output(
-                      ['gh', 'release', 'view', tag, '--json', 'assets'],
-                      text=True,
-                  )).get('assets', [])
+                  assets=json.loads(subprocess.check_output(['gh','release','view',tag,'--json','assets'],text=True)).get('assets',[])
               except subprocess.CalledProcessError:
                   continue
               for asset in assets:
-                  name = asset.get('name', '')
-                  match = re.search(
-                      r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$',
-                      name,
-                  )
-                  if match:
-                      codes.append(int(match.group(1)))
+                  m=re.search(r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$',asset.get('name',''))
+                  if m: codes.append(int(m.group(1)))
           print(max(codes) if codes else 4)
           PY
           )"
-
           next_code=$((latest_code + 1))
           echo "version=$next_version" >> "$GITHUB_OUTPUT"
           echo "code=$next_code" >> "$GITHUB_OUTPUT"
-          echo "Next release: $next_version ($next_code)"
 
       - name: Prevent duplicate release tag
-        if: steps.eligibility.outputs.eligible == 'true'
         id: guard
-        shell: bash
         run: |
           set -euo pipefail
           tag="v${{ steps.next.outputs.version }}"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "already_released=true" >> "$GITHUB_OUTPUT"
-            echo "$tag already exists; release preparation is skipped."
           else
             echo "already_released=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Update release properties
-        if: steps.eligibility.outputs.eligible == 'true' && steps.guard.outputs.already_released != 'true'
-        run: |
-          printf 'versionName=%s\nversionCode=%s\n' \
-            "${{ steps.next.outputs.version }}" \
-            "${{ steps.next.outputs.code }}" > mobile/release.properties
+        if: steps.guard.outputs.already_released != 'true'
+        run: printf 'versionName=%s\nversionCode=%s\n' '${{ steps.next.outputs.version }}' '${{ steps.next.outputs.code }}' > mobile/release.properties
 
       - name: Commit release version
-        if: steps.eligibility.outputs.eligible == 'true' && steps.guard.outputs.already_released != 'true'
+        if: steps.guard.outputs.already_released != 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -132,16 +97,23 @@ jobs:
           git push origin main
 
       - name: Create numbered release tag
-        if: steps.eligibility.outputs.eligible == 'true' && steps.guard.outputs.already_released != 'true'
+        if: steps.guard.outputs.already_released != 'true'
         run: |
           set -euo pipefail
           git fetch --tags --force origin
           git pull --ff-only origin main
           tag="v${{ steps.next.outputs.version }}"
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "Tag $tag already exists; nothing to do."
-            exit 0
-          fi
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then exit 0; fi
           git tag "$tag"
           git push origin "$tag"
-          echo "Created and pushed $tag."
+
+      - name: Dispatch signed release workflow
+        if: steps.guard.outputs.already_released != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run mobile-release.yml \
+            --ref "v${{ steps.next.outputs.version }}" \
+            -f version_name="${{ steps.next.outputs.version }}" \
+            -f version_code="${{ steps.next.outputs.code }}"
