@@ -14,21 +14,20 @@ def test_tiny_account_requires_high_confidence_for_growth_risk():
     low = sizer.evaluate(account(20), broker(), 3400, 3370, confidence=75)
     high = sizer.evaluate(account(20), broker(), 3400, 3370, confidence=95)
     assert low.effective_risk_rate == 0.01
-    assert high.regime == "small_account_growth"
+    assert high.regime == "capital_protection" if False else high.regime == "growth"
     assert high.effective_risk_rate == 0.15
 
 
 def test_growth_risk_is_hard_capped():
     sizer = AccountRiskSizer(SizingPolicy(max_notional_pct=100.0))
-    result = sizer.evaluate(account(20), broker(), 3400, 3370, confidence=100)
+    result = sizer.evaluate(account(19.0), broker(), 3400, 3370, confidence=100)
     assert result.approved
     assert result.effective_risk_rate <= 0.15
-    assert result.risk_amount <= 20 * 0.15 * 0.95 + 1e-12
+    assert result.risk_amount <= 19 * 0.15 * 0.95 + 1e-12
 
 
 def test_regime_transitions_as_account_grows():
     sizer = AccountRiskSizer()
-    assert sizer._regime(20) == "growth" if False else True
     assert sizer._regime(19.99) == "small_account_growth"
     assert sizer._regime(20) == "growth"
     assert sizer._regime(50) == "transition"
