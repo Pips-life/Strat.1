@@ -90,4 +90,4 @@ jobs:
             sleep 5
             adb shell pidof life.pipslife.mobile
 
-      # Keep this workflow file in the release-gate path so CI-only release fixes can be verified.
+      # This workflow is the Android release gate for automatic numbered releases.
