@@ -1,6 +1,6 @@
 """Strategy-independent risk controls for replay, demo, and live trading.
 
-The risk engine is deliberately broker- and strategy-neutral.  It approves or
+The risk engine is deliberately broker- and strategy-neutral. It approves or
 rejects a proposed trade, calculates a risk-based quantity, tracks daily risk
 state, and enforces the project's low-equity/intraday guardrails.
 """
@@ -20,6 +20,10 @@ class RiskLimits:
     """
 
     risk_per_trade: float = 0.01
+    # Never use 100% of the nominal risk budget for the minimum executable
+    # quantity. This small reserve makes low-equity accounts safer while still
+    # allowing the smallest broker-supported size whenever it fits comfortably.
+    risk_budget_utilization: float = 0.95
     max_positions: int = 1
     max_daily_loss: float = 0.03
     max_trades_per_day: int = 5
@@ -106,15 +110,20 @@ class RiskEngine:
     ) -> float:
         """Calculate quantity from account equity and stop distance.
 
-        Quantity is rounded down to the configured broker quantity step so the
-        requested risk can never be exceeded by rounding up.
+        The configured risk-budget utilization leaves a small reserve so a
+        broker minimum cannot consume the entire per-trade risk allowance.
+        Quantity is rounded down to the configured broker step, so rounding
+        can never increase requested risk.
         """
         if equity <= 0 or point_value <= 0:
             return 0.0
         stop_distance = abs(entry - stop_loss)
         if stop_distance <= 0:
             return 0.0
-        risk_budget = equity * self.limits.risk_per_trade
+        utilization = self.limits.risk_budget_utilization
+        if not 0 < utilization <= 1:
+            return 0.0
+        risk_budget = equity * self.limits.risk_per_trade * utilization
         raw = risk_budget / (stop_distance * point_value)
         step = self.limits.quantity_step
         quantity = floor(raw / step) * step
