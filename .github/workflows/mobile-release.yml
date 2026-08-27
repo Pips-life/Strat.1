@@ -153,8 +153,7 @@ jobs:
             "$NAME.sha256" \
             release-manifest.json \
             --title "Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})" \
-            --notes "Version: ${{ steps.version.outputs.version_name }}\nVersionCode: ${{ steps.version.outputs.version_code }}\n\nOfficial Pips-life Android release. The app checks this GitHub Releases feed for newer versions." \
-            --target "v${{ steps.version.outputs.version_name }}"
+            --notes "Version: ${{ steps.version.outputs.version_name }}\nVersionCode: ${{ steps.version.outputs.version_code }}\n\nOfficial Pips-life Android release. The app checks this GitHub Releases feed for newer versions."
 
       - name: Verify published release
         env:
