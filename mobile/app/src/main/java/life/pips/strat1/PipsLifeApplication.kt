@@ -48,7 +48,7 @@ class PipsLifeApplication : Application() {
 
     private fun checkForUpdate(activity: Activity) {
         if (activity.isFinishing || activity.isDestroyed) return
-        Thread(name = "pips-life-release-check") {
+        Thread({
             val release = runCatching { fetchLatestRelease() }.getOrNull() ?: return@Thread
             if (release.versionCode <= BuildConfig.VERSION_CODE || release.apkUrl.isNullOrBlank()) return@Thread
             val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -65,7 +65,7 @@ class PipsLifeApplication : Application() {
                     }
                     .show()
             }
-        }.start()
+        }, "pips-life-release-check").start()
     }
 
     private fun fetchLatestRelease(): ReleaseInfo {
@@ -97,7 +97,7 @@ class PipsLifeApplication : Application() {
     }
 
     private fun downloadAndInstall(activity: Activity, release: ReleaseInfo) {
-        val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         updateReceiver?.let { runCatching { unregisterReceiver(it) } }
         val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
         val request = DownloadManager.Request(Uri.parse(release.apkUrl))
