@@ -18,7 +18,11 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import life.pips.strat1.data.Mt5ApiClient
 import life.pips.strat1.data.Mt5Server
-import kotlinx.coroutines.flow.first
+import life.pips.strat1.network.BackendDefaults
+import life.pips.strat1.network.BackendDiscovery
+import life.pips.strat1.network.BackendEndpoint
+import life.pips.strat1.network.BackendPreferenceStore
+import life.pips.strat1.ui.theme.Strat1Theme
 import kotlinx.coroutines.launch
 
 private val Context.preferencesDataStore by preferencesDataStore("strat1_preferences")
@@ -26,20 +30,20 @@ private val Context.preferencesDataStore by preferencesDataStore("strat1_prefere
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { Strat1App(applicationContext) }
+        setContent { Strat1Theme { Strat1App(applicationContext) } }
     }
 }
 
 @Composable
 private fun Strat1App(context: Context) {
     var tab by remember { mutableStateOf(0) }
-    val labels = listOf("Dashboard", "MT5", "Settings")
+    val labels = listOf("Dashboard", "MT5", "Backend", "Settings")
     Scaffold(bottomBar = {
         NavigationBar { labels.forEachIndexed { index, label ->
             NavigationBarItem(
                 selected = tab == index,
                 onClick = { tab = index },
-                icon = { Text(if (index == 0) "⌂" else if (index == 1) "M" else "⚙") },
+                icon = { Text(if (index == 0) "⌂" else if (index == 1) "M" else if (index == 2) "B" else "⚙") },
                 label = { Text(label) }
             )
         } }
@@ -47,6 +51,7 @@ private fun Strat1App(context: Context) {
         when (tab) {
             0 -> DashboardScreen(Modifier.padding(padding))
             1 -> Mt5Screen(context, Modifier.padding(padding))
+            2 -> BackendScreen(context, Modifier.padding(padding))
             else -> SettingsScreen(Modifier.padding(padding))
         }
     }
@@ -54,13 +59,102 @@ private fun Strat1App(context: Context) {
 
 @Composable
 private fun DashboardScreen(modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().padding(20.dp)) {
+    Column(modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Strat.1", style = MaterialTheme.typography.headlineMedium)
         Text("Strategy 001 control center", style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(20.dp))
         Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) {
             Text("Backend", style = MaterialTheme.typography.titleMedium)
-            Text("MT5 connection is managed securely by the backend.")
+            Text("Connect the app to the Strat.1 backend before using live account features.")
+        } }
+    }
+}
+
+@Composable
+private fun BackendScreen(context: Context, modifier: Modifier = Modifier) {
+    val scope = rememberCoroutineScope()
+    val discovery = remember { BackendDiscovery() }
+    val preferences = remember { BackendPreferenceStore(context) }
+    var endpoint by remember { mutableStateOf(preferences.baseUrl) }
+    var status by remember { mutableStateOf(if (endpoint.isBlank()) "Not connected" else "Saved backend: $endpoint") }
+    var busy by remember { mutableStateOf(false) }
+    var manualEndpoint by remember { mutableStateOf(endpoint) }
+
+    LaunchedEffect(Unit) {
+        if (endpoint.isBlank()) {
+            status = "Searching for a compatible Strat.1 backend…"
+            busy = true
+            val found = discovery.discover(BackendDefaults.candidates)
+            busy = false
+            if (found != null) {
+                endpoint = found.baseUrl
+                manualEndpoint = found.baseUrl
+                preferences.save(found)
+                status = "Connected: ${found.baseUrl}"
+            } else {
+                status = "No backend found. You can enter an endpoint manually."
+            }
+        } else {
+            val saved = BackendEndpoint(endpoint)
+            val healthy = discovery.check(saved)
+            status = if (healthy) "Connected: $endpoint" else "Saved backend is unavailable: $endpoint"
+        }
+    }
+
+    Column(modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Backend", style = MaterialTheme.typography.headlineSmall)
+        Text("The app discovers a compatible backend by calling /api/health. No MetaApi secret is stored in the APK.")
+
+        OutlinedTextField(
+            value = manualEndpoint,
+            onValueChange = { manualEndpoint = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Backend URL") },
+            singleLine = true,
+            placeholder = { Text("https://your-backend.example.com") }
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(enabled = !busy, onClick = {
+                scope.launch {
+                    busy = true
+                    status = "Discovering backend…"
+                    val found = discovery.discover(BackendDefaults.candidates)
+                    busy = false
+                    if (found != null) {
+                        endpoint = found.baseUrl
+                        manualEndpoint = found.baseUrl
+                        preferences.save(found)
+                        status = "Connected: ${found.baseUrl}"
+                    } else status = "No compatible backend discovered."
+                }
+            }) { Text(if (busy) "Checking…" else "Discover") }
+
+            Button(enabled = !busy && manualEndpoint.isNotBlank(), onClick = {
+                scope.launch {
+                    busy = true
+                    status = "Testing backend…"
+                    val candidate = BackendEndpoint(manualEndpoint.trim().removeSuffix("/"))
+                    val healthy = discovery.check(candidate)
+                    busy = false
+                    if (healthy) {
+                        endpoint = candidate.baseUrl
+                        preferences.save(candidate)
+                        status = "Connected: ${candidate.baseUrl}"
+                    } else status = "Backend health check failed."
+                }
+            }) { Text("Connect") }
+        }
+
+        OutlinedButton(enabled = endpoint.isNotBlank(), onClick = {
+            preferences.clear()
+            endpoint = ""
+            manualEndpoint = ""
+            status = "Backend disconnected and saved endpoint cleared."
+        }) { Text("Disconnect") }
+
+        Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) {
+            Text("Connection status", style = MaterialTheme.typography.titleMedium)
+            Text(status)
         } }
     }
 }
@@ -90,9 +184,7 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
             Text("MT5 Account", style = MaterialTheme.typography.headlineSmall)
             Text("Search the live MetaApi server directory, select the exact server, then connect.")
         }
-        item {
-            OutlinedTextField(broker, { broker = it }, Modifier.fillMaxWidth(), label = { Text("Broker name") }, singleLine = true)
-        }
+        item { OutlinedTextField(broker, { broker = it }, Modifier.fillMaxWidth(), label = { Text("Broker name") }, singleLine = true) }
         item {
             Button(enabled = broker.trim().length >= 2 && !busy, onClick = {
                 busy = true
@@ -100,10 +192,8 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
                 api.searchServers(broker) { result ->
                     scope.launch {
                         busy = false
-                        result.onSuccess { matches ->
-                            serverList = matches
-                            status = if (matches.isEmpty()) "No known servers found. Try the broker's exact name." else "Select the server matching your MT5 account."
-                        }.onFailure { status = "Server discovery failed: ${it.message ?: "network error"}" }
+                        result.onSuccess { matches -> serverList = matches; status = if (matches.isEmpty()) "No known servers found." else "Select the server matching your MT5 account." }
+                            .onFailure { status = "Server discovery failed: ${it.message ?: "network error"}" }
                     }
                 }
             }) { Text(if (busy) "Searching…" else "Find servers") }
@@ -118,10 +208,7 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
                 }
             }
         }
-        item {
-            val selectedName = serverList.firstOrNull { it.id == selectedServer }?.serverName.orEmpty()
-            OutlinedTextField(selectedName, {}, Modifier.fillMaxWidth(), label = { Text("Selected server") }, readOnly = true, singleLine = true)
-        }
+        item { OutlinedTextField(serverList.firstOrNull { it.id == selectedServer }?.serverName.orEmpty(), {}, Modifier.fillMaxWidth(), label = { Text("Selected server") }, readOnly = true, singleLine = true) }
         item { OutlinedTextField(account, { account = it }, Modifier.fillMaxWidth(), label = { Text("MT5 account number") }, singleLine = true) }
         item { OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("MT5 password") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) }
         item {
@@ -133,17 +220,12 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
                     scope.launch {
                         busy = false
                         result.onSuccess { connection ->
-                            if (connection.state == "PROCESSING") {
-                                status = connection.message ?: "MetaApi is still validating the account. Please try again shortly."
-                                password = ""
-                            } else {
-                                context.preferencesDataStore.edit { prefs ->
-                                    prefs[PreferenceKeys.BROKER] = selected.brokerName
-                                    prefs[PreferenceKeys.SERVER] = selected.id
-                                    prefs[PreferenceKeys.ACCOUNT] = account.trim()
-                                }
-                                password = ""
-                                status = "MT5 account: ${connection.state}"
+                            password = ""
+                            status = "MT5 account: ${connection.state}"
+                            if (connection.state != "PROCESSING") context.preferencesDataStore.edit { prefs ->
+                                prefs[PreferenceKeys.BROKER] = selected.brokerName
+                                prefs[PreferenceKeys.SERVER] = selected.id
+                                prefs[PreferenceKeys.ACCOUNT] = account.trim()
                             }
                         }.onFailure { status = "MT5 connection failed: ${it.message ?: "unknown error"}" }
                     }
@@ -151,7 +233,7 @@ private fun Mt5Screen(context: Context, modifier: Modifier = Modifier) {
             }) { Text(if (busy) "Connecting…" else "Connect MT5") }
         }
         item { Text(status) }
-        item { Text("The password is not saved in the app preferences.", style = MaterialTheme.typography.bodySmall) }
+        item { Text("The password is not saved in app preferences.", style = MaterialTheme.typography.bodySmall) }
     }
 }
 
