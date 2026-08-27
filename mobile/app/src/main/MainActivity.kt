@@ -13,14 +13,13 @@ import androidx.compose.ui.unit.dp
 import life.pips.strat1.data.Mt5PreferenceStore
 import life.pips.strat1.data.Mt5Server
 import life.pips.strat1.data.Mt5ServerRepository
-import life.pips.strat1.ui.theme.Strat1Theme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val store = Mt5PreferenceStore(this)
         val servers = Mt5ServerRepository()
-        setContent { Strat1Theme { Strat1App(store, servers) } }
+        setContent { MaterialTheme { Strat1App(store, servers) } }
     }
 }
 
