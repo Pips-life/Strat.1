@@ -9,6 +9,12 @@ on:
 permissions:
   contents: write
 
+env:
+  PIPS_LIFE_KEYSTORE_PATH: ${{ github.workspace }}/mobile/.release-key.jks
+  PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+  PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+  PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+
 jobs:
   build-release:
     runs-on: ubuntu-latest
@@ -35,12 +41,22 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Prepare release signing key
+        shell: bash
+        run: |
+          test -n "$PIPS_LIFE_KEYSTORE_PASSWORD" || { echo "Missing GitHub secret PIPS_LIFE_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$PIPS_LIFE_KEY_ALIAS" || { echo "Missing GitHub secret PIPS_LIFE_KEY_ALIAS"; exit 1; }
+          test -n "$PIPS_LIFE_KEY_PASSWORD" || { echo "Missing GitHub secret PIPS_LIFE_KEY_PASSWORD"; exit 1; }
+          test -n "${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}" || { echo "Missing GitHub secret PIPS_LIFE_KEYSTORE_BASE64"; exit 1; }
+          printf '%s' '${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}' | base64 --decode > "$PIPS_LIFE_KEYSTORE_PATH"
+          test -s "$PIPS_LIFE_KEYSTORE_PATH"
+
       - name: Read and validate release numbering
         shell: bash
         working-directory: mobile
         run: |
           VERSION_NAME=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)
-          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -1)
+          VERSION_CODE=$(sed -n 's/.*versionCode = \([0-9][0-9]*\).*/\1/p' release.properties | head -1)
           test -n "$VERSION_NAME"
           test -n "$VERSION_CODE"
           if [[ "$GITHUB_REF_NAME" == v* ]]; then
@@ -50,11 +66,11 @@ jobs:
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
 
-      - name: Build release APK
+      - name: Build signed release APK
         working-directory: mobile
         run: gradle --no-daemon --stacktrace clean assembleRelease
 
-      - name: Verify APK
+      - name: Verify APK and release signature
         shell: bash
         run: |
           APK="mobile/app/build/outputs/apk/release/app-release.apk"
@@ -79,15 +95,13 @@ jobs:
           body: |
             # Pips-life ${{ env.VERSION_NAME }} (${{ env.VERSION_CODE }})
 
-            Stable Android release for Pips-life.
+            Stable signed Android release for Pips-life.
 
             - App version: `${{ env.VERSION_NAME }}`
             - Android version code: `${{ env.VERSION_CODE }}`
             - APK SHA-256: `${{ env.APK_SHA256 }}`
-            - The Pips-life app checks this GitHub Releases feed for newer stable versions.
-
-            ## Update path
-            Install over the existing Pips-life app. Android will preserve the app's local data when the APK is signed with the same release key.
+            - APK is signed with the persistent Pips-life release key so Android can update an existing installation in place.
+            - The app checks this GitHub Releases feed for newer stable versions.
 
       - name: Upload release artifact
         if: success()
