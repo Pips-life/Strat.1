@@ -56,17 +56,88 @@ private fun Mt5Screen(store: Mt5PreferenceStore, servers: Mt5ServerRepository) {
     var account by remember { mutableStateOf(store.account) }
     var password by remember { mutableStateOf("") }
     var serverList by remember { mutableStateOf<List<Mt5Server>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Not connected") }
+
+    fun discover() {
+        if (broker.trim().length < 2) {
+            serverList = emptyList()
+            status = "Enter at least 2 broker characters"
+            return
+        }
+        loading = true
+        status = "Searching MetaApi broker servers…"
+        servers.search(broker) { result ->
+            loading = false
+            result.onSuccess {
+                serverList = it
+                status = if (it.isEmpty()) "No matching MT5 servers found" else "Found ${it.size} server(s)"
+            }.onFailure {
+                serverList = emptyList()
+                status = "Server discovery unavailable: ${it.message ?: "network error"}"
+            }
+        }
+    }
+
     LazyColumn(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("MT5", style = MaterialTheme.typography.headlineSmall) }
-        item { Text("Enter your broker name, choose the exact MT5 server, then enter your credentials.") }
-        item { OutlinedTextField(broker, { broker = it; serverList = servers.search(it) }, label = { Text("MT5 broker") }, modifier = Modifier.fillMaxWidth()) }
+        item { Text("Enter your broker name, then select the exact MT5 server returned by the backend.") }
+        item {
+            OutlinedTextField(
+                value = broker,
+                onValueChange = { broker = it },
+                label = { Text("MT5 broker") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        item {
+            Button(onClick = ::discover, enabled = !loading && broker.trim().length >= 2, modifier = Modifier.fillMaxWidth()) {
+                Text(if (loading) "Searching…" else "Find MT5 servers")
+            }
+        }
         item { Text("Servers", style = MaterialTheme.typography.titleMedium) }
-        items(serverList) { server -> FilterChip(serverName == server.name, { serverName = server.name }, label = { Text(server.name) }) }
-        item { OutlinedTextField(serverName, { serverName = it }, label = { Text("Selected server") }, modifier = Modifier.fillMaxWidth()) }
-        item { OutlinedTextField(account, { account = it }, label = { Text("MT5 account number") }, modifier = Modifier.fillMaxWidth()) }
-        item { OutlinedTextField(password, { password = it }, label = { Text("MT5 password") }, modifier = Modifier.fillMaxWidth()) }
-        item { Button({ store.save(broker, serverName, account); password = ""; status = "Preferences saved; secure backend connection pending." }, Modifier.fillMaxWidth()) { Text("Save & Connect") } }
+        items(serverList) { server ->
+            FilterChip(
+                selected = serverName == server.name,
+                onClick = { serverName = server.name; broker = server.broker },
+                label = { Text("${server.broker} — ${server.name}") }
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = serverName,
+                onValueChange = { serverName = it },
+                label = { Text("Selected server") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = account,
+                onValueChange = { account = it },
+                label = { Text("MT5 account number") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("MT5 password") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        item {
+            Button(
+                onClick = {
+                    store.save(broker, serverName, account)
+                    password = ""
+                    status = "Broker, server and account preference saved. Secure connection endpoint next."
+                },
+                enabled = broker.isNotBlank() && serverName.isNotBlank() && account.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Save & Connect") }
+        }
         item { Text("Status: $status") }
     }
 }
