@@ -17,13 +17,19 @@ import java.util.concurrent.TimeUnit
 data class Mt5ConnectionResult(val accountId: String?, val state: String, val server: String, val message: String? = null, val reused: Boolean = false)
 
 class Mt5ApiClient(
-    private val baseUrl: String = BuildConfig.BACKEND_BASE_URL,
+    baseUrl: String = BuildConfig.BACKEND_BASE_URL,
     private val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
 ) {
+    @Volatile private var backendBaseUrl = baseUrl.trimEnd('/')
+
+    fun setBackendBaseUrl(baseUrl: String) {
+        backendBaseUrl = baseUrl.trimEnd('/')
+    }
+
     fun searchServers(query: String, callback: (Result<List<Mt5Server>>) -> Unit) {
         val q = query.trim()
         if (q.length < 2) { callback(Result.success(emptyList())); return }
-        val url = baseUrl.trimEnd('/') + "/api/mt5/servers?q=" + URLEncoder.encode(q, "UTF-8")
+        val url = "$backendBaseUrl/api/mt5/servers?q=" + URLEncoder.encode(q, "UTF-8")
         val request = Request.Builder().url(url).get().header("Accept", "application/json").build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
@@ -58,7 +64,7 @@ class Mt5ApiClient(
             put("server", server.trim())
             put("name", "Strat.1 MT5 account")
         }
-        val request = Request.Builder().url(baseUrl.trimEnd('/') + "/api/mt5/connect")
+        val request = Request.Builder().url("$backendBaseUrl/api/mt5/connect")
             .post(payload.toString().toRequestBody("application/json".toMediaType())).header("Accept", "application/json").build()
         http.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
