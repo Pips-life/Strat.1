@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Strat.1 Mobile Release Manifest",
+  "type": "object",
+  "required": ["versionName", "versionCode", "minimumVersionCode", "apkUrl", "sha256", "releaseNotes"],
+  "properties": {
+    "versionName": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "versionCode": { "type": "integer", "minimum": 1 },
+    "minimumVersionCode": { "type": "integer", "minimum": 1 },
+    "apkUrl": { "type": "string", "format": "uri" },
+    "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "releaseNotes": { "type": "array", "items": { "type": "string" } },
+    "mandatory": { "type": "boolean", "default": false }
+  }
+}
