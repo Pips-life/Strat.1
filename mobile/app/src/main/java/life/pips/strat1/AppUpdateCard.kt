@@ -23,7 +23,27 @@ fun AppUpdateCard() {
     val scope = rememberCoroutineScope()
     var checking by remember { mutableStateOf(false) }
     var release by remember { mutableStateOf<AppRelease?>(null) }
-    var message by remember { mutableStateOf("Automatic release detection is enabled.") }
+    var message by remember { mutableStateOf("Checking for updates…") }
+
+    suspend fun runCheck() {
+        checking = true
+        message = "Checking GitHub releases…"
+        release = null
+        manager.check().onSuccess { found ->
+            release = found
+            message = if (found == null) {
+                "You’re up to date — v${BuildConfig.VERSION_NAME}"
+            } else {
+                "Update available — v${found.versionName} (build ${found.versionCode})"
+            }
+        }.onFailure { error ->
+            release = null
+            message = "Couldn’t check for updates — ${error.message ?: "network error"}"
+        }
+        checking = false
+    }
+
+    LaunchedEffect(Unit) { runCheck() }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1220)),
@@ -42,27 +62,18 @@ fun AppUpdateCard() {
                 }
                 Text("GITHUB", color = Color(0xFF8EA2BB), fontSize = 8.sp, fontWeight = FontWeight.Bold)
             }
-            Text(
-                release?.let { "New release ${it.versionName} (build ${it.versionCode}) is ready." } ?: message,
-                color = Color(0xFF8EA2BB), fontSize = 10.sp
-            )
+
+            Text(message, color = when {
+                message.startsWith("You’re up to date") -> Color(0xFF39F28A)
+                message.startsWith("Update available") -> Color(0xFF25D9FF)
+                message.startsWith("Couldn’t") -> Color(0xFFFFC857)
+                else -> Color(0xFF8EA2BB)
+            }, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     enabled = !checking,
-                    onClick = {
-                        checking = true
-                        message = "Checking GitHub…"
-                        scope.launch {
-                            manager.check().onSuccess { found ->
-                                release = found
-                                message = if (found == null) "You're up to date." else ""
-                            }.onFailure {
-                                release = null
-                                message = "Release check failed. Try again."
-                            }
-                            checking = false
-                        }
-                    },
+                    onClick = { scope.launch { runCheck() } },
                     modifier = Modifier.weight(1f).height(36.dp),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
