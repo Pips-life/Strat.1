@@ -25,16 +25,28 @@ The workflow also supports manual dispatch for a controlled build check. Product
 
 ## In-app updates
 
-The Android application checks:
+`Strat.1` is a **private GitHub repository**, so the APK must never contain a GitHub credential. GitHub Releases remain the source of truth, but the app reaches them through the Pips-life backend release gateway:
 
-`https://api.github.com/repos/Pips-life/Strat.1/releases/latest`
+- `GET /api/app/release/latest` reads the latest private GitHub Release using the server-only `GITHUB_RELEASE_TOKEN`.
+- `GET /api/app/release/download?asset=<id>` streams the selected GitHub release APK through the backend.
 
-when the app resumes, throttled to avoid unnecessary requests. Draft/prerelease releases are ignored. A GitHub-hosted APK with a higher numbered release is offered to the user.
+The Android application checks the gateway when the app first resumes. If the release `versionCode` is higher than the installed version and an APK asset exists, the user receives **Pips-life update available** with **LATER** and **DOWNLOAD & INSTALL**.
 
-The user receives a Pips-life update dialog with **LATER** and **DOWNLOAD & INSTALL**. The latter downloads the release APK using Android DownloadManager and opens Android's package installer. Android may require the user to allow Pips-life to install updates once. Choosing **LATER** does not accept or permanently suppress the release.
+The latter downloads the GitHub release APK using Android DownloadManager and opens Android's package installer. Android may require the user to allow Pips-life to install updates once. Choosing **LATER** does not accept or permanently suppress the release.
 
-Secrets such as MetaApi credentials, backend keys and signing keys are never placed in the APK or release metadata.
+## Signing
+
+Direct APK updates require one persistent release signing key. Configure these GitHub repository secrets before publishing releases:
+
+- `PIPSLIFE_KEYSTORE_BASE64`
+- `PIPSLIFE_KEYSTORE_PASSWORD`
+- `PIPSLIFE_KEY_ALIAS`
+- `PIPSLIFE_KEY_PASSWORD`
+
+The workflow refuses to publish an APK if these secrets are missing. This prevents a new signing key from accidentally breaking in-place updates.
+
+The backend also requires a server-only `GITHUB_RELEASE_TOKEN` with read access to the private repository's Releases/Contents data. Never put this token in the Android APK.
 
 ## Source of truth
 
-A GitHub Release is the source of truth for user-facing Android updates. CI artifacts are not treated as releases and are not used by the in-app updater.
+The GitHub Release is the user-facing Android release. CI artifacts are not treated as releases and are not used by the in-app updater.
