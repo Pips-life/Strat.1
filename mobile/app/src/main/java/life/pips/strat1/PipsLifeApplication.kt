@@ -16,7 +16,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
-import life.pips.strat1.BuildConfig
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -52,12 +51,14 @@ class PipsLifeApplication : Application() {
             if (prefs.getString(LAST_PROMPTED, null) == latest) return@Thread
             handler.post {
                 if (activity.isFinishing || activity.isDestroyed) return@post
-                prefs.edit().putString(LAST_PROMPTED, latest).apply()
                 AlertDialog.Builder(activity)
                     .setTitle("Pips-life update available")
                     .setMessage("Pips-life $latest is available. You are running ${BuildConfig.VERSION_NAME}. Download and install the GitHub release?")
                     .setNegativeButton("LATER", null)
-                    .setPositiveButton("DOWNLOAD & INSTALL") { _, _ -> downloadAndInstall(activity, latest, apk) }
+                    .setPositiveButton("DOWNLOAD & INSTALL") { _, _ ->
+                        prefs.edit().putString(LAST_PROMPTED, latest).apply()
+                        downloadAndInstall(activity, latest, apk)
+                    }
                     .show()
             }
         }.start()
@@ -73,14 +74,17 @@ class PipsLifeApplication : Application() {
             connection.setRequestProperty("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
             if (connection.responseCode !in 200..299) error("GitHub releases request failed: ${connection.responseCode}")
             val json = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            if (json.optBoolean("draft", false) || json.optBoolean("prerelease", false)) return ReleaseInfo(null, null)
             val tag = json.optString("tag_name").removePrefix("v")
             val assets = json.optJSONArray("assets") ?: return ReleaseInfo(null, null)
             var apk: String? = null
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
-                if (asset.optString("name").endsWith(".apk", true)) {
-                    apk = asset.optString("browser_download_url").takeIf { it.startsWith("https://github.com/") }
-                    if (apk != null) break
+                val name = asset.optString("name")
+                val candidate = asset.optString("browser_download_url")
+                if (name.startsWith("Pips-life-") && name.endsWith(".apk", true) && candidate.startsWith("https://github.com/")) {
+                    apk = candidate
+                    break
                 }
             }
             ReleaseInfo(tag.takeIf { it.isNotBlank() }, apk)
@@ -129,7 +133,7 @@ class PipsLifeApplication : Application() {
             }
             val uri = manager.getUriForDownloadedFile(id) ?: return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-                Toast.makeText(this, "Allow Pips-life to install updates, then tap the downloaded APK.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Allow Pips-life to install updates, then return to Pips-life.", Toast.LENGTH_LONG).show()
                 activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 return
             }
