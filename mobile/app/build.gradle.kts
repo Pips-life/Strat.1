@@ -7,22 +7,16 @@ plugins {
 android {
     namespace = "life.pips.strat1"
     compileSdk = 35
-
     defaultConfig {
         applicationId = "life.pipslife.mobile"
         minSdk = 26
         targetSdk = 35
         versionCode = 3
         versionName = "0.2.1"
-        buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-j3lztnkx5-pips-life.vercel.app\"")
+        buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
-
     buildFeatures { compose = true; buildConfig = true }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }
 
