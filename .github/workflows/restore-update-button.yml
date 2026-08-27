@@ -1,0 +1,42 @@
+name: Restore in-app update controls
+
+on:
+  push:
+    paths:
+      - '.github/workflows/restore-update-button.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore update card in Home screen
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('mobile/app/src/main/java/life/pips/strat1/MainActivity.kt')
+          text = path.read_text()
+          marker = 'item { EngineHealthCard(session != null, bot) }'
+          replacement = marker + '\n        item { AppUpdateCard() }'
+          if 'item { AppUpdateCard() }' not in text:
+              if marker not in text:
+                  raise SystemExit('Home screen insertion point not found')
+              text = text.replace(marker, replacement, 1)
+              path.write_text(text)
+          PY
+
+      - name: Commit UI restoration
+        run: |
+          git config user.name "Pips-life"
+          git config user.email "piplife1@gmail.com"
+          git add mobile/app/src/main/java/life/pips/strat1/MainActivity.kt
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: restore visible app update button"
+          git push
