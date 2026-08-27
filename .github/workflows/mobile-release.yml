@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Release version matching mobile/release.properties, e.g. 0.2.2'
+        description: 'Release version, e.g. 0.2.2'
         required: true
         type: string
       version_code:
@@ -54,12 +54,15 @@ jobs:
         id: version
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             VERSION_NAME="${{ inputs.version_name }}"
             VERSION_CODE="${{ inputs.version_code }}"
           else
             VERSION_NAME="${GITHUB_REF_NAME#v}"
+            FILE_VERSION="$(sed -n 's/^versionName=//p' mobile/release.properties)"
             VERSION_CODE="$(sed -n 's/^versionCode=//p' mobile/release.properties)"
+            [[ "$VERSION_NAME" == "$FILE_VERSION" ]] || { echo "Tag $VERSION_NAME does not match mobile/release.properties $FILE_VERSION"; exit 1; }
           fi
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version name'; exit 1; }
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo 'Invalid version code'; exit 1; }
@@ -67,22 +70,12 @@ jobs:
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Stamp Android version
+      - name: Stamp release.properties
         working-directory: mobile
         env:
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
-        run: |
-          printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
-
-      - name: Validate tagged release against repository version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          FILE_VERSION=$(sed -n 's/^versionName=//p' mobile/release.properties)
-          FILE_CODE=$(sed -n 's/^versionCode=//p' mobile/release.properties)
-          test "$FILE_VERSION" = "${{ steps.version.outputs.version_name }}"
-          test "$FILE_CODE" = "${{ steps.version.outputs.version_code }}"
+        run: printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
 
       - name: Require stable release signing secrets
         shell: bash
@@ -92,6 +85,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           test -n "$KEYSTORE_B64" || { echo 'Missing PIPS_LIFE_KEYSTORE_BASE64'; exit 1; }
           test -n "$KEYSTORE_PASSWORD" || { echo 'Missing PIPS_LIFE_KEYSTORE_PASSWORD'; exit 1; }
           test -n "$KEY_ALIAS" || { echo 'Missing PIPS_LIFE_KEY_ALIAS'; exit 1; }
@@ -119,6 +113,7 @@ jobs:
       - name: Locate and verify APK
         shell: bash
         run: |
+          set -euo pipefail
           APK="mobile/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
@@ -131,9 +126,7 @@ jobs:
           cp "$APK" "$NAME"
           sha256sum "$NAME" > "$NAME.sha256"
           SHA=$(cut -d' ' -f1 "$NAME.sha256")
-          cat > release-manifest.json <<EOF
-          {"app":"Pips-life","versionName":"${{ steps.version.outputs.version_name }}","versionCode":${{ steps.version.outputs.version_code}},"tag":"${{ steps.version.outputs.tag }}","apk":"$NAME","sha256":"$SHA"}
-          EOF
+          printf '{"app":"Pips-life","versionName":"%s","versionCode":%s,"tag":"%s","apk":"%s","sha256":"%s"}\n' "${{ steps.version.outputs.version_name }}" "${{ steps.version.outputs.version_code }}" "${{ steps.version.outputs.tag }}" "$NAME" "$SHA" > release-manifest.json
 
       - name: Verify release numbering against existing releases
         env:
@@ -158,19 +151,22 @@ jobs:
           PY
 
       - name: Publish numbered GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "$NAME" \
+            "$NAME.sha256" \
+            release-manifest.json \
+            --title "Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})" \
+            --notes "Version: ${{ steps.version.outputs.version_name }}\nVersionCode: ${{ steps.version.outputs.version_code }}\n\nOfficial Pips-life Android release. The app checks this GitHub Releases feed for newer versions." \
+            --target "${{ github.sha }}"
+
+      - name: Verify published release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            "pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk" \
-            "pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk.sha256" \
-            release-manifest.json \
-            --title "Pips-life ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }})" \
-            --generate-notes
-
-      - name: Verify published release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release view "${{ steps.version.outputs.tag }}" --json tagName,name,assets
+          set -euo pipefail
+          gh release view "${{ steps.version.outputs.tag }}" --json tagName,name,assets
+          test "$(gh release view "${{ steps.version.outputs.tag }}" --json assets --jq '[.assets[].name | select(endswith(".apk"))] | length')" -eq 1
