@@ -1,5 +1,4 @@
 package life.pips.strat1
-
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -32,9 +31,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Locale
-
 private val Context.pipsDataStore by preferencesDataStore("pips_life_session")
-private val ACCOUNT_ID = stringPreferencesKey("account_id");private val SESSION_TOKEN = stringPreferencesKey("session_token");private val SERVER = stringPreferencesKey("server")
+private val ACCOUNT_ID=stringPreferencesKey("account_id");private val SESSION_TOKEN=stringPreferencesKey("session_token");private val SERVER=stringPreferencesKey("server")
 private val Ink=Color(0xFF071018);private val Panel=Color(0xFF0D1822);private val Raised=Color(0xFF12212D);private val Line=Color(0xFF223541);private val Primary=Color(0xFFF4F8FA);private val Muted=Color(0xFF91A4AF);private val Green=Color(0xFF35D07F);private val Red=Color(0xFFFF5E68);private val Cyan=Color(0xFF28B7D9)
 private val Scheme=darkColorScheme(primary=Cyan,secondary=Green,background=Ink,surface=Panel,surfaceVariant=Raised,onBackground=Primary,onSurface=Primary,outline=Line,error=Red)
 class MainActivity:ComponentActivity(){override fun onCreate(b:Bundle?){super.onCreate(b);setContent{App(applicationContext)}}}
