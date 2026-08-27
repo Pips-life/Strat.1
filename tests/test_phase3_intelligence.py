@@ -1,3 +1,5 @@
+import pytest
+
 from strat.intelligence import delta_pressure, gamma_exposure, gamma_regime, iv_regime
 
 
@@ -15,5 +17,5 @@ def test_gamma_and_iv_regimes():
     assert gex > 0
     assert gamma_regime(gex) == "POSITIVE_GAMMA"
     change, regime = iv_regime(1.10, 1.00)
-    assert change == 0.10
+    assert change == pytest.approx(0.10)
     assert regime == "EXPANDING"
