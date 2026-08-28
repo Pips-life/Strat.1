@@ -11,13 +11,13 @@ import android.os.Environment
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
-private const val UPDATE_LATEST_PATH = "/api/app/release/latest"
-private const val UPDATE_DOWNLOAD_PATH = "/api/app/release/download"
+private const val RELEASE_LATEST_PATH = "/api/app/release/latest"
+private const val RELEASE_DOWNLOAD_PATH = "/api/app/release/download?asset="
 
 data class AppRelease(
     val tag: String,
@@ -30,49 +30,40 @@ data class AppRelease(
 )
 
 class ReleaseUpdateManager(private val context: Context) {
+    private val client = OkHttpClient()
     private var receiver: BroadcastReceiver? = null
-    private val baseUrl = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 
     init { UpdateNotifications.ensureChannel(context) }
 
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
-            val connection = (URL(baseUrl + UPDATE_LATEST_PATH).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("User-Agent", "Pips-life-Android/${BuildConfig.VERSION_NAME}")
-            }
-            try {
-                val code = connection.responseCode
-                val body = (if (code in 200..299) connection.inputStream else connection.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
-                if (code !in 200..299) {
-                    val detail = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
-                    error(if (detail.isBlank()) "Update service unavailable (HTTP $code)" else detail)
-                }
+            val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
+            val request = Request.Builder()
+                .url(base + RELEASE_LATEST_PATH)
+                .get()
+                .header("Accept", "application/json")
+                .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+                .build()
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) error("Release check failed (${response.code})")
                 val json = JSONObject(body)
                 val versionName = json.optString("versionName").trim()
                 val versionCode = json.optInt("versionCode", 0)
                 val assetId = json.optLong("assetId", 0L)
-                val assetName = json.optString("assetName").trim()
-                if (versionName.isBlank() || versionCode <= 0 || assetId <= 0L || assetName.isBlank()) {
-                    error("Update service returned incomplete release information")
-                }
-                if (versionCode <= BuildConfig.VERSION_CODE) return@runCatching null
-                val release = AppRelease(
+                val assetName = json.optString("assetName", "Pips-life-update.apk")
+                val releaseUrl = json.optString("releaseUrl", "https://github.com/Pips-life/Strat.1/releases/latest")
+                if (versionName.isBlank() || versionCode <= 0 || assetId <= 0) error("Release gateway returned an invalid release")
+                if (versionCode <= BuildConfig.VERSION_CODE) return@use null
+                AppRelease(
                     tag = json.optString("tag"),
                     name = json.optString("name", "Pips-life update"),
                     versionName = versionName,
                     versionCode = versionCode,
                     assetId = assetId,
                     assetName = assetName,
-                    downloadUrl = baseUrl + UPDATE_DOWNLOAD_PATH + "?asset=" + assetId
-                )
-                UpdateNotifications.notifyUpdateAvailable(context, release)
-                release
-            } finally {
-                connection.disconnect()
+                    downloadUrl = base + RELEASE_DOWNLOAD_PATH + assetId
+                ).also { UpdateNotifications.notifyUpdateAvailable(context, it) }
             }
         }
     }
@@ -82,7 +73,7 @@ class ReleaseUpdateManager(private val context: Context) {
         val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
         val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
             .setTitle("Pips-life ${release.versionName}")
-            .setDescription("Downloading the official Pips-life release")
+            .setDescription("Downloading the official Pips-life GitHub release")
             .setMimeType("application/vnd.android.package-archive")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
