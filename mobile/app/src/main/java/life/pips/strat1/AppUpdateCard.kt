@@ -24,7 +24,8 @@ fun AppUpdateCard() {
     var checking by remember { mutableStateOf(false) }
     var release by remember { mutableStateOf<AppRelease?>(null) }
     var message by remember { mutableStateOf("Checking GitHub releases…") }
-    var promptShownFor by remember { mutableStateOf<Int?>(null) }
+    var promptedVersion by remember { mutableStateOf<Int?>(null) }
+    var showDialog by remember { mutableStateOf(false) }
 
     suspend fun runCheck() {
         checking = true
@@ -41,22 +42,14 @@ fun AppUpdateCard() {
     }
 
     LaunchedEffect(Unit) { runCheck() }
-
     LaunchedEffect(release?.versionCode) {
         val found = release ?: return@LaunchedEffect
-        if (promptShownFor == found.versionCode) return@LaunchedEffect
-        promptShownFor = found.versionCode
-        AlertDialog.Builder(context)
-    }
-
-    release?.let { found ->
-        if (promptShownFor == found.versionCode) {
-            // The actual dialog is rendered below so it is lifecycle-safe in Compose.
+        if (promptedVersion != found.versionCode) {
+            promptedVersion = found.versionCode
+            showDialog = true
         }
     }
 
-    var showDialog by remember { mutableStateOf(false) }
-    LaunchedEffect(release?.versionCode) { if (release != null) showDialog = true }
     if (showDialog) {
         val found = release
         if (found != null) AlertDialog(
@@ -68,11 +61,7 @@ fun AppUpdateCard() {
         )
     }
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1220)),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF25D9FF).copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-    ) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1220)), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF25D9FF).copy(alpha = 0.45f), RoundedCornerShape(16.dp))) {
         Column(Modifier.background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF17122F))), RoundedCornerShape(16.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
