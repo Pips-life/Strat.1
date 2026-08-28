@@ -17,7 +17,7 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     suspend fun findServers(query: String): Result<List<Mt5Server>> = runCatching { withContext(Dispatchers.IO) {
         val t = requestJson("GET", "/api/mt5/servers?q=${URLEncoder.encode(query, "UTF-8")}", null)
         val a = JSONObject(t).optJSONArray("brokers") ?: JSONArray()
-        buildList { for (i in 0 until a.length()) { val s = a.getJSONObject(i); add(Mt5Server(s.optString("id"), s.optString("brokerName"), s.optString("serverName"), s.optString("environment", "real"))) } }
+        buildList { for (i in 0 until a.length()) { val s = a.getJSONObject(i); add(Mt5Server(s.optString("id"), s.optString("brokerName"), s.optString("serverName"), s.optString("environment", "real"))) }
     } }
 
     suspend fun connect(login: String, password: String, server: String, broker: String): Result<BackendSession> = runCatching {
@@ -28,7 +28,7 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     suspend fun liveState(session: BackendSession): Result<LiveState> = runCatching {
         val r = JSONObject(requestJson("GET", "/api/mt5/state?accountId=${URLEncoder.encode(session.accountId, "UTF-8")}", null, session.token))
         val a = r.optJSONObject("account") ?: JSONObject()
-        LiveState(session.accountId, a.optString("login"), a.optString("server"), a.optString("connectionStatus"), a.optString("state"), a.optDouble("balance", Double.NaN), a.optDouble("equity", Double.NaN), a.optDouble("freeMargin", Double.NaN), a.optString("currency", ""), parsePositions(r.optJSONArray("positions") ?: JSONArray()))
+        LiveState(session.accountId, a.optString("login"), a.optString("server"), a.optString("connectionStatus"), a.optString("state"), a.optDouble("balance", Double.NaN), a.optDouble("equity", Double.NaN), a.optDouble("freeMargin", Double.NaN), a.optString("currency", ""), a.optString("name", ""), parsePositions(r.optJSONArray("positions") ?: JSONArray()))
     }
 
     suspend fun botStatus(session: BackendSession): Result<BotState> = runCatching {
@@ -54,6 +54,6 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
 }
 
 data class BackendSession(val accountId: String, val token: String, val server: String)
-data class LiveState(val accountId: String, val login: String, val server: String, val connectionStatus: String, val state: String, val balance: Double, val equity: Double, val freeMargin: Double, val currency: String, val positions: List<LivePosition>)
+data class LiveState(val accountId: String, val login: String, val server: String, val connectionStatus: String, val state: String, val balance: Double, val equity: Double, val freeMargin: Double, val currency: String, val userName: String, val positions: List<LivePosition>)
 data class LivePosition(val symbol: String, val side: String, val volume: Double, val entry: Double, val current: Double, val stopLoss: Double?, val takeProfit: Double?, val profit: Double)
 data class BotState(val configured: Boolean, val state: String, val strategy: String, val activity: String)
