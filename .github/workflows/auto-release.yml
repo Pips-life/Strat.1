@@ -60,7 +60,7 @@ jobs:
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "already_released=true" >> "$GITHUB_OUTPUT"
           else
-            echo "already_released=false" >> "$GITHUB_OUTPUT
+            echo "already_released=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Dispatch signed release workflow
