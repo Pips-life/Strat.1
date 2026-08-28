@@ -11,6 +11,10 @@ on:
         description: 'Monotonic Android version code, e.g. 4'
         required: true
         type: string
+      source_sha:
+        description: 'Exact tested commit SHA to release'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,7 +31,7 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
           token: ${{ github.token }}
 
@@ -61,8 +65,10 @@ jobs:
           set -euo pipefail
           VERSION_NAME="${{ inputs.version_name }}"
           VERSION_CODE="${{ inputs.version_code }}"
+          SOURCE_SHA="${{ inputs.source_sha }}"
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version name'; exit 1; }
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo 'Invalid version code'; exit 1; }
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION_NAME" >> "$GITHUB_OUTPUT"
@@ -79,7 +85,7 @@ jobs:
             TAG_SHA=$(git rev-list -n 1 "$TAG")
             HEAD_SHA=$(git rev-parse HEAD)
             test "$TAG_SHA" = "$HEAD_SHA" || {
-              echo "Tag $TAG already exists at $TAG_SHA, but main is $HEAD_SHA"
+              echo "Tag $TAG already exists at $TAG_SHA, but source is $HEAD_SHA"
               exit 1
             }
             echo "Using existing tag $TAG at $HEAD_SHA"
@@ -191,3 +197,26 @@ jobs:
           set -euo pipefail
           gh release view "${{ steps.version.outputs.tag }}" --json tagName,name,assets
           test "$(gh release view "${{ steps.version.outputs.tag }}" --json assets --jq '[.assets[].name | select(endswith(".apk"))] | length')" -eq 1
+
+      - name: Advance main to the next development version
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          version=os.environ['VERSION_NAME']
+          major, minor, patch=map(int, version.split('.'))
+          next_version=f'{major}.{minor}.{patch+1}'
+          next_code=int(os.environ['VERSION_CODE'])+1
+          Path('mobile/release.properties').write_text(f'versionName={next_version}\nversionCode={next_code}\n')
+          print(f'Advancing main to {next_version} ({next_code})')
+          PY
+          git add mobile/release.properties
+          git commit -m "chore(release): prepare Pips-life $(sed -n 's/^versionName=//p' mobile/release.properties)"
+          git push origin main
