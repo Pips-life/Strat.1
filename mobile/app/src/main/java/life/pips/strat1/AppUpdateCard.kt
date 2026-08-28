@@ -1,8 +1,5 @@
 package life.pips.strat1
 
-import android.app.AlertDialog
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -26,8 +23,9 @@ fun AppUpdateCard() {
     val scope = rememberCoroutineScope()
     var checking by remember { mutableStateOf(false) }
     var release by remember { mutableStateOf<AppRelease?>(null) }
-    var message by remember { mutableStateOf("Checking for updates…") }
-    var promptShown by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Checking GitHub releases…") }
+    var promptedVersion by remember { mutableStateOf<Int?>(null) }
+    var showDialog by remember { mutableStateOf(false) }
 
     suspend fun runCheck() {
         checking = true
@@ -35,15 +33,6 @@ fun AppUpdateCard() {
         manager.check().onSuccess { found ->
             release = found
             message = if (found == null) "You’re up to date — v${BuildConfig.VERSION_NAME}" else "Update available — v${found.versionName} (build ${found.versionCode})"
-            if (found != null && !promptShown) {
-                promptShown = true
-                AlertDialog.Builder(context)
-                    .setTitle("Pips-life update available")
-                    .setMessage("Pips-life ${found.versionName} (build ${found.versionCode}) is available from GitHub. Download and install it now?")
-                    .setNegativeButton("Later", null)
-                    .setPositiveButton("Download & Install") { _, _ -> manager.downloadAndInstall(found) }
-                    .show()
-            }
         }.onFailure { error ->
             release = null
             message = "Release check failed — ${error.message ?: "network error"}"
@@ -52,6 +41,24 @@ fun AppUpdateCard() {
     }
 
     LaunchedEffect(Unit) { runCheck() }
+    LaunchedEffect(release?.versionCode) {
+        val found = release ?: return@LaunchedEffect
+        if (promptedVersion != found.versionCode) {
+            promptedVersion = found.versionCode
+            showDialog = true
+        }
+    }
+
+    if (showDialog) {
+        val found = release
+        if (found != null) AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Pips-life update available") },
+            text = { Text("Pips-life ${found.versionName} (build ${found.versionCode}) is available from GitHub. Download and install it now?") },
+            confirmButton = { TextButton(onClick = { showDialog = false; manager.downloadAndInstall(found) }) { Text("DOWNLOAD & INSTALL") } },
+            dismissButton = { TextButton(onClick = { showDialog = false }) { Text("LATER") } }
+        )
+    }
 
     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1220)), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF25D9FF).copy(alpha = 0.45f), RoundedCornerShape(16.dp))) {
         Column(Modifier.background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF17122F))), RoundedCornerShape(16.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
