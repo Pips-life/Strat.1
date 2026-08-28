@@ -3,19 +3,16 @@ import { NextResponse } from 'next/server';
 const GITHUB_API = 'https://api.github.com/repos/Pips-life/Strat.1/releases/latest';
 
 export async function GET() {
-  const token = process.env.GITHUB_RELEASE_TOKEN;
-  if (!token) return NextResponse.json({ error: 'GITHUB_RELEASE_TOKEN is not configured' }, { status: 503 });
-
   try {
-    const response = await fetch(GITHUB_API, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        authorization: `Bearer ${token}`,
-        'X-GitHub-Api-Version': '2026-03-10',
-        'User-Agent': 'Pips-life-release-gateway'
-      },
-      cache: 'no-store'
-    });
+    const token = process.env.GITHUB_RELEASE_TOKEN?.trim();
+    const headers: Record<string, string> = {
+      accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2026-03-10',
+      'User-Agent': 'Pips-life-release-gateway'
+    };
+    if (token) headers.authorization = `Bearer ${token}`;
+
+    const response = await fetch(GITHUB_API, { headers, cache: 'no-store' });
     const body = await response.text();
     if (!response.ok) return NextResponse.json({ error: `GitHub release lookup failed (${response.status})` }, { status: 502 });
 
