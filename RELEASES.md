@@ -1,37 +1,39 @@
-# Pips-life Android Release System
+# Pips-life Android release system
 
-Pips-life uses numbered Android releases published as GitHub Releases.
+GitHub Releases are the only production Android distribution channel for `Pips-life/Strat.1`.
 
 ## Numbering
 
-- Release tag: `vMAJOR.MINOR.PATCH` (for example `v0.2.2`).
-- Android `versionName`: must match the release tag.
-- Android `versionCode`: a positive integer that **must increase for every release**. It is the primary value the app uses to detect an update.
-- APK asset: `pips-life-<versionName>-<versionCode>.apk`.
-- Each release also publishes `release-manifest.json` with version, tag, APK name and SHA-256.
+- `versionName`: semantic version, for example `0.2.14`.
+- `versionCode`: positive Android integer that increases for every production release.
+- Git tag: `v<versionName>`.
+- APK: `pips-life-<versionName>-<versionCode>.apk`.
+- Each release publishes the APK, its `.sha256` sidecar and `release-manifest.json`.
+
+The current published release is `v0.2.13` / versionCode `13`. The development baseline on `main` is `0.2.14` / versionCode `14`.
 
 ## Publishing
 
-Create and push a tag such as `v0.2.2`, with `mobile/release.properties` containing the intended version and monotonically higher `versionCode`. The `mobile-release.yml` workflow then:
+The single **Pips-life Release** workflow is manually dispatched with the exact tested commit SHA, version name and version code. It builds the signed APK, verifies package metadata and the permanent signing key, creates the numbered Git tag, and publishes the GitHub Release.
 
-1. Sets up Java 17 and Android SDK 35.
-2. Validates the tag and release numbering.
-3. Stamps the Android version into the release build.
-4. Builds the signed release APK with Gradle.
-5. Verifies package name, app label, version name, version code and APK signature.
-6. Calculates the APK SHA-256.
-7. Publishes the APK, checksum and release manifest to the numbered GitHub Release.
-
-The workflow can also be started manually when a specific version name and version code are required.
+The release workflow is the only production Android release workflow. Debug APKs are CI artifacts only and are never used by the updater.
 
 ## In-app updating
 
-Release builds run `PipsLifeApplication` at launch/resume. It checks GitHub's public `releases/latest` endpoint periodically. If the latest stable release has a higher `versionCode` and a numbered Pips-life APK asset, Pips-life prompts the user to **DOWNLOAD & INSTALL**.
+Because the repository is private, the Android app does not contain GitHub credentials. It calls the canonical production backend at `https://strat-1.vercel.app`:
 
-The APK is downloaded through Android's `DownloadManager`, then Android's package installer is opened. Android may require the user to allow Pips-life to install updates from this source once. The app never silently installs an APK.
+- `GET /api/app/release/latest` reads the latest GitHub Release with the server-only `GITHUB_RELEASE_TOKEN`.
+- `GET /api/app/release/download?asset=<id>` streams the selected APK.
 
-No MetaApi token, backend secret, broker password, or other server secret is used by the release checker.
+The app checks the gateway on resume. A higher `versionCode` causes the normal Pips-life update prompt. The APK is downloaded with Android DownloadManager and handed to Android's package installer.
 
-## Current state
+## Signing
 
-The release infrastructure is now consolidated around one in-app updater and one numbered mobile-release workflow. There are currently **no published GitHub Releases**, so the first release still needs to be published. With the current mobile baseline (`0.2.1`, versionCode `3`), the first release can be `v0.2.1`; the next release should use a higher versionCode (for example `0.2.2`, versionCode `4`).
+The same permanent release key must be used for every production release. Configure these GitHub repository secrets once:
+
+- `PIPS_LIFE_KEYSTORE_BASE64`
+- `PIPS_LIFE_KEYSTORE_PASSWORD`
+- `PIPS_LIFE_KEY_ALIAS`
+- `PIPS_LIFE_KEY_PASSWORD`
+
+Never commit the keystore or server secrets.

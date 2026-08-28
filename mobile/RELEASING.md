@@ -1,49 +1,35 @@
-# Pips-life Android release system
+# Pips-life Android releasing
 
-Pips-life uses two release numbers:
+The release source of truth is `mobile/release.properties` plus the exact commit being released.
 
-- `versionName`: semantic version shown to users, e.g. `0.2.1`.
-- `versionCode`: Android's monotonically increasing integer, e.g. `3`.
-
-The source of truth is `mobile/release.properties`.
-
-## Creating the next release
-
-1. Update `mobile/release.properties`, for example:
+Example:
 
 ```properties
-versionName=0.2.2
-versionCode=4
+versionName=0.2.14
+versionCode=14
 ```
 
-2. Commit the version change and app changes.
-3. Create and push the matching tag:
+## Controlled production release
 
-```text
-v0.2.2
-```
+1. Make and test the app changes on `main`.
+2. Confirm the Pips-life CI workflow is green for the exact commit.
+3. Dispatch **Pips-life Release** with that commit SHA, `versionName` and `versionCode`.
+4. The workflow builds a signed release APK, verifies package/version/signature, creates `v<versionName>`, and publishes the APK, checksum and manifest.
+5. Never reuse a tag or `versionCode`.
 
-4. The `android-release.yml` workflow builds a signed release APK, verifies package name, version, Pips-life label and APK signature, then publishes the APK to the GitHub Release.
+## Signing
 
-## Signing secrets
+The production signing keystore is CI-only. Required repository secrets:
 
-The production signing keystore must never be committed. Configure these GitHub Actions repository secrets once:
+- `PIPS_LIFE_KEYSTORE_BASE64`
+- `PIPS_LIFE_KEYSTORE_PASSWORD`
+- `PIPS_LIFE_KEY_ALIAS`
+- `PIPS_LIFE_KEY_PASSWORD`
 
-- `PIPSLIFE_KEYSTORE_BASE64` — base64 encoded production `.jks`/`.keystore` file.
-- `PIPSLIFE_KEYSTORE_PASSWORD`
-- `PIPSLIFE_KEY_ALIAS`
-- `PIPSLIFE_KEY_PASSWORD`
+The same signing key must be retained for every production update so Android can install the new APK over the previous version.
 
-The same keystore must be used for every production release. Changing it would prevent Android from installing an update over the previous release.
+## Updater
 
-## In-app update flow
+The Android updater uses the canonical backend release gateway at `https://strat-1.vercel.app/api/app/release/latest`. It compares the returned `versionCode` with the installed app and prompts only when a newer numbered stable release exists.
 
-The Android app checks the public GitHub `releases/latest` endpoint when the app is resumed. It compares the latest release `versionName` with the installed `BuildConfig.VERSION_NAME`.
-
-When a newer stable numbered release contains an APK asset, Pips-life prompts the user. The user can choose **DOWNLOAD & INSTALL**. Android's package installer then handles installation; on Android 8+ the user may first need to allow Pips-life to install packages from this source.
-
-The app does not embed the MetaApi token or backend secrets in this update mechanism.
-
-## Important
-
-Do not use debug APKs as production releases. Debug signing is not stable across GitHub runners and would break seamless updates. Production GitHub Releases must be built and signed by `android-release.yml` using the permanent Pips-life release keystore.
+GitHub credentials and backend secrets never ship in the APK.
