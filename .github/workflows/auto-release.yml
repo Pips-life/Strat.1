@@ -57,7 +57,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          SOURCE_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
           gh workflow run mobile-release.yml \
-            --ref "${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}" \
+            --ref "$SOURCE_SHA" \
             -f version_name="${{ steps.version.outputs.version }}" \
-            -f version_code="${{ steps.version.outputs.code }}"
+            -f version_code="${{ steps.version.outputs.code }}" \
+            -f source_sha="$SOURCE_SHA"
