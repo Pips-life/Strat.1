@@ -1,0 +1,98 @@
+name: Pips-life Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: Release version, e.g. 0.2.14
+        required: true
+        type: string
+      version_code:
+        description: Monotonic Android version code
+        required: true
+        type: string
+      source_sha:
+        description: Exact tested commit SHA to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pips-life-release-${{ inputs.version_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - name: Validate version and source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ '${{ inputs.version_name }}' =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ '${{ inputs.version_code }}' =~ ^[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = '${{ inputs.source_sha }}'
+          test -f mobile/release.properties
+      - name: Configure signing
+        env:
+          KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_B64"; test -n "$STORE_PASSWORD"; test -n "$KEY_ALIAS"; test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.keystore"
+          echo "PIPS_LIFE_KEYSTORE_PATH=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Build and verify signed APK
+        working-directory: mobile
+        env:
+          PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf 'versionName=%s\nversionCode=%s\n' '${{ inputs.version_name }}' '${{ inputs.version_code }}' > release.properties
+          gradle --no-daemon clean assembleRelease --stacktrace
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
+          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
+          grep -q "versionCode='${{ inputs.version_code }}'" /tmp/pips-badging.txt
+          grep -q "versionName='${{ inputs.version_name }}'" /tmp/pips-badging.txt
+          grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          NAME="pips-life-${{ inputs.version_name }}-${{ inputs.version_code }}.apk"
+          cp "$APK" "$GITHUB_WORKSPACE/$NAME"
+          sha256sum "$GITHUB_WORKSPACE/$NAME" > "$GITHUB_WORKSPACE/$NAME.sha256"
+          SHA="$(cut -d' ' -f1 "$GITHUB_WORKSPACE/$NAME.sha256")"
+          printf '{"app":"Pips-life","versionName":"%s","versionCode":%s,"tag":"v%s","apk":"%s","sha256":"sha256:%s"}\n' '${{ inputs.version_name }}' '${{ inputs.version_code }}' '${{ inputs.version_name }}' "$NAME" "$SHA" > "$GITHUB_WORKSPACE/release-manifest.json"
+      - name: Publish numbered release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='v${{ inputs.version_name }}'
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "Release $TAG already exists"; exit 1; fi
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then echo "Tag $TAG already exists"; exit 1; fi
+          git tag -a "$TAG" -m "Pips-life ${{ inputs.version_name }} (${{ inputs.version_code }})" '${{ inputs.source_sha }}'
+          git push origin "$TAG"
+          gh release create "$TAG" "$GITHUB_WORKSPACE/pips-life-${{ inputs.version_name }}-${{ inputs.version_code }}.apk" "$GITHUB_WORKSPACE/pips-life-${{ inputs.version_name }}-${{ inputs.version_code }}.apk.sha256" "$GITHUB_WORKSPACE/release-manifest.json" --title "Pips-life ${{ inputs.version_name }} (${{ inputs.version_code }})" --notes "Official Pips-life Android release."

@@ -1,15 +1,21 @@
 {
-  "name": "pips-life-workspace",
+  "name": "pips-life",
   "private": true,
-  "workspaces": ["apps/backend"],
   "scripts": {
-    "build": "cd apps/backend && npm run build",
-    "dev": "cd apps/backend && npm run dev",
-    "start": "cd apps/backend && npm run start"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
   },
   "dependencies": {
+    "metaapi.cloud-sdk": "^29.3.3",
     "next": "15.5.24",
     "react": "19.1.7",
     "react-dom": "19.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.8.0"
   }
 }
