@@ -26,8 +26,10 @@ export async function GET() {
     const asset = release.assets?.find(a => a.name?.toLowerCase().endsWith('.apk'));
     if (!asset?.id) return NextResponse.json({ error: 'Latest GitHub release has no APK asset' }, { status: 404 });
 
-    const notes = release.body ?? '';
-    const versionName = /^Version:\s*([^\r\n]+)/mi.exec(notes)?.[1]?.trim() ?? release.tag_name?.replace(/^v/, '') ?? '';
+    const tagVersion = release.tag_name?.replace(/^v/, '').trim() ?? '';
+    const notes = (release.body ?? '').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+    const noteVersionName = /^Version:\s*([^\r\n]+)/mi.exec(notes)?.[1]?.trim() ?? '';
+    const versionName = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(noteVersionName) ? noteVersionName : tagVersion;
     const noteVersionCode = /^VersionCode:\s*(\d+)/mi.exec(notes)?.[1];
     const assetVersionCode = /^pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$/i.exec(asset.name ?? '')?.[1];
     const versionCode = Number(noteVersionCode ?? assetVersionCode ?? 0);
