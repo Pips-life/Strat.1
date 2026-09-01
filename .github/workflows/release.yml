@@ -32,6 +32,11 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
+      - name: Configure Git identity
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Validate version and source
         shell: bash
         run: |
