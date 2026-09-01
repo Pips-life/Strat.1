@@ -4,9 +4,16 @@ import { issueAccountSession } from '@/lib/session';
 const API = process.env.METAAPI_PROVISIONING_URL ?? 'https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai';
 export const runtime = 'nodejs';
 
+function metaApiToken() {
+  return process.env.METAAPI_TOKEN?.trim()
+    || process.env.META_API_TOKEN?.trim()
+    || process.env.METAAPI_KEY?.trim()
+    || process.env.META_API_KEY?.trim();
+}
+
 export async function POST(request: Request) {
-  const token = process.env.METAAPI_TOKEN;
-  if (!token) return NextResponse.json({ error: 'MetaApi backend is not configured' }, { status: 503 });
+  const token = metaApiToken();
+  if (!token) return NextResponse.json({ error: 'MetaApi backend is not configured: set METAAPI_TOKEN in the production Vercel environment' }, { status: 503 });
 
   try {
     const body = await request.json() as { login?: string; password?: string; server?: string; broker?: string };
@@ -17,38 +24,19 @@ export async function POST(request: Request) {
     if (!/^\d+$/.test(login)) return NextResponse.json({ error: 'MT5 login must contain digits only' }, { status: 400 });
 
     const headers = { accept: 'application/json', 'content-type': 'application/json', 'auth-token': token };
-
-    // Reuse an existing MetaApi account when the same login/server is already deployed.
     const existingResponse = await fetch(`${API}/users/current/accounts?query=${encodeURIComponent(login)}&limit=20`, { headers, cache: 'no-store' });
     if (existingResponse.ok) {
       const list = await existingResponse.json() as Array<{ _id?: string; login?: string | number; server?: string; state?: string; connectionStatus?: string }>;
       const match = list.find(x => String(x.login) === login && x.server === server);
       if (match?._id) {
-        return NextResponse.json({
-          accountId: match._id,
-          state: match.state ?? 'DEPLOYED',
-          connectionStatus: match.connectionStatus ?? 'UNKNOWN',
-          server: match.server ?? server,
-          sessionToken: issueAccountSession(match._id),
-          reused: true
-        });
+        return NextResponse.json({ accountId: match._id, state: match.state ?? 'DEPLOYED', connectionStatus: match.connectionStatus ?? 'UNKNOWN', server: match.server ?? server, sessionToken: issueAccountSession(match._id), reused: true });
       }
     }
 
     const response = await fetch(`${API}/users/current/accounts`, {
       method: 'POST',
       headers: { ...headers, 'transaction-id': crypto.randomUUID().replaceAll('-', '') },
-      body: JSON.stringify({
-        login,
-        password,
-        server,
-        name: `Pips-life MT5 ${login}`,
-        platform: 'mt5',
-        magic: 100001,
-        type: 'cloud-g2',
-        manualTrades: false,
-        keywords: body.broker ? [body.broker] : undefined
-      })
+      body: JSON.stringify({ login, password, server, name: `Pips-life MT5 ${login}`, platform: 'mt5', magic: 100001, type: 'cloud-g2', manualTrades: false, keywords: body.broker ? [body.broker] : undefined })
     });
 
     const text = await response.text();
@@ -59,9 +47,6 @@ export async function POST(request: Request) {
     const id = String(data.id ?? '');
     if (!id) return NextResponse.json({ error: 'MetaApi returned no account id' }, { status: 502 });
 
-    // MetaApi creation returns the deployment state. Read the account once more so
-    // the app receives the actual MetaApi connectionStatus instead of a fabricated
-    // local CONNECTING state.
     let state = String(data.state ?? 'DEPLOYED');
     let connectionStatus = String(data.connectionStatus ?? 'UNKNOWN');
     const accountResponse = await fetch(`${API}/users/current/accounts/${encodeURIComponent(id)}`, { headers, cache: 'no-store' });
@@ -71,14 +56,7 @@ export async function POST(request: Request) {
       connectionStatus = String(account.connectionStatus ?? connectionStatus);
     }
 
-    return NextResponse.json({
-      accountId: id,
-      state,
-      connectionStatus,
-      server,
-      sessionToken: issueAccountSession(id),
-      reused: false
-    }, { status: response.status });
+    return NextResponse.json({ accountId: id, state, connectionStatus, server, sessionToken: issueAccountSession(id), reused: false }, { status: response.status });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'MT5 connection failed' }, { status: 500 });
   }
