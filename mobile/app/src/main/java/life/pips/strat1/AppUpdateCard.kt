@@ -24,13 +24,13 @@ fun AppUpdateCard() {
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
     var release by remember { mutableStateOf<AppRelease?>(null) }
-    var message by remember { mutableStateOf("Checking GitHub releases…") }
+    var message by remember { mutableStateOf("Checking releases…") }
     var promptedVersion by remember { mutableStateOf<Int?>(null) }
     var showDialog by remember { mutableStateOf(false) }
 
     suspend fun runCheck() {
         checking = true
-        message = "Checking GitHub releases…"
+        message = "Checking releases…"
         manager.check().onSuccess { found ->
             release = found
             message = if (found == null) "You’re up to date — v${BuildConfig.VERSION_NAME}" else "Update available — v${found.versionName} (build ${found.versionCode})"
@@ -94,20 +94,17 @@ fun AppUpdateCard() {
 
     Card(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0B1220)),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF25D9FF).copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF25D9FF).copy(alpha = 0.45f), RoundedCornerShape(14.dp))
     ) {
         Column(
-            Modifier.background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF17122F))), RoundedCornerShape(16.dp)).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            Modifier.background(Brush.linearGradient(listOf(Color(0xFF10243D), Color(0xFF17122F))), RoundedCornerShape(14.dp)).padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("APP UPDATES", color = Color(0xFF25D9FF), fontSize = 9.sp, letterSpacing = 1.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("v${BuildConfig.VERSION_NAME} · ${BuildConfig.VERSION_CODE}", color = Color(0xFF8EA2BB), fontSize = 9.sp)
-                }
-                Text("GITHUB", color = Color(0xFF8EA2BB), fontSize = 8.sp)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("APP UPDATES", color = Color(0xFF25D9FF), fontSize = 9.sp, letterSpacing = 1.sp)
+                Spacer(Modifier.width(7.dp))
+                Text("v${BuildConfig.VERSION_NAME} · ${BuildConfig.VERSION_CODE}", color = Color(0xFF8EA2BB), fontSize = 9.sp)
             }
             Text(
                 if (downloading) "Downloading… $progress%" else message,
@@ -120,22 +117,22 @@ fun AppUpdateCard() {
                 },
                 fontSize = 10.sp
             )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(
                     enabled = !checking && !downloading,
                     onClick = { scope.launch { runCheck() } },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                    contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)
                 ) { Text(if (checking) "CHECKING…" else "CHECK", fontSize = 10.sp) }
                 release?.let { found ->
                     TextButton(
                         enabled = !downloading,
                         onClick = { startDownload(found) },
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp)
                     ) { Text("DOWNLOAD", color = Color(0xFF39F28A), fontSize = 10.sp) }
                     Text("v${found.versionName}", color = Color(0xFF8EA2BB), fontSize = 9.sp)
                 }
             }
-            if (downloading) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(3.dp))
+            if (downloading) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(2.dp))
         }
     }
 }
