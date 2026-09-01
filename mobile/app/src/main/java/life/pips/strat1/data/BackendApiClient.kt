@@ -3,6 +3,8 @@ package life.pips.strat1.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import life.pips.strat1.BuildConfig
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
@@ -37,26 +39,67 @@ private val HFM_SERVER_FALLBACK = listOf(
     Mt5Server("HFM:HFMarketsGlobal-Live20", "HFM", "HFMarketsGlobal-Live20", "real"),
     Mt5Server("HFM:HFMarketsSA-Live1", "HFM", "HFMarketsSA-Live1", "real"),
     Mt5Server("HFM:HFMarketsSA-Demo", "HFM", "HFMarketsSA-Demo", "demo"),
+    // Kenya-specific HFM servers. These are a fallback so a directory outage
+    // cannot hide the Kenyan MT5 accounts.
+    Mt5Server("HFM-KE:HFMarketsKE-Live2", "HFM Investments (Kenya)", "HFMarketsKE-Live2", "real"),
+    Mt5Server("HFM-KE:HFMarketsKE-Live10", "HFM Investments (Kenya)", "HFMarketsKE-Live10", "real"),
+    Mt5Server("HFM-KE:HFMarketsKE-Live11", "HFM Investments (Kenya)", "HFMarketsKE-Live11", "real"),
+    Mt5Server("HFM-KE:HFMarketsKE-Live15", "HFM Investments (Kenya)", "HFMarketsKE-Live15", "real"),
+    Mt5Server("HFM-KE:HFMarketsKE-Live20", "HFM Investments (Kenya)", "HFMarketsKE-Live20", "real"),
+    Mt5Server("HFM-KE:HFMarketsKE-Demo2", "HFM Investments (Kenya)", "HFMarketsKE-Demo2", "demo")
 )
 
-private fun normalizeBroker(value: String): String =
-    value.lowercase().replace(Regex("[^a-z0-9]"), "")
+private val EXNESS_KE_SERVER_FALLBACK = listOf(
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Real10", "Exness (KE)", "ExnessKE-MT5Real10", "real"),
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Real21", "Exness (KE)", "ExnessKE-MT5Real21", "real"),
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Real4", "Exness (KE)", "ExnessKE-MT5Real4", "real"),
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Real9", "Exness (KE)", "ExnessKE-MT5Real9", "real"),
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Trial10", "Exness (KE)", "ExnessKE-MT5Trial10", "demo"),
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Trial4", "Exness (KE)", "ExnessKE-MT5Trial4", "demo"),
+    Mt5Server("EXNESS-KE:ExnessKE-MT5Trial9", "Exness (KE)", "ExnessKE-MT5Trial9", "demo")
+)
 
-private fun isHfmQuery(value: String): Boolean = when (normalizeBroker(value)) {
-    "hfm", "hfmarket", "hfmarkets", "hfmarketsglobal", "hotforex" -> true
+private val KENYA_BROKER_ALIASES = setOf(
+    "fxpesa", "egmsecurities", "scopemarkets", "scfm", "pepperstone", "pepperstonemarketskenya",
+    "exinity", "fxtm", "hfm", "hfmarkets", "hfmarket", "hfm investments", "windsor", "windsormarkets",
+    "exness", "exnesske", "ingot", "ingotke", "admirals", "admiralske", "fpmarkets", "icmarkets", "xm", "tpxm"
+)
+
+private fun normalizeBroker(value: String): String = value.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+private fun isKenyaQuery(value: String): Boolean {
+    val q = normalizeBroker(value)
+    return q == "ke" || q.contains("kenya") || q.contains("kenyan") || q.contains("nairobi")
+}
+
+private fun isHfmQuery(value: String): Boolean = when {
+    normalizeBroker(value).contains("hfm") -> true
+    normalizeBroker(value).contains("hfmarket") -> true
+    normalizeBroker(value).contains("hotforex") -> true
     else -> false
+}
+
+private fun isExnessQuery(value: String): Boolean = normalizeBroker(value).contains("exness")
+
+private fun isKenyaBroker(server: Mt5Server): Boolean {
+    val broker = normalizeBroker(server.brokerName)
+    val name = normalizeBroker(server.serverName)
+    return KENYA_BROKER_ALIASES.any { alias -> broker.contains(normalizeBroker(alias)) } ||
+        broker.contains("kenya") || broker.contains("ke") ||
+        name.contains("marketske") || name.contains("exnesske")
 }
 
 private fun serverMatches(query: String, server: Mt5Server): Boolean {
     val q = normalizeBroker(query)
     if (q.isBlank()) return true
-    if (isHfmQuery(query)) {
-        return normalizeBroker(server.brokerName).contains("hfm") ||
-            normalizeBroker(server.brokerName).contains("hfmarket") ||
-            normalizeBroker(server.serverName).contains("hfmarket")
-    }
+
     val broker = normalizeBroker(server.brokerName)
     val name = normalizeBroker(server.serverName)
+
+    if (isKenyaQuery(query)) return isKenyaBroker(server) || name.contains("hfmarketske") || name.contains("exnesske")
+    if (isHfmQuery(query)) return broker.contains("hfm") || broker.contains("hfmarket") || name.contains("hfmarket") || name.contains("hotforex")
+    if (isExnessQuery(query)) return broker.contains("exness") || name.contains("exness")
+
     return broker.contains(q) || q.contains(broker) || name.contains(q)
 }
 
@@ -64,7 +107,27 @@ private fun serverScore(query: String, server: Mt5Server): Int {
     val q = normalizeBroker(query)
     val broker = normalizeBroker(server.brokerName)
     val name = normalizeBroker(server.serverName)
-    if (isHfmQuery(query)) return if (name.contains("hfmarketsglobal")) 100 else 90
+
+    if (isKenyaQuery(query)) {
+        return when {
+            name.contains("hfmarketske") || name.contains("exnesske") -> 120
+            broker.contains("kenya") -> 110
+            isKenyaBroker(server) -> 100
+            else -> 10
+        }
+    }
+    if (isHfmQuery(query)) return when {
+        name.contains("hfmarketske") -> 120
+        broker == "hfm" -> 110
+        name.contains("hfmarketsglobal") -> 100
+        name.contains("hfmarketssa") -> 95
+        else -> 80
+    }
+    if (isExnessQuery(query)) return when {
+        name.contains("exnesske") -> 120
+        broker.contains("exness") -> 110
+        else -> 80
+    }
     if (broker == q) return 100
     if (broker.startsWith(q)) return 90
     if (broker.contains(q)) return 80
@@ -77,13 +140,13 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     private val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 
     /**
-     * Broker search deliberately has two independent paths:
-     * 1) our backend when available;
-     * 2) the public MT5 server directory directly from the phone.
+     * Broker search uses three independent sources:
+     * 1) our backend;
+     * 2) the public MT5 server directory;
+     * 3) deterministic Kenya/HFM/Exness fallbacks.
      *
-     * This prevents a protected/temporarily unavailable Vercel deployment from
-     * making broker discovery look like there are no servers. Results are then
-     * normalized, fuzzy-matched, ranked and de-duplicated locally.
+     * All sources are merged, normalized, fuzzy-matched, ranked and deduplicated
+     * locally. A protected backend therefore cannot make the search empty.
      */
     suspend fun findServers(query: String): Result<List<Mt5Server>> = runCatching {
         withContext(Dispatchers.IO) {
@@ -92,19 +155,23 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
 
             val merged = LinkedHashMap<String, Mt5Server>()
 
-            runCatching {
-                parseServerResults(requestJson("GET", "/api/mt5/servers?q=${URLEncoder.encode(q, "UTF-8")}", null))
-            }.getOrDefault(emptyList()).forEach { merged[serverKey(it)] = it }
-
-            // Never depend solely on the backend for discovery. The directory
-            // is public and can be queried directly by the Android client.
-            runCatching {
-                parseServerResults(requestRaw(PUBLIC_SERVER_DIRECTORY))
-            }.getOrDefault(emptyList()).forEach { merged[serverKey(it)] = it }
-
-            if (isHfmQuery(q)) {
-                HFM_SERVER_FALLBACK.forEach { merged[serverKey(it)] = it }
+            coroutineScope {
+                val backend = async {
+                    runCatching {
+                        parseServerResults(requestJson("GET", "/api/mt5/servers?q=${URLEncoder.encode(q, "UTF-8")}", null))
+                    }.getOrDefault(emptyList())
+                }
+                val directory = async {
+                    runCatching {
+                        parseServerResults(requestRaw(PUBLIC_SERVER_DIRECTORY))
+                    }.getOrDefault(emptyList())
+                }
+                backend.await().forEach { merged[serverKey(it)] = it }
+                directory.await().forEach { merged[serverKey(it)] = it }
             }
+
+            if (isHfmQuery(q) || isKenyaQuery(q)) HFM_SERVER_FALLBACK.forEach { merged[serverKey(it)] = it }
+            if (isExnessQuery(q) || isKenyaQuery(q)) EXNESS_KE_SERVER_FALLBACK.forEach { merged[serverKey(it)] = it }
 
             merged.values
                 .filter { serverMatches(q, it) }
@@ -135,15 +202,18 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     }
 
     private fun parseServerResults(text: String): List<Mt5Server> {
-        val a = JSONObject(text).optJSONArray("brokers") ?: JSONArray()
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return emptyList()
+        val root = runCatching { JSONObject(trimmed) }.getOrNull()
+        val a = root?.optJSONArray("brokers") ?: root?.optJSONArray("data") ?: runCatching { JSONArray(trimmed) }.getOrNull() ?: return emptyList()
         return buildList {
             for (i in 0 until a.length()) {
-                val b = a.getJSONObject(i)
-                val broker = b.optString("name").ifBlank { "Unknown broker" }
-                val servers = b.optJSONArray("servers") ?: JSONArray()
+                val b = a.optJSONObject(i) ?: continue
+                val broker = b.optString("name").ifBlank { b.optString("broker").ifBlank { "Unknown broker" } }
+                val servers = b.optJSONArray("servers") ?: b.optJSONArray("serverList") ?: JSONArray()
                 for (j in 0 until servers.length()) {
-                    val s = servers.getJSONObject(j)
-                    val name = s.optString("name").trim()
+                    val s = servers.optJSONObject(j) ?: continue
+                    val name = s.optString("name").ifBlank { s.optString("server") }.trim()
                     if (name.isNotBlank()) add(Mt5Server("${b.optString("id", broker)}:$name", broker, name, s.optString("type", "real")))
                 }
             }
