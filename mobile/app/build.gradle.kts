@@ -9,6 +9,7 @@ plugins {
 val releaseProps = Properties().apply {
     file("../release.properties").inputStream().use(::load)
 }
+val generatedHomeBrandingDir = layout.buildDirectory.dir("generated/source/homeBranding/main")
 
 android {
     namespace = "life.pips.strat1"
@@ -24,6 +25,9 @@ android {
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+
+    // Use the same source everywhere, but generate the release-safe home branding copy.
+    sourceSets["main"].java.exclude("life/pips/strat1/MainActivity.kt")
 
     // Production release signing is CI-only. The keystore is never committed.
     // Accept both the current PIPS_LIFE_* workflow names and the legacy PIPSLIFE_* names.
@@ -44,6 +48,18 @@ android {
         buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
     }
 }
+
+android.sourceSets["main"].java.srcDir(generatedHomeBrandingDir)
+
+val generateHomeBranding = tasks.register("generateHomeBranding") {
+    doLast {
+        val source = file("src/main/java/life/pips/strat1/MainActivity.kt")
+        val target = generatedHomeBrandingDir.get().asFile.resolve("life/pips/strat1/MainActivity.kt")
+        target.parentFile.mkdirs()
+        target.writeText(source.readText().replace("Text(\"Pips-life\", color = Blue,", "Text(\"Pips-life\", color = Cyan,"))
+    }
+}
+tasks.named("preBuild").configure { dependsOn(generateHomeBranding) }
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.02.00"))
