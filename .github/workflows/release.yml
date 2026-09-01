@@ -1,6 +1,11 @@
 name: Pips-life Release
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - mobile/release.properties
+      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       version_name:
@@ -20,7 +25,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: pips-life-release-${{ inputs.version_name }}
+  group: pips-life-release-${{ inputs.version_name || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -30,21 +35,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
       - name: Configure Git identity
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Validate version and source
+      - name: Resolve release metadata
+        id: meta
         shell: bash
         run: |
           set -euo pipefail
-          [[ '${{ inputs.version_name }}' =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          [[ '${{ inputs.version_code }}' =~ ^[0-9]+$ ]]
-          test "$(git rev-parse HEAD)" = '${{ inputs.source_sha }}'
-          test -f mobile/release.properties
+          if [ -n '${{ inputs.version_name }}' ]; then
+            VERSION_NAME='${{ inputs.version_name }}'
+            VERSION_CODE='${{ inputs.version_code }}'
+            SOURCE_SHA='${{ inputs.source_sha }}'
+          else
+            test -f mobile/release.properties
+            VERSION_NAME="$(sed -n 's/^versionName=//p' mobile/release.properties)"
+            VERSION_CODE="$(sed -n 's/^versionCode=//p' mobile/release.properties)"
+            SOURCE_SHA="$(git rev-parse HEAD)"
+          fi
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$VERSION_CODE" =~ ^[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
       - name: Configure signing
         env:
           KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
@@ -74,30 +92,30 @@ jobs:
           PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          printf 'versionName=%s\nversionCode=%s\n' '${{ inputs.version_name }}' '${{ inputs.version_code }}' > release.properties
+          printf 'versionName=%s\nversionCode=%s\n' '${{ steps.meta.outputs.version_name }}' '${{ steps.meta.outputs.version_code }}' > release.properties
           gradle --no-daemon clean assembleRelease --stacktrace
           APK=app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
-          grep -q "versionCode='${{ inputs.version_code }}'" /tmp/pips-badging.txt
-          grep -q "versionName='${{ inputs.version_name }}'" /tmp/pips-badging.txt
+          grep -q "versionCode='${{ steps.meta.outputs.version_code }}'" /tmp/pips-badging.txt
+          grep -q "versionName='${{ steps.meta.outputs.version_name }}'" /tmp/pips-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          NAME="pips-life-${{ inputs.version_name }}-${{ inputs.version_code }}.apk"
+          NAME="pips-life-${{ steps.meta.outputs.version_name }}-${{ steps.meta.outputs.version_code }}.apk"
           cp "$APK" "$GITHUB_WORKSPACE/$NAME"
           sha256sum "$GITHUB_WORKSPACE/$NAME" > "$GITHUB_WORKSPACE/$NAME.sha256"
           SHA="$(cut -d' ' -f1 "$GITHUB_WORKSPACE/$NAME.sha256")"
-          printf '{"app":"Pips-life","versionName":"%s","versionCode":%s,"tag":"v%s","apk":"%s","sha256":"sha256:%s"}\n' '${{ inputs.version_name }}' '${{ inputs.version_code }}' '${{ inputs.version_name }}' "$NAME" "$SHA" > "$GITHUB_WORKSPACE/release-manifest.json"
+          printf '{"app":"Pips-life","versionName":"%s","versionCode":%s,"tag":"v%s","apk":"%s","sha256":"sha256:%s"}\n' '${{ steps.meta.outputs.version_name }}' '${{ steps.meta.outputs.version_code }}' '${{ steps.meta.outputs.version_name }}' "$NAME" "$SHA" > "$GITHUB_WORKSPACE/release-manifest.json"
       - name: Publish numbered release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG='v${{ inputs.version_name }}'
-          if gh release view "$TAG" >/dev/null 2>&1; then echo "Release $TAG already exists"; exit 1; fi
+          TAG='v${{ steps.meta.outputs.version_name }}'
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "Release $TAG already exists; nothing to publish"; exit 0; fi
           git fetch --tags --force
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then echo "Tag $TAG already exists"; exit 1; fi
-          git tag -a "$TAG" -m "Pips-life ${{ inputs.version_name }} (${{ inputs.version_code }})" '${{ inputs.source_sha }}'
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then echo "Tag $TAG already exists; nothing to publish"; exit 0; fi
+          git tag -a "$TAG" -m "Pips-life ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.version_code }})" '${{ steps.meta.outputs.source_sha }}'
           git push origin "$TAG"
-          gh release create "$TAG" "$GITHUB_WORKSPACE/pips-life-${{ inputs.version_name }}-${{ inputs.version_code }}.apk" "$GITHUB_WORKSPACE/pips-life-${{ inputs.version_name }}-${{ inputs.version_code }}.apk.sha256" "$GITHUB_WORKSPACE/release-manifest.json" --title "Pips-life ${{ inputs.version_name }} (${{ inputs.version_code }})" --notes "Official Pips-life Android release."
+          gh release create "$TAG" "$GITHUB_WORKSPACE/pips-life-${{ steps.meta.outputs.version_name }}-${{ steps.meta.outputs.version_code }}.apk" "$GITHUB_WORKSPACE/pips-life-${{ steps.meta.outputs.version_name }}-${{ steps.meta.outputs.version_code }}.apk.sha256" "$GITHUB_WORKSPACE/release-manifest.json" --title "Pips-life ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.version_code }})" --notes "Official Pips-life Android release."
