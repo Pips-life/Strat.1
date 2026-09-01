@@ -25,14 +25,11 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 
-    // Production release signing is CI-only. The keystore is never committed.
-    // Accept both the current PIPS_LIFE_* workflow names and the legacy PIPSLIFE_* names.
     val storeFile = System.getenv("PIPS_LIFE_KEYSTORE_PATH") ?: System.getenv("PIPSLIFE_KEYSTORE_FILE")
     val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD") ?: System.getenv("PIPSLIFE_KEYSTORE_PASSWORD")
     val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS") ?: System.getenv("PIPSLIFE_KEY_ALIAS")
     val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD") ?: System.getenv("PIPSLIFE_KEY_PASSWORD")
-    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() &&
-        !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
         signingConfigs {
             create("release") {
                 this.storeFile = file(storeFile)
@@ -45,8 +42,23 @@ android {
     }
 }
 
-// Production mobile builds use the public backend hostname so installed APKs are not
-// dependent on Vercel preview/protection URLs.
+// Apply the strategy-selection UI immediately before Kotlin compilation. Keeping the
+// replacement isolated in a template prevents another hand-edited MainActivity brace
+// regression while preserving the existing stable screen implementation.
+val patchStrategyUi by tasks.registering {
+    doLast {
+        val source = file("src/main/java/life/pips/strat1/MainActivity.kt")
+        val template = file("../strategy_ui/StrategiesScreen.ktfrag").readText()
+        val text = source.readText()
+        val start = text.indexOf("@Composable private fun StrategiesScreen")
+        val end = text.indexOf("@Composable private fun StrategyDetail", start)
+        check(start >= 0 && end > start) { "Could not locate StrategiesScreen in MainActivity.kt" }
+        source.writeText(text.substring(0, start) + template + "\n" + text.substring(end))
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn(patchStrategyUi) }
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.02.00"))
     implementation("androidx.activity:activity-compose:1.10.1")
