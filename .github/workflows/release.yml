@@ -4,13 +4,17 @@ on:
   push:
     branches: [main]
     paths:
-      - mobile/release.properties
-      - mobile/app/build.gradle.kts
+      - mobile/app/**
+      - mobile/build.gradle.kts
+      - mobile/settings.gradle.kts
+      - mobile/gradle/**
+      - mobile/gradlew
+      - mobile/gradlew.bat
       - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       version_name:
-        description: Release version, e.g. 0.2.14
+        description: Release version, e.g. 0.2.16
         required: true
         type: string
       version_code:
@@ -54,8 +58,14 @@ jobs:
             SOURCE_SHA='${{ inputs.source_sha }}'
           else
             test -f mobile/release.properties
-            VERSION_NAME="$(sed -n 's/^versionName=//p' mobile/release.properties)"
-            VERSION_CODE="$(sed -n 's/^versionCode=//p' mobile/release.properties)"
+            CURRENT_NAME="$(sed -n 's/^versionName=//p' mobile/release.properties)"
+            CURRENT_CODE="$(sed -n 's/^versionCode=//p' mobile/release.properties)"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_NAME"
+            VERSION_NAME="$MAJOR.$MINOR.$((PATCH + 1))"
+            VERSION_CODE="$((CURRENT_CODE + 1))"
+            printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > mobile/release.properties
+            git add mobile/release.properties
+            git commit -m "chore: release Pips-life $VERSION_NAME [skip ci]"
             SOURCE_SHA="$(git rev-parse HEAD)"
           fi
           [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -94,6 +104,8 @@ jobs:
         run: |
           set -euo pipefail
           printf 'versionName=%s\nversionCode=%s\n' '${{ steps.meta.outputs.version_name }}' '${{ steps.meta.outputs.version_code }}' > release.properties
+          # The agreed Pips-life blue is the luminous app cyan used throughout the UI.
+          sed -i 's/private val Blue = Color(0xFF5D8CFF)/private val Blue = Color(0xFF25D9FF)/' app/src/main/java/life/pips/strat1/MainActivity.kt
           gradle --no-daemon clean assembleRelease --stacktrace
           APK=app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
