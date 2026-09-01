@@ -19,7 +19,7 @@ android {
         targetSdk = 35
         versionCode = releaseProps.getProperty("versionCode").toInt()
         versionName = releaseProps.getProperty("versionName")
-        buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1.vercel.app\"")
+        buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1-pips-life.vercel.app\"")
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
