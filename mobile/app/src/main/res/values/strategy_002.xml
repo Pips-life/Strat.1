@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="strategy_002_name">Velocity Expansion</string>
+    <string name="strategy_002_role">SECONDARY</string>
+    <string name="strategy_002_trail">100 pips</string>
+</resources>
