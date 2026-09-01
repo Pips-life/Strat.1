@@ -5,18 +5,40 @@ type S = { name: string; type?: string };
 type B = { id?: string; name: string; servers?: S[] };
 export const runtime = 'nodejs';
 
-const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
-const hfmAliases = new Set(['hfm', 'hfmarket', 'hfmarkets']);
-const matches = (q: string, b: B, s: S) => {
-  if (!q) return true;
-  const qn = normalize(q);
-  const names = [normalize(b.name), normalize(s.name)];
-  if (hfmAliases.has(qn)) return names.some(n => n.includes('hfm') || n.includes('hfmarket'));
-  return names.some(n => n.includes(qn));
+const normalize = (v: string) =>
+  v.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+
+const aliases: Record<string, string[]> = {
+  hfm: ['hfm', 'hfmarket', 'hfmarkets', 'hotforex', 'hfmarketsglobal'],
 };
 
-// HFM publishes the authoritative server names. Keep these as a fallback so
-// the app remains usable even if the third-party directory temporarily omits HFM.
+const aliasKey = (q: string) => {
+  const n = normalize(q);
+  return Object.keys(aliases).find(key => n === key || aliases[key].includes(n));
+};
+
+const matches = (q: string, b: B, s: S) => {
+  const n = normalize(q);
+  if (!n) return true;
+  const key = aliasKey(q);
+  const names = [normalize(b.name), normalize(s.name)];
+  if (key) return aliases[key].some(a => names.some(name => name.includes(normalize(a))));
+  return names.some(name => name.includes(n) || n.includes(name));
+};
+
+const score = (q: string, b: B, s: S) => {
+  const n = normalize(q);
+  const key = aliasKey(q);
+  const names = [normalize(b.name), normalize(s.name)];
+  if (key) return names.some(name => aliases[key].some(a => name === normalize(a))) ? 100 : 90;
+  if (names.includes(n)) return 100;
+  if (names.some(name => name.startsWith(n))) return 80;
+  if (names.some(name => name.includes(n))) return 60;
+  return 40;
+};
+
+// HFM publishes the authoritative server names. Keep a local safety net so
+// discovery still works if the external directory is stale or unreachable.
 const HFM_FALLBACK: S[] = [
   { name: 'HFMarketsGlobal-Live1', type: 'real' },
   { name: 'HFMarketsGlobal-Demo', type: 'demo' },
@@ -39,6 +61,8 @@ const HFM_FALLBACK: S[] = [
   { name: 'HFMarketsGlobal-Live18', type: 'real' },
   { name: 'HFMarketsGlobal-Live19', type: 'real' },
   { name: 'HFMarketsGlobal-Live20', type: 'real' },
+  { name: 'HFMarketsSA-Live1', type: 'real' },
+  { name: 'HFMarketsSA-Demo', type: 'demo' },
 ];
 
 const toResult = (b: B, s: S) => ({
@@ -48,31 +72,47 @@ const toResult = (b: B, s: S) => ({
   environment: s.type === 'demo' ? 'demo' : 'real',
 });
 
-export async function GET(request: Request) {
+async function loadUpstream(): Promise<B[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const q = (new URL(request.url).searchParams.get('q') ?? '').trim();
-    let upstreamResults: ReturnType<typeof toResult>[] = [];
+    const r = await fetch(UPSTREAM, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!r.ok) return [];
+    const d = await r.json() as { brokers?: B[] };
+    return Array.isArray(d.brokers) ? d.brokers : [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
-    const r = await fetch(UPSTREAM, { headers: { accept: 'application/json' }, next: { revalidate: 3600 } });
-    if (r.ok) {
-      const d = await r.json() as { brokers?: B[] };
-      upstreamResults = (d.brokers ?? []).flatMap(b => (b.servers ?? []).filter(s => matches(q, b, s)).map(s => toResult(b, s)));
+export async function GET(request: Request) {
+  const q = (new URL(request.url).searchParams.get('q') ?? '').trim();
+  if (q.length < 2) return NextResponse.json({ brokers: [] });
+
+  try {
+    const brokers = await loadUpstream();
+    const results = brokers
+      .flatMap(b => (b.servers ?? []).filter(s => matches(q, b, s)).map(s => ({ result: toResult(b, s), rank: score(q, b, s) })))
+      .sort((a, b) => b.rank - a.rank)
+      .map(x => x.result);
+
+    const key = aliasKey(q);
+    if (key === 'hfm') {
+      results.push(...HFM_FALLBACK.map(s => toResult({ id: 'HFM', name: 'HFM' }, s)));
     }
 
-    if (hfmAliases.has(normalize(q)) && upstreamResults.length === 0) {
-      upstreamResults = HFM_FALLBACK.map(s => toResult({ id: 'HFM', name: 'HFM' }, s));
-    }
-
-    if (!r.ok && upstreamResults.length === 0 && !hfmAliases.has(normalize(q))) {
-      return NextResponse.json({ error: 'Broker server directory unavailable' }, { status: 502 });
-    }
+    const unique = Array.from(new Map(results.map(r => [`${normalize(r.brokerName)}:${normalize(r.serverName)}`, r])).values());
 
     return NextResponse.json(
-      { brokers: upstreamResults },
+      { brokers: unique },
       { headers: { 'cache-control': 'public,max-age=300,stale-while-revalidate=3600' } },
     );
   } catch (e) {
-    if (hfmAliases.has(normalize((new URL(request.url).searchParams.get('q') ?? '').trim()))) {
+    if (aliasKey(q) === 'hfm') {
       return NextResponse.json({ brokers: HFM_FALLBACK.map(s => toResult({ id: 'HFM', name: 'HFM' }, s)) });
     }
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Server discovery failed' }, { status: 502 });
