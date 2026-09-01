@@ -19,8 +19,9 @@ import org.json.JSONObject
 import java.io.File
 import java.util.regex.Pattern
 
+private const val RELEASE_LATEST_PATH = "/api/app/release/latest"
+private const val RELEASE_DOWNLOAD_PATH = "/api/app/release/download?asset="
 private const val GITHUB_LATEST_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
-private const val GITHUB_RELEASES_URL = "https://github.com/Pips-life/Strat.1/releases/latest"
 private const val APK_MIME = "application/vnd.android.package-archive"
 
 data class AppRelease(
@@ -30,7 +31,8 @@ data class AppRelease(
     val versionCode: Int,
     val assetId: Long,
     val assetName: String,
-    val downloadUrl: String
+    val downloadUrl: String,
+    val viaBackend: Boolean
 )
 
 class ReleaseUpdateManager(private val context: Context) {
@@ -41,66 +43,83 @@ class ReleaseUpdateManager(private val context: Context) {
     init { UpdateNotifications.ensureChannel(context) }
 
     /**
-     * Release discovery is deliberately independent of the Pips-life backend.
-     * GitHub's public latest-release endpoint works without authentication, so a
-     * protected/expired Vercel deployment cannot break the updater.
+     * Primary path: public release gateway, which is required because Strat.1 is
+     * private and the APK must never contain a GitHub credential.
+     * Fallback: public GitHub Releases API if the repository is ever made public.
      */
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
-            val request = Request.Builder()
-                .url(GITHUB_LATEST_URL)
-                .get()
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2026-03-10")
-                .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
-                .build()
+            val backend = runCatching { checkBackend() }.getOrNull()
+            if (backend != null) return@runCatching backend
 
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
-                val json = JSONObject(body)
-                if (json.optBoolean("draft", false) || json.optBoolean("prerelease", false)) return@use null
+            checkPublicGitHub()
+        }
+    }
 
-                val tag = json.optString("tag_name").trim()
-                val versionName = tag.removePrefix("v").ifBlank { json.optString("name").trim() }
-                if (versionName.isBlank()) error("GitHub latest release has no version")
+    private fun checkBackend(): AppRelease? {
+        val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
+        val request = Request.Builder()
+            .url(base + RELEASE_LATEST_PATH)
+            .get()
+            .header("Accept", "application/json")
+            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+            .build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("Release gateway unavailable (${response.code})")
+            val json = JSONObject(body)
+            val versionName = json.optString("versionName").trim()
+            val versionCode = json.optInt("versionCode", 0)
+            val assetId = json.optLong("assetId", 0L)
+            val assetName = json.optString("assetName", "Pips-life-update.apk")
+            if (versionName.isBlank() || versionCode <= 0 || assetId <= 0L) error("Release gateway returned incomplete release information")
+            if (versionCode <= BuildConfig.VERSION_CODE) return null
+            return AppRelease(
+                tag = json.optString("tag"),
+                name = json.optString("name", "Pips-life update"),
+                versionName = versionName,
+                versionCode = versionCode,
+                assetId = assetId,
+                assetName = assetName,
+                downloadUrl = base + RELEASE_DOWNLOAD_PATH + assetId,
+                viaBackend = true
+            )
+        }
+    }
 
-                val assets = json.optJSONArray("assets") ?: error("GitHub release has no assets")
-                var apkName = ""
-                var apkUrl = ""
-                var apkId = 0L
-                for (i in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(i)
-                    val name = asset.optString("name").trim()
-                    if (name.endsWith(".apk", ignoreCase = true) && name.startsWith("pips-life-", ignoreCase = true)) {
-                        apkName = name
-                        apkUrl = asset.optString("browser_download_url").trim()
-                        apkId = asset.optLong("id", 0L)
-                        break
-                    }
-                }
-                if (apkName.isBlank() || apkUrl.isBlank()) error("GitHub latest release has no Pips-life APK")
-
-                val versionCode = extractVersionCode(apkName)
-                    ?: error("Cannot determine Android version code from $apkName")
-                if (versionCode <= BuildConfig.VERSION_CODE) return@use null
-
-                AppRelease(
-                    tag = tag,
-                    name = json.optString("name", "Pips-life update"),
-                    versionName = versionName,
-                    versionCode = versionCode,
-                    assetId = apkId,
-                    assetName = apkName,
-                    downloadUrl = apkUrl
-                ).also { UpdateNotifications.notifyUpdateAvailable(context, it) }
+    private fun checkPublicGitHub(): AppRelease? {
+        val request = Request.Builder()
+            .url(GITHUB_LATEST_URL)
+            .get()
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2026-03-10")
+            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+            .build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
+            val json = JSONObject(body)
+            if (json.optBoolean("draft") || json.optBoolean("prerelease")) return null
+            val tag = json.optString("tag_name").trim()
+            val versionName = tag.removePrefix("v")
+            val assets = json.optJSONArray("assets") ?: error("GitHub release has no assets")
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                val name = a.optString("name").trim()
+                if (!name.startsWith("pips-life-", true) || !name.endsWith(".apk", true)) continue
+                val versionCode = Pattern.compile("-(\\d+)\\.apk$", Pattern.CASE_INSENSITIVE).matcher(name).let { if (it.find()) it.group(1)?.toIntOrNull() else null } ?: continue
+                if (versionCode <= BuildConfig.VERSION_CODE) return null
+                val url = a.optString("browser_download_url").trim()
+                if (url.isBlank()) continue
+                return AppRelease(tag, json.optString("name", "Pips-life update"), versionName, versionCode, a.optLong("id"), name, url, false)
             }
+            return null
         }
     }
 
     fun downloadAndInstall(release: AppRelease) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(context, "Allow Pips-life to install updates, then tap Install again.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Allow Pips-life to install updates, then tap Download again.", Toast.LENGTH_LONG).show()
             context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return
         }
@@ -114,7 +133,7 @@ class ReleaseUpdateManager(private val context: Context) {
 
         val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
             .setTitle("Pips-life ${release.versionName}")
-            .setDescription("Downloading the official Pips-life GitHub release")
+            .setDescription("Downloading the official Pips-life release")
             .setMimeType(APK_MIME)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationUri(Uri.fromFile(file))
@@ -170,14 +189,5 @@ class ReleaseUpdateManager(private val context: Context) {
             pendingInstallFile = null
             installDownloadedApk(file)
         }
-    }
-
-    private fun extractVersionCode(name: String): Int? {
-        val m = Pattern.compile("-(\\d+)\\.apk$", Pattern.CASE_INSENSITIVE).matcher(name)
-        return if (m.find()) m.group(1)?.toIntOrNull() else null
-    }
-
-    companion object {
-        const val RELEASES_PAGE = GITHUB_RELEASES_URL
     }
 }
