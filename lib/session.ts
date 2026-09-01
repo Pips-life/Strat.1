@@ -1,10 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 function secret() {
-  // MetaApi is the authoritative backend connection. Do not require a
-  // second user-facing/session secret when the MetaApi backend token exists.
-  const value = process.env.PIPSLIFE_SESSION_SECRET?.trim() || process.env.METAAPI_TOKEN?.trim();
-  if (!value) throw new Error('MetaApi backend is not configured');
+  const value = process.env.PIPSLIFE_SESSION_SECRET?.trim()
+    || process.env.METAAPI_TOKEN?.trim()
+    || process.env.META_API_TOKEN?.trim()
+    || process.env.METAAPI_KEY?.trim()
+    || process.env.META_API_KEY?.trim();
+  if (!value) throw new Error('MetaApi backend is not configured: set METAAPI_TOKEN in the production Vercel environment');
   return value;
 }
 
