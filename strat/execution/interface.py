@@ -12,6 +12,10 @@ class ExecutionAdapter(ABC):
     def submit(self, order: OrderRequest) -> ExecutionResult:
         raise NotImplementedError
 
+    def cancel_order(self, order_id: str) -> ExecutionResult:
+        """Cancel a pending order. Adapters that do not support cancellation must reject it."""
+        return ExecutionResult("REJECTED", order_id, reason="order cancellation is not supported by this adapter")
+
     @abstractmethod
     def close_position(self, symbol: str, timestamp: datetime, price: float | None = None) -> ExecutionResult:
         raise NotImplementedError
