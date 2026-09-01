@@ -45,6 +45,8 @@ android {
     }
 }
 
+// Production mobile builds use the public backend hostname so installed APKs are not
+// dependent on Vercel preview/protection URLs.
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.02.00"))
     implementation("androidx.activity:activity-compose:1.10.1")
