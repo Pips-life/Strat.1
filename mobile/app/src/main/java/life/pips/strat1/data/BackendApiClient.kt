@@ -3,22 +3,115 @@ package life.pips.strat1.data
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import life.pips.strat1.BuildConfig
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 
+private const val PUBLIC_SERVER_DIRECTORY = "https://broker-servers.apis.tradevps.net/"
+
+private val HFM_SERVER_FALLBACK = listOf(
+    Mt5Server("HFM:HFMarketsGlobal-Live1", "HFM", "HFMarketsGlobal-Live1", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Demo", "HFM", "HFMarketsGlobal-Demo", "demo"),
+    Mt5Server("HFM:HFMarketsGlobal-Live3", "HFM", "HFMarketsGlobal-Live3", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Demo3", "HFM", "HFMarketsGlobal-Demo3", "demo"),
+    Mt5Server("HFM:HFMarketsGlobal-Live4", "HFM", "HFMarketsGlobal-Live4", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Demo4", "HFM", "HFMarketsGlobal-Demo4", "demo"),
+    Mt5Server("HFM:HFMarketsGlobal-Live5", "HFM", "HFMarketsGlobal-Live5", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live7", "HFM", "HFMarketsGlobal-Live7", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live8", "HFM", "HFMarketsGlobal-Live8", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live9", "HFM", "HFMarketsGlobal-Live9", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live10", "HFM", "HFMarketsGlobal-Live10", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live11", "HFM", "HFMarketsGlobal-Live11", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live12", "HFM", "HFMarketsGlobal-Live12", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live13", "HFM", "HFMarketsGlobal-Live13", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live14", "HFM", "HFMarketsGlobal-Live14", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live15", "HFM", "HFMarketsGlobal-Live15", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live16", "HFM", "HFMarketsGlobal-Live16", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live17", "HFM", "HFMarketsGlobal-Live17", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live18", "HFM", "HFMarketsGlobal-Live18", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live19", "HFM", "HFMarketsGlobal-Live19", "real"),
+    Mt5Server("HFM:HFMarketsGlobal-Live20", "HFM", "HFMarketsGlobal-Live20", "real"),
+    Mt5Server("HFM:HFMarketsSA-Live1", "HFM", "HFMarketsSA-Live1", "real"),
+    Mt5Server("HFM:HFMarketsSA-Demo", "HFM", "HFMarketsSA-Demo", "demo"),
+)
+
+private fun normalizeBroker(value: String): String =
+    value.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+private fun isHfmQuery(value: String): Boolean = when (normalizeBroker(value)) {
+    "hfm", "hfmarket", "hfmarkets", "hfmarketsglobal", "hotforex" -> true
+    else -> false
+}
+
+private fun serverMatches(query: String, server: Mt5Server): Boolean {
+    val q = normalizeBroker(query)
+    if (q.isBlank()) return true
+    if (isHfmQuery(query)) {
+        return normalizeBroker(server.brokerName).contains("hfm") ||
+            normalizeBroker(server.brokerName).contains("hfmarket") ||
+            normalizeBroker(server.serverName).contains("hfmarket")
+    }
+    val broker = normalizeBroker(server.brokerName)
+    val name = normalizeBroker(server.serverName)
+    return broker.contains(q) || q.contains(broker) || name.contains(q)
+}
+
+private fun serverScore(query: String, server: Mt5Server): Int {
+    val q = normalizeBroker(query)
+    val broker = normalizeBroker(server.brokerName)
+    val name = normalizeBroker(server.serverName)
+    if (isHfmQuery(query)) return if (name.contains("hfmarketsglobal")) 100 else 90
+    if (broker == q) return 100
+    if (broker.startsWith(q)) return 90
+    if (broker.contains(q)) return 80
+    if (name.startsWith(q)) return 70
+    if (name.contains(q)) return 60
+    return 10
+}
+
 class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     private val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 
-    suspend fun findServers(query: String): Result<List<Mt5Server>> = runCatching { withContext(Dispatchers.IO) {
-        val t = requestJson("GET", "/api/mt5/servers?q=${URLEncoder.encode(query, "UTF-8")}", null)
-        val a = JSONObject(t).optJSONArray("brokers") ?: JSONArray()
-        buildList { for (i in 0 until a.length()) { val s = a.getJSONObject(i); add(Mt5Server(s.optString("id"), s.optString("brokerName"), s.optString("serverName"), s.optString("environment", "real"))) }
-    } } }
+    /**
+     * Broker search deliberately has two independent paths:
+     * 1) our backend when available;
+     * 2) the public MT5 server directory directly from the phone.
+     *
+     * This prevents a protected/temporarily unavailable Vercel deployment from
+     * making broker discovery look like there are no servers. Results are then
+     * normalized, fuzzy-matched, ranked and de-duplicated locally.
+     */
+    suspend fun findServers(query: String): Result<List<Mt5Server>> = runCatching {
+        withContext(Dispatchers.IO) {
+            val q = query.trim()
+            if (q.length < 2) return@withContext emptyList()
+
+            val merged = LinkedHashMap<String, Mt5Server>()
+
+            runCatching {
+                parseServerResults(requestJson("GET", "/api/mt5/servers?q=${URLEncoder.encode(q, "UTF-8")}", null))
+            }.getOrDefault(emptyList()).forEach { merged[serverKey(it)] = it }
+
+            // Never depend solely on the backend for discovery. The directory
+            // is public and can be queried directly by the Android client.
+            runCatching {
+                parseServerResults(requestRaw(PUBLIC_SERVER_DIRECTORY))
+            }.getOrDefault(emptyList()).forEach { merged[serverKey(it)] = it }
+
+            if (isHfmQuery(q)) {
+                HFM_SERVER_FALLBACK.forEach { merged[serverKey(it)] = it }
+            }
+
+            merged.values
+                .filter { serverMatches(q, it) }
+                .sortedWith(compareByDescending<Mt5Server> { serverScore(q, it) }.thenBy { it.serverName.lowercase() })
+                .take(100)
+        }
+    }
 
     suspend fun connect(login: String, password: String, server: String, broker: String): Result<BackendSession> = runCatching {
         val r = JSONObject(requestJson("POST", "/api/mt5/connect", JSONObject().apply { put("login", login); put("password", password); put("server", server); put("broker", broker); put("name", "Pips-life MT5 $login") }.toString()))
@@ -41,6 +134,31 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
         BotState(r.optBoolean("configured", true), r.optString("state", action.uppercase()), r.optString("strategy", "001"), r.optString("activity", "COMMAND ACCEPTED"))
     }
 
+    private fun parseServerResults(text: String): List<Mt5Server> {
+        val a = JSONObject(text).optJSONArray("brokers") ?: JSONArray()
+        return buildList {
+            for (i in 0 until a.length()) {
+                val b = a.getJSONObject(i)
+                val broker = b.optString("name").ifBlank { "Unknown broker" }
+                val servers = b.optJSONArray("servers") ?: JSONArray()
+                for (j in 0 until servers.length()) {
+                    val s = servers.getJSONObject(j)
+                    val name = s.optString("name").trim()
+                    if (name.isNotBlank()) add(Mt5Server("${b.optString("id", broker)}:$name", broker, name, s.optString("type", "real")))
+                }
+            }
+        }
+    }
+
+    private fun serverKey(s: Mt5Server) = "${normalizeBroker(s.brokerName)}:${normalizeBroker(s.serverName)}"
+
+    private fun parsePositions(a: JSONArray): List<LivePosition> = buildList { for (i in 0 until a.length()) { val p = a.getJSONObject(i); add(LivePosition(p.optString("symbol"), p.optString("type").removePrefix("POSITION_TYPE_").ifBlank { p.optString("side") }, p.optDouble("volume", 0.0), p.optDouble("openPrice", Double.NaN), p.optDouble("currentPrice", Double.NaN), p.optDoubleOrNull("stopLoss"), p.optDoubleOrNull("takeProfit"), p.optDouble("profit", Double.NaN))) } }
+
+    private suspend fun requestRaw(url: String): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url).addHeader("Accept", "application/json").get().build()
+        http.newCall(request).execute().use { r -> val t = r.body?.string().orEmpty(); if (!r.isSuccessful) throw IllegalStateException("Server directory request failed (${r.code})"); t }
+    }
+
     private suspend fun requestJson(method: String, path: String, body: String?, token: String? = null): String = withContext(Dispatchers.IO) {
         val b = Request.Builder().url(base + path).addHeader("Accept", "application/json")
         if (token != null) b.addHeader("x-pipslife-session", token)
@@ -48,7 +166,6 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
         http.newCall(b.build()).execute().use { r -> val t = r.body?.string().orEmpty(); if (!r.isSuccessful) throw IllegalStateException(error(t, "Backend request failed (${r.code})")); t }
     }
 
-    private fun parsePositions(a: JSONArray): List<LivePosition> = buildList { for (i in 0 until a.length()) { val p = a.getJSONObject(i); add(LivePosition(p.optString("symbol"), p.optString("type").removePrefix("POSITION_TYPE_").ifBlank { p.optString("side") }, p.optDouble("volume", 0.0), p.optDouble("openPrice", Double.NaN), p.optDouble("currentPrice", Double.NaN), p.optDoubleOrNull("stopLoss"), p.optDoubleOrNull("takeProfit"), p.optDouble("profit", Double.NaN))) } }
     private fun error(b: String, f: String) = runCatching { JSONObject(b).optString("error").ifBlank { f } }.getOrDefault(f)
     private fun JSONObject.optDoubleOrNull(n: String): Double? = if (has(n) && !isNull(n)) optDouble(n).takeUnless { it.isNaN() } else null
 }
