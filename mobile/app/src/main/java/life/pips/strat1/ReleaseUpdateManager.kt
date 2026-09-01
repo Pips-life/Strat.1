@@ -42,16 +42,10 @@ class ReleaseUpdateManager(private val context: Context) {
 
     init { UpdateNotifications.ensureChannel(context) }
 
-    /**
-     * Primary path: public release gateway, which is required because Strat.1 is
-     * private and the APK must never contain a GitHub credential.
-     * Fallback: public GitHub Releases API if the repository is ever made public.
-     */
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
             val backend = runCatching { checkBackend() }.getOrNull()
             if (backend != null) return@runCatching backend
-
             checkPublicGitHub()
         }
     }
@@ -74,27 +68,15 @@ class ReleaseUpdateManager(private val context: Context) {
             val assetName = json.optString("assetName", "Pips-life-update.apk")
             if (versionName.isBlank() || versionCode <= 0 || assetId <= 0L) error("Release gateway returned incomplete release information")
             if (versionCode <= BuildConfig.VERSION_CODE) return null
-            return AppRelease(
-                tag = json.optString("tag"),
-                name = json.optString("name", "Pips-life update"),
-                versionName = versionName,
-                versionCode = versionCode,
-                assetId = assetId,
-                assetName = assetName,
-                downloadUrl = base + RELEASE_DOWNLOAD_PATH + assetId,
-                viaBackend = true
-            )
+            return AppRelease(json.optString("tag"), json.optString("name", "Pips-life update"), versionName, versionCode, assetId, assetName, base + RELEASE_DOWNLOAD_PATH + assetId, true)
         }
     }
 
     private fun checkPublicGitHub(): AppRelease? {
-        val request = Request.Builder()
-            .url(GITHUB_LATEST_URL)
-            .get()
+        val request = Request.Builder().url(GITHUB_LATEST_URL).get()
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2026-03-10")
-            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
-            .build()
+            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}").build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
@@ -107,8 +89,9 @@ class ReleaseUpdateManager(private val context: Context) {
                 val a = assets.getJSONObject(i)
                 val name = a.optString("name").trim()
                 if (!name.startsWith("pips-life-", true) || !name.endsWith(".apk", true)) continue
-                val versionCode = Pattern.compile("-(\\d+)\\.apk$", Pattern.CASE_INSENSITIVE).matcher(name).let { if (it.find()) it.group(1)?.toIntOrNull() else null } ?: continue
-                if (versionCode <= BuildConfig.VERSION_CODE) return null
+                val m = Pattern.compile("-(\\d+)\\.apk$", Pattern.CASE_INSENSITIVE).matcher(name)
+                val versionCode = if (m.find()) m.group(1)?.toIntOrNull() else null
+                if (versionCode == null || versionCode <= BuildConfig.VERSION_CODE) continue
                 val url = a.optString("browser_download_url").trim()
                 if (url.isBlank()) continue
                 return AppRelease(tag, json.optString("name", "Pips-life update"), versionName, versionCode, a.optLong("id"), name, url, false)
@@ -123,7 +106,6 @@ class ReleaseUpdateManager(private val context: Context) {
             context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return
         }
-
         receiver?.let { runCatching { context.unregisterReceiver(it) } }
         val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return
@@ -136,10 +118,9 @@ class ReleaseUpdateManager(private val context: Context) {
             .setDescription("Downloading the official Pips-life release")
             .setMimeType(APK_MIME)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationUri(Uri.fromFile(file))
+            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
-
         val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = manager.enqueue(request)
         receiver = object : BroadcastReceiver() {
