@@ -18,7 +18,7 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
         val t = requestJson("GET", "/api/mt5/servers?q=${URLEncoder.encode(query, "UTF-8")}", null)
         val a = JSONObject(t).optJSONArray("brokers") ?: JSONArray()
         buildList { for (i in 0 until a.length()) { val s = a.getJSONObject(i); add(Mt5Server(s.optString("id"), s.optString("brokerName"), s.optString("serverName"), s.optString("environment", "real"))) }
-    } }
+    } } }
 
     suspend fun connect(login: String, password: String, server: String, broker: String): Result<BackendSession> = runCatching {
         val r = JSONObject(requestJson("POST", "/api/mt5/connect", JSONObject().apply { put("login", login); put("password", password); put("server", server); put("broker", broker); put("name", "Pips-life MT5 $login") }.toString()))
