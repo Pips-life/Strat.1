@@ -1,0 +1,107 @@
+@Composable
+private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
+    var bot by remember { mutableStateOf<BotState?>(null) }
+    var selected by remember { mutableStateOf("001") }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Choose the strategy the bot should trade.") }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(session) {
+        if (session != null) while (true) {
+            api.botStatus(session).onSuccess {
+                bot = it
+                if (it.strategy == "001" || it.strategy == "002") selected = it.strategy
+            }
+            delay(3000)
+        }
+    }
+
+    fun choose(strategy: String) {
+        selected = strategy
+        message = "Selecting Strategy $strategy…"
+        if (session == null) {
+            message = "Connect MT5 before selecting a live trading strategy."
+            return
+        }
+        busy = true
+        scope.launch {
+            api.botCommand(session, "select:$strategy")
+                .onSuccess {
+                    bot = it
+                    selected = it.strategy.ifBlank { strategy }
+                    message = "Strategy ${selected} selected for the bot."
+                }
+                .onFailure { message = it.message ?: "Strategy selection failed." }
+            busy = false
+        }
+    }
+
+    LazyColumn(
+        modifier.fillMaxSize().background(Ink).padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp)
+    ) {
+        item { TopBar("Strategies", "CHOOSE THE ACTIVE TRADING STRATEGY", session != null) }
+        item {
+            Text(message, color = if (message.contains("selected", true)) Green else Muted, fontSize = 12.sp)
+        }
+        item {
+            Card(
+                onClick = { if (!busy) choose("001") },
+                enabled = !busy,
+                colors = CardDefaults.cardColors(containerColor = if (selected == "001") Panel2 else Panel),
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.fillMaxWidth().border(2.dp, if (selected == "001") Cyan else Line, RoundedCornerShape(22.dp))
+            ) {
+                Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("STRATEGY 001", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        StatusPill(if (selected == "001") "SELECTED" else "READY", if (selected == "001") Green else Cyan)
+                    }
+                    Text("QOF", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
+                    Text("Primary QOF strategy. Tap this card to make it the active strategy for the bot.", color = Muted, fontSize = 12.sp)
+                    Divider(color = Line)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Metric("ENGINE", "PROTECTED")
+                        Metric("STATE", if (selected == "001") "SELECTED" else "READY")
+                        Metric("ROLE", "PRIMARY")
+                    }
+                }
+            }
+        }
+        item {
+            Card(
+                onClick = { if (!busy) choose("002") },
+                enabled = !busy,
+                colors = CardDefaults.cardColors(containerColor = if (selected == "002") Panel2 else Panel),
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.fillMaxWidth().border(2.dp, if (selected == "002") Cyan else Line, RoundedCornerShape(22.dp))
+            ) {
+                Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("STRATEGY 002", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        StatusPill(if (selected == "002") "SELECTED" else "READY", if (selected == "002") Green else Cyan)
+                    }
+                    Text("Velocity Expansion", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
+                    Text("Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", color = Muted, fontSize = 12.sp)
+                    Divider(color = Line)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Metric("ENGINE", "PROTECTED")
+                        Metric("STATE", if (selected == "002") "SELECTED" else "READY")
+                        Metric("ROLE", "SECONDARY")
+                    }
+                }
+            }
+        }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(1.dp, Line, RoundedCornerShape(22.dp))) {
+                Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+                    Text("STRATEGY 003", color = Purple, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    StatusPill("LOCKED", Purple)
+                    Text("Reserved", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
+                    Text("Future strategy slot.", color = Muted, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
