@@ -1,10 +1,7 @@
 package life.pips.strat1
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -17,7 +14,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
-import java.util.regex.Pattern
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
 
 private const val RELEASE_LATEST_PATH = "/api/app/release/latest"
 private const val RELEASE_DOWNLOAD_PATH = "/api/app/release/download?asset="
@@ -36,17 +34,63 @@ data class AppRelease(
 )
 
 class ReleaseUpdateManager(private val context: Context) {
-    private val client = OkHttpClient()
-    private var receiver: BroadcastReceiver? = null
-    private var pendingInstallFile: File? = null
-
-    init { UpdateNotifications.ensureChannel(context) }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
 
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) {
         runCatching {
-            val backend = runCatching { checkBackend() }.getOrNull()
-            if (backend != null) return@runCatching backend
-            checkPublicGitHub()
+            // GitHub is the source of truth. This avoids a protected Vercel deployment
+            // preventing the app from discovering a perfectly valid public release.
+            runCatching { checkPublicGitHub() }.getOrElse {
+                checkBackend()
+            }
+        }
+    }
+
+    private fun checkPublicGitHub(): AppRelease? {
+        val request = Request.Builder()
+            .url(GITHUB_LATEST_URL)
+            .get()
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
+            val json = JSONObject(body)
+            if (json.optBoolean("draft") || json.optBoolean("prerelease")) return null
+
+            val tag = json.optString("tag_name").trim()
+            val versionName = tag.removePrefix("v").trim()
+            val assets = json.optJSONArray("assets") ?: error("GitHub release has no assets")
+            var best: AppRelease? = null
+
+            for (i in 0 until assets.length()) {
+                val asset = assets.getJSONObject(i)
+                val name = asset.optString("name").trim()
+                if (!name.startsWith("pips-life-", true) || !name.endsWith(".apk", true)) continue
+                val versionCode = Regex("-(\\d+)\\.apk$", RegexOption.IGNORE_CASE)
+                    .find(name)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: continue
+                if (versionCode <= BuildConfig.VERSION_CODE) continue
+                val url = asset.optString("browser_download_url").trim()
+                if (url.isBlank()) continue
+                val candidate = AppRelease(
+                    tag = tag,
+                    name = json.optString("name", "Pips-life update"),
+                    versionName = versionName,
+                    versionCode = versionCode,
+                    assetId = asset.optLong("id"),
+                    assetName = name,
+                    downloadUrl = url,
+                    viaBackend = false
+                )
+                if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
+            }
+            return best
         }
     }
 
@@ -68,107 +112,75 @@ class ReleaseUpdateManager(private val context: Context) {
             val assetName = json.optString("assetName", "Pips-life-update.apk")
             if (versionName.isBlank() || versionCode <= 0 || assetId <= 0L) error("Release gateway returned incomplete release information")
             if (versionCode <= BuildConfig.VERSION_CODE) return null
-            return AppRelease(json.optString("tag"), json.optString("name", "Pips-life update"), versionName, versionCode, assetId, assetName, base + RELEASE_DOWNLOAD_PATH + assetId, true)
+            return AppRelease(
+                json.optString("tag", "v$versionName"),
+                json.optString("name", "Pips-life update"),
+                versionName,
+                versionCode,
+                assetId,
+                assetName,
+                base + RELEASE_DOWNLOAD_PATH + assetId,
+                true
+            )
         }
     }
 
-    private fun checkPublicGitHub(): AppRelease? {
-        val request = Request.Builder().url(GITHUB_LATEST_URL).get()
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2026-03-10")
-            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}").build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) error("GitHub release check failed (${response.code})")
-            val json = JSONObject(body)
-            if (json.optBoolean("draft") || json.optBoolean("prerelease")) return null
-            val tag = json.optString("tag_name").trim()
-            val versionName = tag.removePrefix("v")
-            val assets = json.optJSONArray("assets") ?: error("GitHub release has no assets")
-            for (i in 0 until assets.length()) {
-                val a = assets.getJSONObject(i)
-                val name = a.optString("name").trim()
-                if (!name.startsWith("pips-life-", true) || !name.endsWith(".apk", true)) continue
-                val m = Pattern.compile("-(\\d+)\\.apk$", Pattern.CASE_INSENSITIVE).matcher(name)
-                val versionCode = if (m.find()) m.group(1)?.toIntOrNull() else null
-                if (versionCode == null || versionCode <= BuildConfig.VERSION_CODE) continue
-                val url = a.optString("browser_download_url").trim()
-                if (url.isBlank()) continue
-                return AppRelease(tag, json.optString("name", "Pips-life update"), versionName, versionCode, a.optLong("id"), name, url, false)
-            }
-            return null
-        }
-    }
+    suspend fun downloadAndInstall(release: AppRelease, onProgress: (Int) -> Unit = {}): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Allow Pips-life to install updates, then tap Download again.", Toast.LENGTH_LONG).show()
+                        context.startActivity(
+                            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                    return@runCatching
+                }
 
-    fun downloadAndInstall(release: AppRelease) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-            Toast.makeText(context, "Allow Pips-life to install updates, then tap Download again.", Toast.LENGTH_LONG).show()
-            context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return
-        }
-        receiver?.let { runCatching { context.unregisterReceiver(it) } }
-        val filename = "pips-life-${release.versionName}-${release.versionCode}.apk"
-        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return
-        val file = File(dir, filename)
-        if (file.exists()) file.delete()
-        pendingInstallFile = file
+                val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                    ?: error("App download directory unavailable")
+                val file = File(dir, "pips-life-${release.versionName}-${release.versionCode}.apk")
+                if (file.exists()) file.delete()
 
-        val request = DownloadManager.Request(Uri.parse(release.downloadUrl))
-            .setTitle("Pips-life ${release.versionName}")
-            .setDescription("Downloading the official Pips-life release")
-            .setMimeType(APK_MIME)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, filename)
-            .setAllowedOverMetered(true)
-            .setAllowedOverRoaming(false)
-        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = manager.enqueue(request)
-        receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context, intent: Intent) {
-                if (intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) != downloadId) return
-                try {
-                    manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
-                        if (!cursor.moveToFirst()) return
-                        if (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) != DownloadManager.STATUS_SUCCESSFUL) {
-                            Toast.makeText(context, "Pips-life update download failed.", Toast.LENGTH_LONG).show()
-                            return
+                val request = Request.Builder()
+                    .url(release.downloadUrl)
+                    .get()
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) error("Update download failed (${response.code})")
+                    val body = response.body ?: error("Update download was empty")
+                    val total = body.contentLength()
+                    var read = 0L
+                    body.byteStream().use { input ->
+                        FileOutputStream(file).use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                read += count
+                                if (total > 0) onProgress(((read * 100L) / total).toInt().coerceIn(0, 100))
+                            }
+                            output.fd.sync()
                         }
                     }
-                    installDownloadedApk(file)
-                } finally {
-                    runCatching { context.unregisterReceiver(this) }
-                    receiver = null
                 }
+
+                if (!file.exists() || file.length() == 0L) error("Downloaded update is empty")
+                withContext(Dispatchers.Main) { installApk(file) }
             }
         }
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") context.registerReceiver(receiver, filter)
-        Toast.makeText(context, "Pips-life ${release.versionName} downloading…", Toast.LENGTH_LONG).show()
-    }
 
-    private fun installDownloadedApk(file: File) {
-        if (!file.exists() || file.length() == 0L) {
-            Toast.makeText(context, "Downloaded update is missing or empty.", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-            pendingInstallFile = file
-            context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return
-        }
+    private fun installApk(file: File) {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         context.startActivity(Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, APK_MIME)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         })
-    }
-
-    fun installPendingIfAllowed() {
-        val file = pendingInstallFile ?: return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()) {
-            pendingInstallFile = null
-            installDownloadedApk(file)
-        }
     }
 }

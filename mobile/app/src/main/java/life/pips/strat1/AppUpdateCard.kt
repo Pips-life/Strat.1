@@ -21,6 +21,8 @@ fun AppUpdateCard() {
     val manager = remember { ReleaseUpdateManager(context) }
     val scope = rememberCoroutineScope()
     var checking by remember { mutableStateOf(false) }
+    var downloading by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
     var release by remember { mutableStateOf<AppRelease?>(null) }
     var message by remember { mutableStateOf("Checking GitHub releases…") }
     var promptedVersion by remember { mutableStateOf<Int?>(null) }
@@ -39,14 +41,30 @@ fun AppUpdateCard() {
         checking = false
     }
 
-    LaunchedEffect(Unit) {
-        manager.installPendingIfAllowed()
-        runCheck()
+    fun startDownload(found: AppRelease) {
+        if (downloading) return
+        showDialog = false
+        downloading = true
+        progress = 0
+        message = "Downloading v${found.versionName}…"
+        scope.launch {
+            manager.downloadAndInstall(found) { value -> progress = value }
+                .onSuccess {
+                    downloading = false
+                    message = "Download complete — opening installer…"
+                }
+                .onFailure { error ->
+                    downloading = false
+                    message = "Update download failed — ${error.message ?: "network error"}"
+                }
+        }
     }
+
+    LaunchedEffect(Unit) { runCheck() }
 
     LaunchedEffect(release?.versionCode) {
         val found = release ?: return@LaunchedEffect
-        if (promptedVersion != found.versionCode) {
+        if (promptedVersion != found.versionCode && !downloading) {
             promptedVersion = found.versionCode
             showDialog = true
         }
@@ -57,13 +75,20 @@ fun AppUpdateCard() {
         if (found != null) AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text("Pips-life update available") },
-            text = { Text("Pips-life ${found.versionName} (build ${found.versionCode}) is available from GitHub. Download it now, then Android will open the installer.") },
+            text = { Text("Pips-life ${found.versionName} (build ${found.versionCode}) is ready. Download it now, then Android will open the installer.") },
             confirmButton = {
-                TextButton(onClick = { showDialog = false; manager.downloadAndInstall(found) }) {
-                    Text("DOWNLOAD", fontSize = 12.sp)
-                }
+                Button(
+                    onClick = { startDownload(found) },
+                    modifier = Modifier.height(36.dp).wrapContentWidth(),
+                    contentPadding = PaddingValues(horizontal = 13.dp, vertical = 0.dp),
+                    shape = RoundedCornerShape(9.dp)
+                ) { Text("DOWNLOAD", fontSize = 10.sp) }
             },
-            dismissButton = { TextButton(onClick = { showDialog = false }) { Text("LATER", fontSize = 12.sp) } }
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
+                    Text("LATER", fontSize = 10.sp)
+                }
+            }
         )
     }
 
@@ -85,8 +110,9 @@ fun AppUpdateCard() {
                 Text("GITHUB", color = Color(0xFF8EA2BB), fontSize = 8.sp)
             }
             Text(
-                message,
+                if (downloading) "Downloading… $progress%" else message,
                 color = when {
+                    downloading -> Color(0xFF25D9FF)
                     message.startsWith("You’re up to date") -> Color(0xFF39F28A)
                     message.startsWith("Update available") -> Color(0xFF25D9FF)
                     message.startsWith("Release check failed") -> Color(0xFFFFC857)
@@ -96,18 +122,20 @@ fun AppUpdateCard() {
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(
-                    enabled = !checking,
+                    enabled = !checking && !downloading,
                     onClick = { scope.launch { runCheck() } },
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
                 ) { Text(if (checking) "CHECKING…" else "CHECK", fontSize = 10.sp) }
                 release?.let { found ->
                     TextButton(
-                        onClick = { manager.downloadAndInstall(found) },
+                        enabled = !downloading,
+                        onClick = { startDownload(found) },
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
                     ) { Text("DOWNLOAD", color = Color(0xFF39F28A), fontSize = 10.sp) }
                     Text("v${found.versionName}", color = Color(0xFF8EA2BB), fontSize = 9.sp)
                 }
             }
+            if (downloading) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(3.dp))
         }
     }
 }
