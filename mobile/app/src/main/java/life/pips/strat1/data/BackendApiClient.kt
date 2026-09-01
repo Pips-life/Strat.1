@@ -39,8 +39,6 @@ private val HFM_SERVER_FALLBACK = listOf(
     Mt5Server("HFM:HFMarketsGlobal-Live20", "HFM", "HFMarketsGlobal-Live20", "real"),
     Mt5Server("HFM:HFMarketsSA-Live1", "HFM", "HFMarketsSA-Live1", "real"),
     Mt5Server("HFM:HFMarketsSA-Demo", "HFM", "HFMarketsSA-Demo", "demo"),
-    // Kenya-specific HFM servers. These are a fallback so a directory outage
-    // cannot hide the Kenyan MT5 accounts.
     Mt5Server("HFM-KE:HFMarketsKE-Live2", "HFM Investments (Kenya)", "HFMarketsKE-Live2", "real"),
     Mt5Server("HFM-KE:HFMarketsKE-Live10", "HFM Investments (Kenya)", "HFMarketsKE-Live10", "real"),
     Mt5Server("HFM-KE:HFMarketsKE-Live11", "HFM Investments (Kenya)", "HFMarketsKE-Live11", "real"),
@@ -72,11 +70,9 @@ private fun isKenyaQuery(value: String): Boolean {
     return q == "ke" || q.contains("kenya") || q.contains("kenyan") || q.contains("nairobi")
 }
 
-private fun isHfmQuery(value: String): Boolean = when {
-    normalizeBroker(value).contains("hfm") -> true
-    normalizeBroker(value).contains("hfmarket") -> true
-    normalizeBroker(value).contains("hotforex") -> true
-    else -> false
+private fun isHfmQuery(value: String): Boolean {
+    val q = normalizeBroker(value)
+    return q.contains("hfm") || q.contains("hfmarket") || q.contains("hotforex")
 }
 
 private fun isExnessQuery(value: String): Boolean = normalizeBroker(value).contains("exness")
@@ -85,8 +81,7 @@ private fun isKenyaBroker(server: Mt5Server): Boolean {
     val broker = normalizeBroker(server.brokerName)
     val name = normalizeBroker(server.serverName)
     return KENYA_BROKER_ALIASES.any { alias -> broker.contains(normalizeBroker(alias)) } ||
-        broker.contains("kenya") || broker.contains("ke") ||
-        name.contains("marketske") || name.contains("exnesske")
+        broker.contains("kenya") || name.contains("marketske") || name.contains("exnesske")
 }
 
 private fun serverMatches(query: String, server: Mt5Server): Boolean {
@@ -96,7 +91,7 @@ private fun serverMatches(query: String, server: Mt5Server): Boolean {
     val broker = normalizeBroker(server.brokerName)
     val name = normalizeBroker(server.serverName)
 
-    if (isKenyaQuery(query)) return isKenyaBroker(server) || name.contains("hfmarketske") || name.contains("exnesske")
+    if (isKenyaQuery(query)) return isKenyaBroker(server)
     if (isHfmQuery(query)) return broker.contains("hfm") || broker.contains("hfmarket") || name.contains("hfmarket") || name.contains("hotforex")
     if (isExnessQuery(query)) return broker.contains("exness") || name.contains("exness")
 
@@ -139,22 +134,12 @@ private fun serverScore(query: String, server: Mt5Server): Int {
 class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     private val base = BuildConfig.BACKEND_BASE_URL.trimEnd('/')
 
-    /**
-     * Broker search uses three independent sources:
-     * 1) our backend;
-     * 2) the public MT5 server directory;
-     * 3) deterministic Kenya/HFM/Exness fallbacks.
-     *
-     * All sources are merged, normalized, fuzzy-matched, ranked and deduplicated
-     * locally. A protected backend therefore cannot make the search empty.
-     */
     suspend fun findServers(query: String): Result<List<Mt5Server>> = runCatching {
         withContext(Dispatchers.IO) {
             val q = query.trim()
             if (q.length < 2) return@withContext emptyList()
 
             val merged = LinkedHashMap<String, Mt5Server>()
-
             coroutineScope {
                 val backend = async {
                     runCatching {
@@ -162,9 +147,7 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
                     }.getOrDefault(emptyList())
                 }
                 val directory = async {
-                    runCatching {
-                        parseServerResults(requestRaw(PUBLIC_SERVER_DIRECTORY))
-                    }.getOrDefault(emptyList())
+                    runCatching { parseServerResults(requestRaw(PUBLIC_SERVER_DIRECTORY)) }.getOrDefault(emptyList())
                 }
                 backend.await().forEach { merged[serverKey(it)] = it }
                 directory.await().forEach { merged[serverKey(it)] = it }
