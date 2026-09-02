@@ -127,7 +127,6 @@ jobs:
           echo 'Following runner event stream for up to 180 seconds (no market-state polling).'
           set +e
           timeout --signal=TERM 180s docker logs -f --since 1s pips-life-demo-verify 2>&1 | tee /tmp/runner-events.log
-          stream_rc=${PIPESTATUS[0]}
           set -e
           curl --fail --silent -X POST http://127.0.0.1:18081/ \
             -H "$AUTH" -H 'Content-Type: application/json' \
@@ -144,3 +143,4 @@ jobs:
             echo 'Demo verification failed: live ticks arrived but Strategy 002 produced no broker order acknowledgement during the verification window.'
             exit 1
           fi
+# Streaming demo verification is intentionally enabled by the commit message above.
