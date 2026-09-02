@@ -1,15 +1,15 @@
 """Strategy 002: Velocity Expansion.
 
-Detects accelerating directional price velocity and enters immediately. The
-strategy does not own broker execution; it emits an entry plus the parameters
-needed by the execution controller to maintain the 100-pip opposite stop loop.
+Detects directional price movement from the live tick stream and enters
+immediately. The strategy does not own broker execution; it emits an entry
+plus the parameters needed by the execution controller to maintain the
+100-pip opposite stop loop.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from math import floor
-from statistics import median
-from typing import Any, Iterable
+from typing import Any
 
 from .base import Signal, Strategy
 
@@ -18,9 +18,11 @@ from .base import Signal, Strategy
 class Strategy002Config:
     pip_size: float = 0.01
     trail_pips: float = 100.0
-    baseline_window: int = 20
-    min_velocity_ratio: float = 1.50
-    min_acceleration_ratio: float = 1.05
+    # Strategy 002 is an execution-first velocity strategy. A live tick with
+    # any non-zero directional movement is enough to establish velocity.
+    baseline_window: int = 1
+    min_velocity_ratio: float = 1.0
+    min_acceleration_ratio: float = 1.0
     min_velocity: float = 0.0
     risk_per_trade: float = 0.01
     quantity_step: float = 0.01
@@ -35,7 +37,7 @@ class Strategy002Config:
 class Strategy002(Strategy):
     id = "strategy_002"
     name = "Velocity Expansion"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def __init__(self, config: Strategy002Config | None = None) -> None:
         self.config = config or Strategy002Config()
@@ -63,46 +65,50 @@ class Strategy002(Strategy):
 
     def analyze(self, market: Any) -> dict[str, Any]:
         samples = self._samples(market)
-        needed = self.config.baseline_window + 2
-        if len(samples) < needed:
-            return {"velocity_expanding": False, "reason": "insufficient samples", "sample_count": len(samples)}
+        if len(samples) < 2:
+            return {"velocity_expanding": False, "reason": "waiting for first price movement", "sample_count": len(samples)}
 
-        velocities: list[float] = []
-        for (t0, p0), (t1, p1) in zip(samples[-(self.config.baseline_window + 2):], samples[-(self.config.baseline_window + 1):]):
-            dt = t1 - t0
-            velocities.append((p1 - p0) / dt if dt > 0 else 0.0)
+        # Use the live tick-to-tick velocity. There is deliberately no 20-tick
+        # warm-up and no large expansion multiplier: the first non-zero move
+        # is actionable. This is what makes Strategy 002 execution-sensitive.
+        t0, p0 = samples[-2]
+        t1, p1 = samples[-1]
+        dt = t1 - t0
+        current = (p1 - p0) / dt if dt > 0 else 0.0
+        previous = 0.0
+        if len(samples) >= 3:
+            tp, pp = samples[-3]
+            previous_dt = t0 - tp
+            previous = (p0 - pp) / previous_dt if previous_dt > 0 else 0.0
 
-        current = velocities[-1]
-        previous = velocities[-2]
-        baseline = median(abs(v) for v in velocities[:-1])
-        baseline = max(baseline, 1e-12)
         current_abs = abs(current)
-        expansion_ratio = current_abs / baseline
-        acceleration_ratio = current_abs / max(abs(previous), 1e-12)
-        expanding = (
-            current_abs >= self.config.min_velocity
-            and expansion_ratio >= self.config.min_velocity_ratio
-            and acceleration_ratio >= self.config.min_acceleration_ratio
-        )
+        previous_abs = abs(previous)
+        baseline = max(previous_abs, 1e-12)
+        expansion_ratio = current_abs / baseline if previous_abs > 0 else float("inf") if current_abs > 0 else 0.0
+        acceleration_ratio = current_abs / baseline if previous_abs > 0 else float("inf") if current_abs > 0 else 0.0
+        expanding = current_abs > self.config.min_velocity and current_abs > 0
         direction = "BUY" if current > 0 else "SELL" if current < 0 else "WAIT"
-        confidence = min(99.0, 50.0 + 20.0 * max(0.0, expansion_ratio - 1.0) + 20.0 * max(0.0, acceleration_ratio - 1.0))
+        # A non-zero live directional tick is intentionally high-confidence;
+        # the global risk engine still enforces its position/exposure limits.
+        confidence = 100.0 if direction in {"BUY", "SELL"} else 0.0
         return {
             "velocity_expanding": expanding,
             "direction": direction,
             "velocity": current,
             "previous_velocity": previous,
-            "baseline_velocity": baseline,
+            "baseline_velocity": previous_abs,
             "expansion_ratio": expansion_ratio,
             "acceleration_ratio": acceleration_ratio,
             "confidence": confidence,
-            "price": samples[-1][1],
-            "timestamp": samples[-1][0],
+            "price": p1,
+            "timestamp": t1,
             "sample_count": len(samples),
+            "movement_detected": current_abs > 0,
         }
 
     def generate_signal(self, analysis: dict[str, Any]) -> Signal:
         if not analysis.get("velocity_expanding"):
-            return Signal(action="WAIT", reason=analysis.get("reason", "velocity is not expanding"), metadata=analysis)
+            return Signal(action="WAIT", reason=analysis.get("reason", "no directional movement"), metadata=analysis)
 
         side = analysis["direction"]
         entry = float(analysis["price"])
@@ -114,7 +120,7 @@ class Strategy002(Strategy):
             confidence=confidence,
             entry=entry,
             stop_loss=opposite_stop,
-            reason="velocity expansion detected; immediate directional entry",
+            reason="live tick movement detected; immediate directional entry",
             metadata={
                 **analysis,
                 "strategy": self.id,
@@ -126,10 +132,7 @@ class Strategy002(Strategy):
         )
 
     def calculate_quantity(self, *, balance: float, entry: float, tick_size: float, tick_value: float) -> float:
-        """Size from account balance using the configured 100-pip reversal distance.
-
-        tick_value is the account-currency value of one tick for one lot.
-        """
+        """Size from account balance using the configured 100-pip reversal distance."""
         if balance <= 0 or entry <= 0 or tick_size <= 0 or tick_value <= 0:
             return 0.0
         risk_budget = balance * self.config.risk_per_trade
