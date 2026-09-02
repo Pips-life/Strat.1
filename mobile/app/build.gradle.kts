@@ -46,16 +46,50 @@ val patchStrategyUi by tasks.registering {
     doLast {
         val source = file("src/main/java/life/pips/strat1/MainActivity.kt")
         val template = file("../strategy_ui/StrategiesScreen.ktfrag").readText()
-        val text = source.readText()
+        var text = source.readText()
         val start = text.indexOf("@Composable private fun StrategiesScreen")
         val end = text.indexOf("@Composable private fun StrategyDetail", start)
         check(start >= 0 && end > start) { "Could not locate StrategiesScreen in MainActivity.kt" }
-        var patched = text.substring(0, start) + template + "\n" + text.substring(end)
-        patched = patched.replace(
-            "Text(\"Strategy 001 · QOF\", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Black)",
-            "Text(if (bot?.strategy == \"002\") \"Strategy 002 · Velocity Expansion\" else \"Strategy 001 · QOF\", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Black)"
+        text = text.substring(0, start) + template + "\n" + text.substring(end)
+
+        // Home uses the same persisted strategy and the same backend control endpoint.
+        text = text.replace(
+            "Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session) { screen = Screen.MT5 }",
+            "Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session, context) { screen = Screen.MT5 }"
         )
-        source.writeText(patched)
+        text = text.replace(
+            "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, openMt5: () -> Unit) {",
+            "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, context: Context, openMt5: () -> Unit) {"
+        )
+        text = text.replace(
+            "var bot by remember { mutableStateOf<BotState?>(null) }\n    var busy by remember { mutableStateOf(false) }",
+            "var bot by remember { mutableStateOf<BotState?>(null) }\n    var selectedStrategy by remember { mutableStateOf(\"001\") }\n    var busy by remember { mutableStateOf(false) }"
+        )
+        text = text.replace(
+            "LaunchedEffect(session) {\n        if (session == null) { state = null; bot = null }",
+            "LaunchedEffect(session) {\n        selectedStrategy = context.pipsDataStore.data.first()[SELECTED_STRATEGY]?.takeIf { it == \"001\" || it == \"002\" } ?: \"001\"\n        if (session == null) { state = null; bot = null }"
+        )
+        text = text.replace(
+            "api.botStatus(session).onSuccess { bot = it }",
+            "api.botStatus(session).onSuccess { it -> bot = it; if (it.configured && it.strategy in setOf(\"001\", \"002\")) selectedStrategy = it.strategy }"
+        )
+        text = text.replace(
+            "EngineActivityCard(bot, running, session != null, busy) { action -> busy = true; scope.launch { api.botCommand(session!!, action).onSuccess { bot = it }; busy = false } }",
+            "EngineActivityCard(bot, selectedStrategy, running, session != null, busy) { action -> busy = true; scope.launch { api.botCommand(session!!, action, selectedStrategy).onSuccess { bot = it }; busy = false } }"
+        )
+        text = text.replace(
+            "private fun EngineActivityCard(bot: BotState?, running: Boolean, enabled: Boolean, busy: Boolean, command: (String) -> Unit) {",
+            "private fun EngineActivityCard(bot: BotState?, strategy: String, running: Boolean, enabled: Boolean, busy: Boolean, command: (String) -> Unit) {"
+        )
+        text = text.replace(
+            "Text(\"Strategy 001 · QOF\", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Black)",
+            "Text(if (strategy == \"002\") \"Strategy 002 · Velocity Expansion\" else \"Strategy 001 · QOF\", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Black)"
+        )
+        text = text.replace(
+            "Text(if (enabled) \"Monitoring through the existing strategy engine.\" else \"Connect an MT5 account to activate the engine view.\", color = Muted, fontSize = 11.sp)",
+            "Text(if (enabled) \"Monitoring ${'$'}{if (strategy == \"002\") \"Strategy 002 · Velocity Expansion\" else \"Strategy 001 · QOF\"} through the existing strategy engine.\" else \"Connect an MT5 account to activate the engine view.\", color = Muted, fontSize = 11.sp)"
+        )
+        source.writeText(text)
     }
 }
 
