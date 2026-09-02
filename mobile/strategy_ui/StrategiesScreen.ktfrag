@@ -17,7 +17,7 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
                 } else if (pendingSelection != null && serverStrategy == pendingSelection) {
                     selected = serverStrategy
                     pendingSelection = null
-                    message = "Strategy ${serverStrategy} selected for the bot."
+                    message = "Strategy ${serverStrategy} active in engine."
                 }
             }
             delay(3000)
@@ -25,26 +25,36 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
     }
 
     fun choose(strategy: String) {
-        selected = strategy
-        pendingSelection = strategy
-        message = "Selecting Strategy $strategy…"
         if (session == null) {
-            pendingSelection = null
             message = "Connect MT5 before selecting a live trading strategy."
             return
         }
+        selected = strategy
+        pendingSelection = strategy
+        message = "Activating Strategy $strategy…"
         busy = true
         scope.launch {
             api.botCommand(session, "select:$strategy")
-                .onSuccess {
-                    bot = it
-                    if (it.strategy == strategy) {
+                .onSuccess { selection ->
+                    bot = selection
+                    if (selection.strategy == strategy) {
                         selected = strategy
-                        pendingSelection = null
-                        message = "Strategy ${strategy} selected for the bot."
+                        message = "Strategy $strategy active in engine. Starting trading…"
+                        api.botCommand(session, "start:$strategy")
+                            .onSuccess { started ->
+                                bot = started
+                                if (started.strategy == strategy) {
+                                    pendingSelection = null
+                                    message = "Strategy $strategy active and trading."
+                                } else {
+                                    message = "Strategy $strategy selected; waiting for engine confirmation."
+                                }
+                            }
+                            .onFailure {
+                                message = it.message ?: "Strategy selected, but trading could not be started."
+                            }
                     } else {
-                        selected = strategy
-                        message = "Strategy ${strategy} requested; waiting for runner confirmation."
+                        message = "Strategy $strategy requested; waiting for engine confirmation."
                     }
                 }
                 .onFailure {
@@ -62,7 +72,7 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
     ) {
         item { TopBar("Strategies", "CHOOSE THE ACTIVE TRADING STRATEGY", session != null) }
         item {
-            Text(message, color = if (message.contains("selected", true)) Green else Muted, fontSize = 12.sp)
+            Text(message, color = if (message.contains("active", true) || message.contains("trading", true)) Green else Muted, fontSize = 12.sp)
         }
         item {
             Card(
@@ -77,7 +87,7 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
                         Text("STRATEGY 001", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                         StatusPill(if (selected == "001") "SELECTED" else "READY", if (selected == "001") Green else Cyan)
                     }
-                    Text("QOF", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
+                    Text("STRATEGY 001", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
                     Text("Primary QOF strategy. Tap this card to make it the active strategy for the bot.", color = Muted, fontSize = 12.sp)
                     Divider(color = Line)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
