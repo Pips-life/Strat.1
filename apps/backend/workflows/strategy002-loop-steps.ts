@@ -1,4 +1,5 @@
 import { getCache } from '@vercel/functions';
+import { executeStrategy002 } from '../lib/strategy002-engine';
 
 type Strategy002State = {
   running?: boolean;
@@ -13,36 +14,7 @@ export async function readStrategy002State(accountId: string): Promise<Strategy0
 
 export async function executeStrategy002Tick(accountId: string) {
   'use step';
-
-  const base = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : (process.env.PIPSLIFE_APP_URL ?? 'https://strat-1.vercel.app');
-  const token = process.env.METAAPI_TOKEN?.trim();
-  if (!token) throw new Error('METAAPI_TOKEN is not configured');
-
-  const url = `${base}/api/bot/control?accountId=${encodeURIComponent(accountId)}`;
-  const response = await fetch(url, {
-    headers: {
-      accept: 'application/json',
-      'x-pipslife-workflow': token,
-      'cache-control': 'no-cache',
-    },
-    cache: 'no-store',
-  });
-
-  const text = await response.text();
-  let data: any;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { error: text };
-  }
-
-  if (!response.ok) {
-    throw new Error(String(
-      data?.error ?? data?.activity ?? `Strategy 002 tick failed (${response.status})`,
-    ));
-  }
-
-  return data;
+  // Execute the engine directly inside the step. This removes the extra
+  // workflow -> HTTP -> route -> engine round trip from the tick path.
+  return executeStrategy002(accountId, async () => undefined);
 }
