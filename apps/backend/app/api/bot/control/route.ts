@@ -57,21 +57,22 @@ export async function POST(request: Request) {
     );
   }
 
+  let requestedStrategy: string | undefined;
   try {
     const body = await request.json() as { action?: string; strategy?: string; accountId?: string };
     const rawAction = String(body.action ?? '').trim().toLowerCase();
     if (!rawAction) return NextResponse.json({ error: 'action is required' }, { status: 400 });
 
     let action = rawAction;
-    let strategy = normaliseStrategy(body.strategy);
+    requestedStrategy = normaliseStrategy(body.strategy);
     const selection = rawAction.match(/^select:(.+)$/);
     if (selection) {
       action = 'select';
-      strategy = normaliseStrategy(selection[1]);
+      requestedStrategy = normaliseStrategy(selection[1]);
     }
 
     const payload: Record<string, unknown> = { action, accountId: body.accountId };
-    if (strategy) payload.strategy = strategy;
+    if (requestedStrategy) payload.strategy = requestedStrategy;
 
     const r = await fetch(url, {
       method: 'POST',
@@ -88,12 +89,12 @@ export async function POST(request: Request) {
     const response = data && typeof data === 'object' ? data as RunnerState : {};
 
     return NextResponse.json(
-      { ...response, strategy: normaliseStrategy(response.strategy) ?? strategy ?? '001' },
+      { ...response, strategy: normaliseStrategy(response.strategy) ?? requestedStrategy ?? '001' },
       { status: r.status, headers: { 'cache-control': 'no-store' } }
     );
   } catch (e) {
     return NextResponse.json(
-      { configured: true, state: 'ERROR', strategy: normaliseStrategy(body?.strategy) ?? '001', error: e instanceof Error ? e.message : 'Bot control failed' },
+      { configured: true, state: 'ERROR', strategy: requestedStrategy ?? '001', error: e instanceof Error ? e.message : 'Bot control failed' },
       { status: 502 }
     );
   }
