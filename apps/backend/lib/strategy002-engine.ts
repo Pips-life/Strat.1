@@ -12,7 +12,7 @@ type Tick = { bid?: number; ask?: number; last?: number; time?: string };
 type Position = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; time?: string; clientId?: string; magic?: number };
 type Order = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; comment?: string; clientId?: string; magic?: number };
 type Account = { server?: string; region?: string };
-type TickState = { price: number; time?: string };
+type TickState = { price?: number; time?: string };
 
 async function json(response: Response): Promise<any> { const text = await response.text(); try { return text ? JSON.parse(text) : null; } catch { return { error: text }; } }
 async function metaFetch(url: string, init?: RequestInit) {
@@ -34,9 +34,6 @@ export async function executeStrategy002(accountId: string, startLoop: () => Pro
   await startLoop();
   const { api } = await accountInfo(accountId);
   const accountPath = encodeURIComponent(accountId);
-  const region = api.match(/mt-client-api-v1\.([^.]+)\.agiliumtrade\.ai/)?.[1] ?? 'new-york';
-  const marketApi = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
-
   const [info, positionsRaw, ordersRaw, currentRaw] = await Promise.all([
     metaFetch(`${api}/users/current/accounts/${accountPath}/account-information`),
     metaFetch(`${api}/users/current/accounts/${accountPath}/positions`),
@@ -58,12 +55,13 @@ export async function executeStrategy002(accountId: string, startLoop: () => Pro
   const cache = getCache();
   const tickKey = `pipslife:strategy002:tick:${accountId}`;
   const previous = await cache.get(tickKey) as TickState | null;
-  const delta = previous?.price > 0 ? currentPrice - previous.price : 0;
-  const changed = delta !== 0 || (current.time && current.time !== previous?.time);
+  const previousPrice = Number(previous?.price ?? 0);
+  const delta = previousPrice > 0 ? currentPrice - previousPrice : 0;
+  const changed = delta !== 0;
   await cache.set(tickKey, { price: currentPrice, time: current.time }, { ttl: 3600, name: `strategy002 tick ${accountId}` });
   const direction: 'BUY' | 'SELL' | 'WAIT' = delta > 0 ? 'BUY' : delta < 0 ? 'SELL' : 'WAIT';
 
-  // Execute the market entry before any trailing-stop maintenance so the entry path
+  // Execute the market entry before trailing-stop maintenance so the entry path
   // is as short as possible when a new tick arrives.
   let opened = false;
   if (changed && direction !== 'WAIT') {
