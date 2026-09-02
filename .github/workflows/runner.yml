@@ -64,3 +64,100 @@ jobs:
           done
           echo 'Runner health endpoint did not become ready.'
           exit 1
+
+  demo-verify:
+    name: Verify Strategy 002 on configured MetaApi demo account
+    needs: build-runner
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[demo-verify]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start real demo runner
+        env:
+          METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+          METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+          CONTROL_TOKEN: ${{ secrets.PIPSLIFE_BOT_CONTROL_TOKEN }}
+          SYMBOL: ${{ vars.PIPSLIFE_SYMBOL }}
+          EXECUTION_VOLUME: ${{ vars.PIPSLIFE_EXECUTION_VOLUME }}
+          LIVE_TRADING: ${{ vars.PIPSLIFE_LIVE_TRADING_ENABLED }}
+          TRAIL_PIPS: ${{ vars.PIPSLIFE_STRATEGY002_TRAIL_PIPS }}
+        run: |
+          set -euo pipefail
+          test -n "$METAAPI_TOKEN"
+          test -n "$METAAPI_ACCOUNT_ID"
+          test -n "$CONTROL_TOKEN"
+          test -n "$SYMBOL"
+          test -n "$EXECUTION_VOLUME"
+          test "$LIVE_TRADING" = "true"
+          test -n "$TRAIL_PIPS"
+          docker run -d --name pips-life-demo-verify -p 18081:8080 \
+            -e METAAPI_TOKEN="$METAAPI_TOKEN" \
+            -e METAAPI_ACCOUNT_ID="$METAAPI_ACCOUNT_ID" \
+            -e PIPSLIFE_BOT_CONTROL_TOKEN="$CONTROL_TOKEN" \
+            -e PIPSLIFE_SYMBOL="$SYMBOL" \
+            -e PIPSLIFE_EXECUTION_VOLUME="$EXECUTION_VOLUME" \
+            -e PIPSLIFE_LIVE_TRADING_ENABLED="$LIVE_TRADING" \
+            -e PIPSLIFE_STRATEGY002_TRAIL_PIPS="$TRAIL_PIPS" \
+            ghcr.io/pips-life/pips-life-runner:${{ github.sha }}
+          trap 'docker logs pips-life-demo-verify || true; docker rm -f pips-life-demo-verify || true' EXIT
+
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18081/health >/tmp/health.json; then
+              break
+            fi
+            sleep 1
+          done
+
+          python - <<'PY'
+          import json
+          with open('/tmp/health.json') as f:
+              h=json.load(f)
+          assert h.get('ok') is True, h
+          assert h.get('metaapiConfigured') is True, h
+          assert h.get('liveTradingEnabled') is True, h
+          assert h.get('executionVolumeConfigured') is True, h
+          print('Runner configuration verified: MetaApi configured, live execution enabled, explicit volume configured.')
+          PY
+
+          AUTH="Authorization: Bearer $CONTROL_TOKEN"
+          curl --fail --silent -X POST http://127.0.0.1:18081/ \
+            -H "$AUTH" -H 'Content-Type: application/json' \
+            --data "{\"action\":\"start\",\"strategy\":\"002\",\"accountId\":\"$METAAPI_ACCOUNT_ID\"}" >/tmp/start.json
+          cat /tmp/start.json
+          echo
+
+          echo 'Waiting up to 180 seconds for live Strategy 002 tick processing/order acknowledgement...'
+          deadline=$((SECONDS+180))
+          seen_ticks=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            sleep 5
+            curl --fail --silent "http://127.0.0.1:18081/?accountId=$METAAPI_ACCOUNT_ID" >/tmp/state.json || true
+            ticks=$(python -c 'import json; print(json.load(open("/tmp/state.json")).get("ticks",0))' 2>/dev/null || echo 0)
+            ack=$(python -c 'import json; print(json.load(open("/tmp/state.json")).get("orderAckUs",0))' 2>/dev/null || echo 0)
+            activity=$(python -c 'import json; print(json.load(open("/tmp/state.json")).get("activity", ""))' 2>/dev/null || echo '')
+            echo "ticks=$ticks orderAckUs=$ack activity=$activity"
+            if [ "$ticks" -gt 0 ]; then seen_ticks=1; fi
+            if [ "$ack" != "0" ] && [ -n "$ack" ]; then
+              echo 'Strategy 002 produced a broker order acknowledgement.'
+              break
+            fi
+          done
+
+          curl --fail --silent -X POST http://127.0.0.1:18081/ \
+            -H "$AUTH" -H 'Content-Type: application/json' \
+            --data "{\"action\":\"stop\",\"accountId\":\"$METAAPI_ACCOUNT_ID\"}" >/tmp/stop.json
+          cat /tmp/stop.json
+          echo
+
+          if [ "$seen_ticks" -eq 0 ]; then
+            echo 'Demo verification failed: MetaApi connected insufficiently to deliver any symbol ticks.'
+            exit 1
+          fi
+          echo 'Demo verification complete: real MetaApi tick stream was observed. A trade is only reported as executed if orderAckUs becomes non-zero.'
