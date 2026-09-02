@@ -27,7 +27,21 @@ async function readBotState(accountId: string) {
 
 async function executeTick(accountId: string) {
   'use step';
-  const module = await import('../app/api/bot/control/route');
-  const { api } = await module.accountInfo(accountId);
-  return module.execute002(accountId, api, false);
+  const base = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : (process.env.PIPSLIFE_APP_URL ?? 'https://strat-1.vercel.app');
+  const token = process.env.METAAPI_TOKEN?.trim();
+  if (!token) throw new Error('METAAPI_TOKEN is not configured');
+  const url = `${base}/api/bot/control?accountId=${encodeURIComponent(accountId)}`;
+  const response = await fetch(url, {
+    headers: {
+      accept: 'application/json',
+      'x-pipslife-workflow': token,
+      'cache-control': 'no-cache'
+    },
+    cache: 'no-store'
+  });
+  const text = await response.text();
+  let data: any;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+  if (!response.ok) throw new Error(String(data?.error ?? data?.activity ?? `Strategy 002 tick failed (${response.status})`));
+  return data;
 }
