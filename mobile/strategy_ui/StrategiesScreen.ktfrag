@@ -2,6 +2,7 @@
 private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
     var bot by remember { mutableStateOf<BotState?>(null) }
     var selected by remember { mutableStateOf("001") }
+    var pendingSelection by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Choose the strategy the bot should trade.") }
     val scope = rememberCoroutineScope()
@@ -10,7 +11,14 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
         if (session != null) while (true) {
             api.botStatus(session).onSuccess {
                 bot = it
-                if (it.strategy == "001" || it.strategy == "002") selected = it.strategy
+                val serverStrategy = it.strategy
+                if (pendingSelection == null && (serverStrategy == "001" || serverStrategy == "002")) {
+                    selected = serverStrategy
+                } else if (pendingSelection != null && serverStrategy == pendingSelection) {
+                    selected = serverStrategy
+                    pendingSelection = null
+                    message = "Strategy ${serverStrategy} selected for the bot."
+                }
             }
             delay(3000)
         }
@@ -18,8 +26,10 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
 
     fun choose(strategy: String) {
         selected = strategy
+        pendingSelection = strategy
         message = "Selecting Strategy $strategy…"
         if (session == null) {
+            pendingSelection = null
             message = "Connect MT5 before selecting a live trading strategy."
             return
         }
@@ -28,10 +38,19 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
             api.botCommand(session, "select:$strategy")
                 .onSuccess {
                     bot = it
-                    selected = it.strategy.ifBlank { strategy }
-                    message = "Strategy ${selected} selected for the bot."
+                    if (it.strategy == strategy) {
+                        selected = strategy
+                        pendingSelection = null
+                        message = "Strategy ${strategy} selected for the bot."
+                    } else {
+                        selected = strategy
+                        message = "Strategy ${strategy} requested; waiting for runner confirmation."
+                    }
                 }
-                .onFailure { message = it.message ?: "Strategy selection failed." }
+                .onFailure {
+                    pendingSelection = null
+                    message = it.message ?: "Strategy selection failed."
+                }
             busy = false
         }
     }
