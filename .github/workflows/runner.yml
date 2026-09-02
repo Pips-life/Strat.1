@@ -44,8 +44,8 @@ jobs:
           file: runner/Dockerfile
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/pips-life-runner:latest
-            ghcr.io/${{ github.repository_owner }}/pips-life-runner:${{ github.sha }}
+            ghcr.io/pips-life/pips-life-runner:latest
+            ghcr.io/pips-life/pips-life-runner:${{ github.sha }}
 
       - name: Runner image smoke test
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           docker run -d --name pips-life-runner-smoke -p 18080:8080 \
             -e PIPSLIFE_BOT_CONTROL_TOKEN=smoke-token \
-            ghcr.io/${{ github.repository_owner }}/pips-life-runner:${{ github.sha }}
+            ghcr.io/pips-life/pips-life-runner:${{ github.sha }}
           trap 'docker logs pips-life-runner-smoke || true; docker rm -f pips-life-runner-smoke || true' EXIT
           for i in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/health; then
