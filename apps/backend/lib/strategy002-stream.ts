@@ -8,8 +8,8 @@ const TRAIL_DISTANCE = 100 * 0.01;
 const MAX_STREAM_MS = 290_000;
 
 type Price = { symbol?: string; bid?: number; ask?: number; last?: number; time?: string };
-type Position = { id?: string; type?: string; symbol?: string; volume?: number };
-type Order = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; comment?: string };
+type Position = { id?: string; type?: string; symbol?: string; volume?: number; clientId?: string; magic?: number };
+type Order = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; comment?: string; clientId?: string; magic?: number };
 
 type Runner = {
   running: boolean;
