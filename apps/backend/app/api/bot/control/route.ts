@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+// ONE control-plane endpoint for every strategy. Strategy IDs are payload data,
+// not separate infrastructure or credentials.
 const control = () => process.env.PIPSLIFE_BOT_CONTROL_URL;
 export const runtime = 'nodejs';
 
@@ -9,7 +11,13 @@ type RunnerState = {
   strategy?: string;
   activity?: string;
   error?: string;
+  strategies?: Array<{ id: string; name?: string; version?: string }>;
 };
+
+function normaliseStrategy(value: unknown): string | undefined {
+  const strategy = String(value ?? '').trim();
+  return strategy || undefined;
+}
 
 export async function GET(request: Request) {
   const url = control();
@@ -26,13 +34,12 @@ export async function GET(request: Request) {
       ? `${url}${url.includes('?') ? '&' : '?'}accountId=${encodeURIComponent(accountId)}`
       : url;
     const r = await fetch(target, { headers: { accept: 'application/json' }, cache: 'no-store' });
-    const data = await r.json().catch(() => ({}));
+    const data = r.ok ? await r.json().catch(() => ({})) : {};
     const state = data && typeof data === 'object' ? data as RunnerState : {};
-    return NextResponse.json({
-      ...state,
-      configured: true,
-      strategy: state.strategy === '002' ? '002' : state.strategy === '001' ? '001' : '001'
-    }, { status: r.ok ? 200 : r.status, headers: { 'cache-control': 'no-store' } });
+    return NextResponse.json(
+      { ...state, configured: true, strategy: normaliseStrategy(state.strategy) ?? '001' },
+      { status: r.ok ? 200 : r.status, headers: { 'cache-control': 'no-store' } }
+    );
   } catch (e) {
     return NextResponse.json(
       { configured: true, state: 'ERROR', strategy: '001', error: e instanceof Error ? e.message : 'Bot control failed' },
@@ -56,11 +63,11 @@ export async function POST(request: Request) {
     if (!rawAction) return NextResponse.json({ error: 'action is required' }, { status: 400 });
 
     let action = rawAction;
-    let strategy = body.strategy === '002' ? '002' : body.strategy === '001' ? '001' : undefined;
-    const selection = rawAction.match(/^select:(001|002)$/);
+    let strategy = normaliseStrategy(body.strategy);
+    const selection = rawAction.match(/^select:(.+)$/);
     if (selection) {
       action = 'select';
-      strategy = selection[1];
+      strategy = normaliseStrategy(selection[1]);
     }
 
     const payload: Record<string, unknown> = { action, accountId: body.accountId };
@@ -70,20 +77,23 @@ export async function POST(request: Request) {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(process.env.PIPSLIFE_BOT_CONTROL_TOKEN ? { authorization: `Bearer ${process.env.PIPSLIFE_BOT_CONTROL_TOKEN}` } : {})
+        ...(process.env.PIPSLIFE_BOT_CONTROL_TOKEN
+          ? { authorization: `Bearer ${process.env.PIPSLIFE_BOT_CONTROL_TOKEN}` }
+          : {})
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      cache: 'no-store'
     });
     const data = await r.json().catch(() => ({}));
     const response = data && typeof data === 'object' ? data as RunnerState : {};
 
     return NextResponse.json(
-      { ...response, strategy: response.strategy === '002' ? '002' : response.strategy === '001' ? '001' : strategy ?? '001' },
-      { status: r.status }
+      { ...response, strategy: normaliseStrategy(response.strategy) ?? strategy ?? '001' },
+      { status: r.status, headers: { 'cache-control': 'no-store' } }
     );
   } catch (e) {
     return NextResponse.json(
-      { configured: true, state: 'ERROR', strategy: '001', error: e instanceof Error ? e.message : 'Bot control failed' },
+      { configured: true, state: 'ERROR', strategy: normaliseStrategy(body?.strategy) ?? '001', error: e instanceof Error ? e.message : 'Bot control failed' },
       { status: 502 }
     );
   }
