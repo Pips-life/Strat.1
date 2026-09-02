@@ -40,8 +40,13 @@ jobs:
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_code: ${{ steps.version.outputs.version_code }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -52,6 +57,26 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+      - name: Set progressive Android version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
+          if [[ -z "$latest" ]]; then
+            next="0.1.0"
+          else
+            current="${latest#v}"
+            IFS=. read -r major minor patch <<< "$current"
+            major="${major:-0}"
+            minor="${minor:-0}"
+            patch="${patch:-0}"
+            next="${major}.${minor}.$((patch + 1))"
+          fi
+          version_code="$(printf '%s' "$next" | awk -F. '{print $3}')"
+          printf 'versionName=%s\nversionCode=%s\n' "$next" "$version_code" > mobile/release.properties
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
       - name: Build and verify debug APK
         working-directory: mobile
         run: |
@@ -62,6 +87,8 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
+          grep -q "versionCode='${{ steps.version.outputs.version_code }}'" /tmp/pips-badging.txt
+          grep -q "versionName='${{ steps.version.outputs.version }}'" /tmp/pips-badging.txt
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
@@ -83,32 +110,14 @@ jobs:
         with:
           name: pips-life-apk
           path: release
-      - name: Calculate next release version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
-          if [[ -z "$latest" ]]; then
-            next="0.1.0"
-          else
-            current="${latest#v}"
-            IFS=. read -r major minor patch <<< "$current"
-            major="${major:-0}"
-            minor="${minor:-0}"
-            patch="${patch:-0}"
-            next="${major}.${minor}.$((patch + 1))"
-          fi
-          echo "version=$next" >> "$GITHUB_OUTPUT"
-          echo "tag=v$next" >> "$GITHUB_OUTPUT"
       - name: Rename APK
-        run: mv release/app-debug.apk "release/pips-life-${{ steps.version.outputs.version }}.apk"
+        run: mv release/app-debug.apk "release/pips-life-${{ needs.android.outputs.version }}-${{ needs.android.outputs.version_code }}.apk"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.version.outputs.tag }}" \
-            "release/pips-life-${{ steps.version.outputs.version }}.apk" \
-            --title "Pips-life ${{ steps.version.outputs.version }}" \
+          gh release create "v${{ needs.android.outputs.version }}" \
+            "release/pips-life-${{ needs.android.outputs.version }}-${{ needs.android.outputs.version_code }}.apk" \
+            --title "Pips-life ${{ needs.android.outputs.version }}" \
             --generate-notes
