@@ -35,9 +35,15 @@ class BackendApiClient(private val http: OkHttpClient = OkHttpClient()) {
     suspend fun liveState(session: BackendSession): Result<LiveState> = runCatching { val r = JSONObject(requestJson("GET", "/api/mt5/state?accountId=${URLEncoder.encode(session.accountId, "UTF-8")}", null, session.token)); val a = r.optJSONObject("account") ?: JSONObject(); LiveState(session.accountId, a.optString("login"), a.optString("server"), a.optString("connectionStatus"), a.optString("state"), a.optDouble("balance", Double.NaN), a.optDouble("equity", Double.NaN), a.optDouble("freeMargin", Double.NaN), a.optString("currency", ""), a.optString("name", ""), parsePositions(r.optJSONArray("positions") ?: JSONArray())) }
     suspend fun botStatus(session: BackendSession): Result<BotState> = runCatching { val r = JSONObject(requestJson("GET", "/api/bot/control?accountId=${URLEncoder.encode(session.accountId, "UTF-8")}", null, session.token)); BotState(r.optBoolean("configured", false), r.optString("state", "UNKNOWN"), r.optString("strategy", "001"), r.optString("activity", "")) }
     suspend fun botCommand(session: BackendSession, action: String, strategy: String? = null): Result<BotState> = runCatching {
-        val requestedStrategy = strategy?.takeIf { it == "001" || it == "002" } ?: action.removePrefix("select:").removePrefix("start:").takeIf { it == "001" || it == "002" }
-        val r = JSONObject(requestJson("POST", "/api/bot/control", JSONObject().apply { put("action", action); put("accountId", session.accountId); if (requestedStrategy != null) put("strategy", requestedStrategy) }.toString(), session.token))
-        BotState(r.optBoolean("configured", true), r.optString("state", action.uppercase()), r.optString("strategy", requestedStrategy ?: "001"), r.optString("activity", "COMMAND ACCEPTED"))
+        val rawAction = action.trim()
+        val requestedStrategy = strategy?.takeIf { it == "001" || it == "002" } ?: rawAction.removePrefix("select:").removePrefix("start:").takeIf { it == "001" || it == "002" }
+        val normalizedAction = when {
+            rawAction.startsWith("select:") -> "select"
+            rawAction.startsWith("start:") -> "start"
+            else -> rawAction
+        }
+        val r = JSONObject(requestJson("POST", "/api/bot/control", JSONObject().apply { put("action", normalizedAction); put("accountId", session.accountId); if (requestedStrategy != null) put("strategy", requestedStrategy) }.toString(), session.token))
+        BotState(r.optBoolean("configured", true), r.optString("state", normalizedAction.uppercase()), r.optString("strategy", requestedStrategy ?: "001"), r.optString("activity", "COMMAND ACCEPTED"))
     }
     private fun parseServerResults(text: String): List<Mt5Server> { val trimmed = text.trim(); if (trimmed.isBlank()) return emptyList(); val root = runCatching { JSONObject(trimmed) }.getOrNull(); val a = root?.optJSONArray("brokers") ?: root?.optJSONArray("data") ?: runCatching { JSONArray(trimmed) }.getOrNull() ?: return emptyList(); return buildList { for (i in 0 until a.length()) { val b = a.optJSONObject(i) ?: continue; val broker = b.optString("name").ifBlank { b.optString("broker").ifBlank { "Unknown broker" } }; val servers = b.optJSONArray("servers") ?: b.optJSONArray("serverList") ?: JSONArray(); for (j in 0 until servers.length()) { val s = servers.optJSONObject(j) ?: continue; val name = s.optString("name").ifBlank { s.optString("server") }.trim(); if (name.isNotBlank()) add(Mt5Server("${b.optString("id", broker)}:$name", broker, name, s.optString("type", "real"))) } } } }
     private fun serverKey(s: Mt5Server) = "${normalizeBroker(s.brokerName)}:${normalizeBroker(s.serverName)}"
