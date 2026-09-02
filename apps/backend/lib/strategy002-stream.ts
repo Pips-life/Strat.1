@@ -53,38 +53,25 @@ async function maintainStops(runner: Runner, currentPrice: number) {
     if (!positionSide) return;
 
     const wanted = positionSide === 'BUY' ? 'SELL' : 'BUY';
-    const desired = positionSide === 'BUY'
-      ? currentPrice - TRAIL_DISTANCE
-      : currentPrice + TRAIL_DISTANCE;
+    const desired = positionSide === 'BUY' ? currentPrice - TRAIL_DISTANCE : currentPrice + TRAIL_DISTANCE;
     if (!(desired > 0)) return;
 
     const marker = `PipsLife002:${position.id}`;
     const existing = orders.find(order =>
-      order.id &&
-      !used.has(order.id) &&
+      order.id && !used.has(order.id) &&
       (order.comment === marker || order.comment === 'PipsLife002') &&
       side(order.type) === wanted
     );
 
     if (!existing) {
       if (positionSide === 'BUY') {
-        await runner.connection.createStopSellOrder(
-          SYMBOL,
-          Number(position.volume ?? VOLUME),
-          Number(desired.toFixed(2)),
-          null,
-          null,
-          { comment: marker, clientId: CLIENT_ID, magic: MAGIC }
-        );
+        await runner.connection.createStopSellOrder(SYMBOL, Number(position.volume ?? VOLUME), Number(desired.toFixed(2)), null, null, {
+          comment: marker, clientId: CLIENT_ID, magic: MAGIC,
+        });
       } else {
-        await runner.connection.createStopBuyOrder(
-          SYMBOL,
-          Number(position.volume ?? VOLUME),
-          Number(desired.toFixed(2)),
-          null,
-          null,
-          { comment: marker, clientId: CLIENT_ID, magic: MAGIC }
-        );
+        await runner.connection.createStopBuyOrder(SYMBOL, Number(position.volume ?? VOLUME), Number(desired.toFixed(2)), null, null, {
+          comment: marker, clientId: CLIENT_ID, magic: MAGIC,
+        });
       }
       return;
     }
@@ -92,9 +79,7 @@ async function maintainStops(runner: Runner, currentPrice: number) {
     used.add(existing.id);
     const oldPrice = Number(existing.openPrice ?? 0);
     const shouldMove = positionSide === 'BUY' ? desired > oldPrice : desired < oldPrice;
-    if (shouldMove) {
-      await runner.connection.modifyOrder(existing.id, Number(desired.toFixed(2)), null, null);
-    }
+    if (shouldMove) await runner.connection.modifyOrder(existing.id, Number(desired.toFixed(2)), null, null);
   }));
 }
 
@@ -108,25 +93,19 @@ async function handlePrice(accountId: string, runner: Runner, tick: Price) {
   const delta = previous > 0 ? currentPrice - previous : 0;
   if (delta === 0) return;
 
-  // Keep the event path deliberately short: the first price change is the trigger.
-  // MetaApi receives the order directly over its streaming connection, without REST polling.
+  // The first non-zero streamed price change is the trigger. There is no polling or threshold.
   runner.busy = true;
   try {
     const direction = delta > 0 ? 'BUY' : 'SELL';
     if (direction === 'BUY') {
       await runner.connection.createMarketBuyOrder(SYMBOL, VOLUME, null, null, {
-        comment: 'PipsLife002',
-        clientId: CLIENT_ID,
-        magic: MAGIC,
+        comment: 'PipsLife002', clientId: CLIENT_ID, magic: MAGIC,
       });
     } else {
       await runner.connection.createMarketSellOrder(SYMBOL, VOLUME, null, null, {
-        comment: 'PipsLife002',
-        clientId: CLIENT_ID,
-        magic: MAGIC,
+        comment: 'PipsLife002', clientId: CLIENT_ID, magic: MAGIC,
       });
     }
-
     await maintainStops(runner, currentPrice);
     console.log(`[Strategy002][STREAM] ${direction} ${SYMBOL} delta=${delta.toFixed(5)} price=${currentPrice.toFixed(2)} account=${accountId}`);
   } catch (error) {
@@ -172,9 +151,6 @@ export async function startStrategy002Stream(accountId: string) {
       await connection.connect();
       await connection.waitSynchronized();
       await connection.subscribeToMarketData(SYMBOL);
-
-      // Keep this stream alive for the maximum practical Fluid invocation window.
-      // A subsequent start/health request reconnects it after the platform window ends.
       await new Promise<void>(resolve => setTimeout(resolve, MAX_STREAM_MS));
     } catch (error) {
       console.error(`[Strategy002][STREAM] connection error account=${accountId}`, error);
@@ -206,4 +182,8 @@ export async function stopStrategy002Stream(accountId: string) {
 
 export function strategy002StreamRunning(accountId: string) {
   return Boolean(runners.get(accountId)?.running);
+}
+
+export function strategy002StreamPromise(accountId: string) {
+  return runners.get(accountId)?.promise;
 }
