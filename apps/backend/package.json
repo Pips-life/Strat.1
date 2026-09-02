@@ -11,7 +11,8 @@
     "metaapi.cloud-sdk": "^29.3.3",
     "next": "15.5.24",
     "react": "19.1.7",
-    "react-dom": "19.1.7"
+    "react-dom": "19.1.7",
+    "workflow": "4.8.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
