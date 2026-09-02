@@ -1,78 +1,73 @@
-import { NextResponse, after } from 'next/server';
+import { NextResponse } from 'next/server';
 import { verifyAccountSession } from '@/lib/session';
-import { startStrategy002Stream, stopStrategy002Stream, strategy002StreamPromise } from '../../../../lib/strategy002-stream';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300;
+export const maxDuration = 30;
 
-type BotState = { running: boolean; strategy: string };
-const botStates = new Map<string, BotState>();
-const readState = async (accountId: string) => botStates.get(accountId) ?? null;
-const writeState = async (accountId: string, running: boolean, strategy: string) => {
-  botStates.set(accountId, { running, strategy });
-};
+const RUNNER_URL = process.env.PIPSLIFE_RUNNER_URL?.trim().replace(/\/$/, '');
+const RUNNER_TOKEN = process.env.PIPSLIFE_BOT_CONTROL_TOKEN?.trim();
 
-async function runStream(accountId: string) {
-  const result = await startStrategy002Stream(accountId);
-  const promise = strategy002StreamPromise(accountId);
-  if (promise) after(() => promise);
-  return result;
+type ControlBody = { action?: string; strategy?: string; accountId?: string };
+
+function runnerHeaders() {
+  return {
+    accept: 'application/json',
+    'content-type': 'application/json',
+    ...(RUNNER_TOKEN ? { authorization: `Bearer ${RUNNER_TOKEN}` } : {}),
+  };
+}
+
+async function runnerRequest(path: string, init: RequestInit = {}) {
+  if (!RUNNER_URL) throw new Error('PIPSLIFE_RUNNER_URL is not configured');
+  const response = await fetch(`${RUNNER_URL}${path}`, {
+    ...init,
+    headers: { ...runnerHeaders(), ...(init.headers ?? {}) },
+    cache: 'no-store',
+  });
+  const text = await response.text();
+  let data: unknown = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+  if (!response.ok) throw new Error(String((data as { detail?: string; error?: string } | null)?.detail ?? (data as { error?: string } | null)?.error ?? `Runner returned ${response.status}`));
+  return data;
+}
+
+function validateStrategy(value: string) {
+  if (!['001', '002'].includes(value)) throw new Error('strategy must be 001 or 002');
 }
 
 export async function GET(request: Request) {
   const accountId = new URL(request.url).searchParams.get('accountId')?.trim();
   if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
-
   try {
     verifyAccountSession(request, accountId);
-    const state = await readState(accountId);
-    if (!state) return NextResponse.json({ configured: true, state: 'READY', strategy: '001', activity: 'Vercel bot engine ready' });
-    if (!state.running) return NextResponse.json({ configured: true, state: 'SELECTED', strategy: state.strategy, activity: `Strategy ${state.strategy} selected; trading stopped.` });
-    if (state.strategy === '002') {
-      const result = await runStream(accountId);
-      return NextResponse.json({ configured: true, ...result }, { headers: { 'cache-control': 'no-store' } });
-    }
-    return NextResponse.json({ configured: true, state: 'RUNNING', strategy: state.strategy, activity: `Strategy ${state.strategy} running in Vercel Bot Engine.` });
-  } catch (e) {
-    if (e instanceof Response) return e;
-    return NextResponse.json({ configured: true, state: 'ERROR', strategy: '002', error: e instanceof Error ? e.message : 'Bot execution failed' }, { status: 502 });
+    const data = await runnerRequest(`/?accountId=${encodeURIComponent(accountId)}`);
+    return NextResponse.json(data, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) {
+    if (error instanceof Response) return error;
+    return NextResponse.json({ configured: true, state: 'ERROR', strategy: '001', error: error instanceof Error ? error.message : 'Runner unavailable' }, { status: 503 });
   }
 }
 
 export async function POST(request: Request) {
+  let body: ControlBody;
+  try { body = await request.json() as ControlBody; } catch { return NextResponse.json({ error: 'invalid JSON' }, { status: 400 }); }
+  const accountId = body.accountId?.trim();
+  if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
   try {
-    const body = await request.json() as { action?: string; strategy?: string; accountId?: string };
-    const accountId = body.accountId?.trim();
-    if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
     verifyAccountSession(request, accountId);
-
     let action = String(body.action ?? '').trim().toLowerCase();
-    let strategy = String(body.strategy ?? '').trim() || (await readState(accountId))?.strategy || '001';
+    let strategy = String(body.strategy ?? '').trim();
     const match = action.match(/^select:(.+)$/);
     if (match) { action = 'select'; strategy = match[1].trim(); }
-    if (!['001', '002'].includes(strategy)) return NextResponse.json({ error: 'strategy must be 001 or 002' }, { status: 400 });
     if (!['select', 'start', 'stop'].includes(action)) return NextResponse.json({ error: 'unsupported action' }, { status: 400 });
-
-    if (action === 'select') {
-      if (strategy !== '002') await stopStrategy002Stream(accountId);
-      await writeState(accountId, false, strategy);
-      return NextResponse.json({ configured: true, state: 'SELECTED', strategy, activity: `Strategy ${strategy} selected in Bot Engine.` });
+    if (action !== 'stop') {
+      validateStrategy(strategy || '001');
+      strategy = strategy || '001';
     }
-
-    if (action === 'stop') {
-      await stopStrategy002Stream(accountId);
-      await writeState(accountId, false, strategy);
-      return NextResponse.json({ configured: true, state: 'STOPPED', strategy, activity: 'Trading stopped. Existing positions are left untouched.' });
-    }
-
-    await writeState(accountId, true, strategy);
-    if (strategy === '002') {
-      const result = await runStream(accountId);
-      return NextResponse.json({ configured: true, ...result }, { headers: { 'cache-control': 'no-store' } });
-    }
-    return NextResponse.json({ configured: true, state: 'RUNNING', strategy, activity: `Strategy ${strategy} running in Bot Engine.` });
-  } catch (e) {
-    if (e instanceof Response) return e;
-    return NextResponse.json({ configured: true, state: 'ERROR', strategy: '002', error: e instanceof Error ? e.message : 'Bot control failed' }, { status: 502 });
+    const data = await runnerRequest('/', { method: 'POST', body: JSON.stringify({ action, strategy: strategy || undefined, accountId }) });
+    return NextResponse.json(data, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) {
+    if (error instanceof Response) return error;
+    return NextResponse.json({ configured: true, state: 'ERROR', strategy: strategy || '001', error: error instanceof Error ? error.message : 'Bot control failed' }, { status: 503 });
   }
 }
