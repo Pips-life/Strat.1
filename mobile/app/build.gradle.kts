@@ -60,6 +60,7 @@ val patchStrategyUi by tasks.registering {
 tasks.named("preBuild").configure { dependsOn(patchStrategyUi) }
 
 // Release 0.2.31 includes the selectable strategy UI and MT5 backend fixes.
+// Release trigger: publish the verified Strategy 002 selection fix.
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.02.00"))
