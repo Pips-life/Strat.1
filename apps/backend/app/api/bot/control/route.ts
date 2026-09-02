@@ -1,6 +1,6 @@
 import { NextResponse, after } from 'next/server';
 import { verifyAccountSession } from '@/lib/session';
-import { startStrategy002Stream, stopStrategy002Stream, strategy002StreamPromise } from '../../../lib/strategy002-stream';
+import { startStrategy002Stream, stopStrategy002Stream, strategy002StreamPromise } from '../../../../lib/strategy002-stream';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
