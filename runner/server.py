@@ -164,7 +164,7 @@ async def _execute_signal(runtime: AccountRuntime, signal: Any) -> None:
             print("ORDER_ERROR reason=invalid_execution_volume", flush=True)
             return
         strategy = runtime.selected_strategy
-        options = {"comment": f"PipsLife{strategy[-3:]}", "clientId": CLIENT_BY_STRATEGY[strategy], "magic": MAGIC_BY_STRATEGY[strategy]}
+        options = {"comment": f"PipsLife{strategy[-3:]}", "clientId": CLIENT_BY_STRATEGY[strategy]}
         started = time.perf_counter_ns()
         stop = getattr(signal, "stop_loss", None) if strategy != "strategy_002" else None
         target = getattr(signal, "take_profit", None)
@@ -179,8 +179,9 @@ async def _execute_signal(runtime: AccountRuntime, signal: Any) -> None:
             runtime.stop_dirty = True
             _ensure_stop_worker(runtime)
     except Exception as exc:
-        runtime.activity = f"{runtime.selected_strategy[-3:]} execution error: {exc}"
-        print(f"ORDER_ERROR strategy={runtime.selected_strategy[-3:]} symbol={runtime.symbol} error={exc}", flush=True)
+        detail = _metaapi.format_error(exc) if _metaapi is not None else str(exc)
+        runtime.activity = f"{runtime.selected_strategy[-3:]} execution error: {detail}"
+        print(f"ORDER_ERROR strategy={runtime.selected_strategy[-3:]} symbol={runtime.symbol} error={detail}", flush=True)
     finally:
         runtime.execution_inflight = False
 
@@ -207,7 +208,7 @@ async def _stop_worker(runtime: AccountRuntime) -> None:
                 marker = f"PipsLife002:{position_id}"
                 existing = next((o for o in orders if _side(_value(o, "type")) == wanted and str(_value(o, "comment", "")) in {marker, "PipsLife002"}), None)
                 if existing is None:
-                    result = await create(runtime.symbol, volume, float(desired), None, None, {"comment": marker, "clientId": "PIPS002", "magic": 100002})
+                    result = await create(runtime.symbol, volume, float(desired), None, None, {"comment": marker, "clientId": "PIPS002"})
                     order_id = str(_value(result, "orderId", _value(result, "id", "")) or "")
                     if order_id:
                         runtime.stop_order_ids[position_id] = order_id
@@ -218,8 +219,9 @@ async def _stop_worker(runtime: AccountRuntime) -> None:
                     if move:
                         await runtime.connection.modify_order(str(_value(existing, "id")), float(desired), None, None)
         except Exception as exc:
-            runtime.activity = f"002 stop maintenance error: {exc}"
-            print(f"STOP_ERROR strategy=002 symbol={runtime.symbol} error={exc}", flush=True)
+            detail = _metaapi.format_error(exc) if _metaapi is not None else str(exc)
+            runtime.activity = f"002 stop maintenance error: {detail}"
+            print(f"STOP_ERROR strategy=002 symbol={runtime.symbol} error={detail}", flush=True)
 
 
 async def _ensure_connection(runtime: AccountRuntime) -> None:
