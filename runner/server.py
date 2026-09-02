@@ -27,7 +27,9 @@ app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.0")
 CONTROL_TOKEN = os.getenv("PIPSLIFE_BOT_CONTROL_TOKEN", "").strip()
 METAAPI_TOKEN = os.getenv("METAAPI_TOKEN", "").strip()
 DEFAULT_SYMBOL = os.getenv("PIPSLIFE_SYMBOL", "XAUUSD").strip()
-LIVE_TRADING_ENABLED = os.getenv("PIPSLIFE_LIVE_TRADING_ENABLED", "false").strip().lower() == "true"
+# Live execution is intentionally ON for the configured runner. Deployments can still
+# explicitly set PIPSLIFE_LIVE_TRADING_ENABLED=false as an emergency kill switch.
+LIVE_TRADING_ENABLED = os.getenv("PIPSLIFE_LIVE_TRADING_ENABLED", "true").strip().lower() == "true"
 DEFAULT_VOLUME = float(os.getenv("PIPSLIFE_EXECUTION_VOLUME", "0.01"))
 TRAIL_PIPS = float(os.getenv("PIPSLIFE_STRATEGY002_TRAIL_PIPS", "100"))
 MAGIC_BY_STRATEGY = {"strategy_001": 100001, "strategy_002": 100002}
