@@ -1,3 +1,8 @@
 import type { NextConfig } from 'next';
-const nextConfig: NextConfig = { serverExternalPackages: ['metaapi.cloud-sdk'] };
-export default nextConfig;
+import { withWorkflow } from 'workflow/next';
+
+const nextConfig: NextConfig = {
+  serverExternalPackages: ['metaapi.cloud-sdk'],
+};
+
+export default withWorkflow(nextConfig);
