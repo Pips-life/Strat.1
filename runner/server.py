@@ -2,10 +2,6 @@
 
 Architecture:
     MetaApi websocket tick -> BotEngine.on_tick() -> risk gate -> async broker order
-
-The decision path contains no polling timer, HTTP call, sleep, cache, or database.
-Only the broker execution itself is awaited. Strategy selection and execution state
-are owned by this process; the Next.js API is only a control/status plane.
 """
 from __future__ import annotations
 
@@ -21,16 +17,11 @@ from pydantic import BaseModel, Field
 from metaapi_cloud_sdk import MetaApi, SynchronizationListener
 from strat.bot.engine import BotEngine
 
-app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.0")
-
+app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.1")
 CONTROL_TOKEN = os.getenv("PIPSLIFE_BOT_CONTROL_TOKEN", "").strip()
 METAAPI_TOKEN = os.getenv("METAAPI_TOKEN", "").strip()
 DEFAULT_SYMBOL = os.getenv("PIPSLIFE_SYMBOL", "XAUUSD").strip()
-# Live execution remains enabled by default. This is the execution switch for the
-# configured MetaApi account; the account itself must be the intended demo account.
 LIVE_TRADING_ENABLED = os.getenv("PIPSLIFE_LIVE_TRADING_ENABLED", "true").strip().lower() == "true"
-# Do not silently impose a 0.01-lot default. The execution volume must be explicitly
-# configured by the deployment so the strategy is not artificially capped at 0.01.
 EXECUTION_VOLUME_ENV = os.getenv("PIPSLIFE_EXECUTION_VOLUME", "").strip()
 try:
     EXECUTION_VOLUME = float(EXECUTION_VOLUME_ENV) if EXECUTION_VOLUME_ENV else None
@@ -105,6 +96,7 @@ class AccountRuntime:
     last_price: float = 0.0
     pip_size: float = 0.01
     tick_count: int = 0
+    stream_active: bool = False
     execution_inflight: bool = False
     latest_price: float = 0.0
     latest_decision_us: float = 0.0
@@ -137,6 +129,10 @@ async def _dispatch_tick(runtime: AccountRuntime, tick: Any) -> None:
     runtime.last_price = current
     runtime.latest_price = current
     runtime.tick_count += 1
+    if not runtime.stream_active:
+        runtime.stream_active = True
+        runtime.activity = f"TICK_STREAM_ACTIVE strategy={runtime.selected_strategy[-3:]} symbol={runtime.symbol}"
+        print(runtime.activity, flush=True)
     positions = _managed(runtime.connection.terminal_state.positions or [], runtime.selected_strategy, runtime.symbol)
     received_ns = time.perf_counter_ns()
     signal = runtime.engine.on_tick(current, _timestamp(tick), current_positions=len(positions))
@@ -160,10 +156,12 @@ def _ensure_stop_worker(runtime: AccountRuntime) -> None:
 async def _execute_signal(runtime: AccountRuntime, signal: Any) -> None:
     try:
         if not LIVE_TRADING_ENABLED:
-            runtime.activity = f"{runtime.selected_strategy[-3:]} {signal.action} {runtime.symbol} reaction={runtime.latest_decision_us:.0f}us — execution gated"
+            runtime.activity = f"{runtime.selected_strategy[-3:]} {signal.action} {runtime.symbol} — execution gated"
+            print(f"EXECUTION_GATED strategy={runtime.selected_strategy[-3:]} side={signal.action} symbol={runtime.symbol}", flush=True)
             return
         if EXECUTION_VOLUME is None or EXECUTION_VOLUME <= 0:
             runtime.activity = "Execution blocked: PIPSLIFE_EXECUTION_VOLUME must be configured to a positive lot size"
+            print("ORDER_ERROR reason=invalid_execution_volume", flush=True)
             return
         strategy = runtime.selected_strategy
         options = {"comment": f"PipsLife{strategy[-3:]}", "clientId": CLIENT_BY_STRATEGY[strategy], "magic": MAGIC_BY_STRATEGY[strategy]}
@@ -171,16 +169,18 @@ async def _execute_signal(runtime: AccountRuntime, signal: Any) -> None:
         stop = getattr(signal, "stop_loss", None) if strategy != "strategy_002" else None
         target = getattr(signal, "take_profit", None)
         if signal.action == "BUY":
-            await runtime.connection.create_market_buy_order(runtime.symbol, EXECUTION_VOLUME, stop, target, options)
+            result = await runtime.connection.create_market_buy_order(runtime.symbol, EXECUTION_VOLUME, stop, target, options)
         else:
-            await runtime.connection.create_market_sell_order(runtime.symbol, EXECUTION_VOLUME, stop, target, options)
+            result = await runtime.connection.create_market_sell_order(runtime.symbol, EXECUTION_VOLUME, stop, target, options)
         runtime.latest_order_ack_us = (time.perf_counter_ns() - started) / 1_000.0
         runtime.activity = f"{strategy[-3:]} {signal.action} {runtime.symbol} reaction={runtime.latest_decision_us:.0f}us order_ack={runtime.latest_order_ack_us:.0f}us"
+        print(f"ORDER_ACK strategy={strategy[-3:]} side={signal.action} symbol={runtime.symbol} volume={EXECUTION_VOLUME} ack_us={runtime.latest_order_ack_us:.0f} result={result}", flush=True)
         if strategy == "strategy_002":
             runtime.stop_dirty = True
             _ensure_stop_worker(runtime)
     except Exception as exc:
         runtime.activity = f"{runtime.selected_strategy[-3:]} execution error: {exc}"
+        print(f"ORDER_ERROR strategy={runtime.selected_strategy[-3:]} symbol={runtime.symbol} error={exc}", flush=True)
     finally:
         runtime.execution_inflight = False
 
@@ -211,6 +211,7 @@ async def _stop_worker(runtime: AccountRuntime) -> None:
                     order_id = str(_value(result, "orderId", _value(result, "id", "")) or "")
                     if order_id:
                         runtime.stop_order_ids[position_id] = order_id
+                        print(f"STOP_ACK strategy=002 side={wanted} symbol={runtime.symbol} volume={volume} price={desired}", flush=True)
                 elif _value(existing, "id"):
                     old = float(_value(existing, "openPrice", 0.0) or 0.0)
                     move = desired > old if position_side == "BUY" else desired < old
@@ -218,6 +219,7 @@ async def _stop_worker(runtime: AccountRuntime) -> None:
                         await runtime.connection.modify_order(str(_value(existing, "id")), float(desired), None, None)
         except Exception as exc:
             runtime.activity = f"002 stop maintenance error: {exc}"
+            print(f"STOP_ERROR strategy=002 symbol={runtime.symbol} error={exc}", flush=True)
 
 
 async def _ensure_connection(runtime: AccountRuntime) -> None:
@@ -248,12 +250,14 @@ async def _ensure_connection(runtime: AccountRuntime) -> None:
     await connection.subscribe_to_market_data(runtime.symbol, [{"type": "ticks"}])
     runtime.connection = connection
     runtime.listener = listener
+    print(f"STREAM_CONNECTED account={runtime.account_id} symbol={runtime.symbol}", flush=True)
 
 
 async def _start(runtime: AccountRuntime) -> None:
     await _ensure_connection(runtime)
     runtime.engine.select_strategy(runtime.selected_strategy)
     runtime.state = "RUNNING"
+    runtime.stream_active = False
     runtime.activity = f"Strategy {runtime.selected_strategy[-3:]} running on MetaApi tick stream"
     async def lifecycle() -> None:
         try:
@@ -312,7 +316,7 @@ async def get_state(accountId: str | None = None) -> dict[str, Any]:
     runtime = runtimes.get(accountId) if accountId else next(iter(runtimes.values()), None)
     if runtime is None:
         return {"configured": True, "state": "READY", "strategy": "001", "activity": "Runner online"}
-    return {"configured": True, "state": runtime.state, "strategy": runtime.selected_strategy[-3:], "activity": runtime.activity, "ticks": runtime.tick_count, "reactionUs": round(runtime.latest_decision_us, 1), "orderAckUs": round(runtime.latest_order_ack_us, 1), "execution": "tick-event-driven"}
+    return {"configured": True, "state": runtime.state, "strategy": runtime.selected_strategy[-3:], "activity": runtime.activity, "ticks": runtime.tick_count, "reactionUs": round(runtime.latest_decision_us, 1), "orderAckUs": round(runtime.latest_order_ack_us, 1), "execution": "tick-event-driven", "streamActive": runtime.stream_active}
 
 
 def _check_control_token(authorization: str | None) -> None:
@@ -355,10 +359,4 @@ async def control(body: ControlRequest, authorization: str | None = Header(defau
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(
-        "runner.server:app",
-        host=os.getenv("PIPSLIFE_RUNNER_HOST", "0.0.0.0"),
-        port=int(os.getenv("PIPSLIFE_RUNNER_PORT", "8000")),
-        reload=False,
-    )
+    uvicorn.run("runner.server:app", host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
