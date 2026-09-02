@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getCache } from '@vercel/functions';
+import { start, getRun } from 'workflow/api';
 import { verifyAccountSession } from '@/lib/session';
+import { strategy002Loop } from '@/workflows/strategy002-loop';
 
 const PROVISIONING = process.env.METAAPI_PROVISIONING_URL ?? 'https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai';
 const CLIENT_DEFAULT = process.env.METAAPI_CLIENT_API_URL ?? 'https://mt-client-api-v1.new-york.agiliumtrade.ai';
@@ -19,12 +21,14 @@ type Account = { _id?: string; login?: string | number; server?: string; region?
 type Position = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; time?: string; clientId?: string; magic?: number };
 type Order = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; time?: string; clientId?: string; magic?: number; state?: string };
 type Tick = { time?: string; bid?: number; ask?: number; last?: number };
-type BotState = { running: boolean; strategy: string };
+type BotState = { running: boolean; strategy: string; runId?: string };
 type RunnerState = { configured: boolean; state: string; strategy: string; activity: string; error?: string; positionCount?: number; pendingCount?: number };
 
 function cacheKey(accountId: string) { return `pipslife:bot:${accountId}`; }
-async function getState(accountId: string) { return await getCache().get(cacheKey(accountId)) as BotState | null; }
-async function saveState(accountId: string, running: boolean, strategy: string) { await getCache().set(cacheKey(accountId), { running, strategy }, { ttl: 86400, tags: [`pipslife-bot-${accountId}`], name: `bot ${accountId}` }); }
+export async function getState(accountId: string) { return await getCache().get(cacheKey(accountId)) as BotState | null; }
+async function saveState(accountId: string, running: boolean, strategy: string, runId?: string) {
+  await getCache().set(cacheKey(accountId), { running, strategy, ...(runId ? { runId } : {}) }, { ttl: 86400, tags: [`pipslife-bot-${accountId}`], name: `bot ${accountId}` });
+}
 async function readJson(response: Response): Promise<any> { const text = await response.text(); try { return text ? JSON.parse(text) : null; } catch { return { error: text }; } }
 async function metaFetch(url: string, init?: RequestInit) {
   const token = process.env.METAAPI_TOKEN?.trim();
@@ -34,7 +38,7 @@ async function metaFetch(url: string, init?: RequestInit) {
   if (!response.ok) throw new Error(String(data?.message ?? data?.error ?? `MetaApi request failed (${response.status})`));
   return data;
 }
-async function accountInfo(accountId: string): Promise<{ account: Account; api: string }> {
+export async function accountInfo(accountId: string): Promise<{ account: Account; api: string }> {
   const account = await metaFetch(`${PROVISIONING}/users/current/accounts/${encodeURIComponent(accountId)}`) as Account;
   const api = account.region ? `https://mt-client-api-v1.${account.region}.agiliumtrade.ai` : CLIENT_DEFAULT;
   return { account, api };
@@ -44,8 +48,24 @@ function side(v: unknown): 'BUY' | 'SELL' | undefined { const s = String(v ?? ''
 function ticks(raw: any): Tick[] { return Array.isArray(raw) ? raw : Array.isArray(raw?.ticks) ? raw.ticks : Array.isArray(raw?.items) ? raw.items : []; }
 async function trade(api: string, accountId: string, body: Record<string, unknown>) { return metaFetch(`${api}/users/current/accounts/${encodeURIComponent(accountId)}/trade`, { method: 'POST', body: JSON.stringify(body) }); }
 
-async function execute002(accountId: string, api: string): Promise<RunnerState> {
+async function ensureStrategy002Loop(accountId: string) {
+  if (EXECUTION_MODE !== 'demo') return undefined;
+  const saved = await getState(accountId);
+  if (saved?.runId) {
+    try {
+      const status = await getRun(saved.runId).status;
+      if (status === 'running' || status === 'pending') return saved.runId;
+    } catch {}
+  }
+  const run = await start(strategy002Loop, [accountId]);
+  await saveState(accountId, true, '002', run.runId);
+  return run.runId;
+}
+
+export async function execute002(accountId: string, api: string): Promise<RunnerState> {
   if (EXECUTION_MODE !== 'demo') return { configured: true, state: 'READY', strategy: '002', activity: `Execution locked: PIPSLIFE_EXECUTION_MODE=${EXECUTION_MODE}. Demo mode is required for this test build.` };
+
+  await ensureStrategy002Loop(accountId);
 
   const region = api.match(/mt-client-api-v1\.([^.]+)\.agiliumtrade\.ai/)?.[1] ?? 'new-york';
   const marketApi = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
@@ -76,8 +96,6 @@ async function execute002(accountId: string, api: string): Promise<RunnerState> 
   const livePosition = [...managedPositions].sort((a, b) => new Date(String(b.time ?? 0)).getTime() - new Date(String(a.time ?? 0)).getTime())[0];
   const liveSide = side(livePosition?.type);
 
-  // If an old opposite pending order remains after a reversal, keep only the
-  // stop corresponding to the currently active managed position.
   if (managedPositions.length > 1) {
     const sorted = [...managedPositions].sort((a, b) => new Date(String(a.time ?? 0)).getTime() - new Date(String(b.time ?? 0)).getTime());
     for (const old of sorted.slice(0, -1)) if (old.id) await trade(api, accountId, { actionType: 'POSITION_CLOSE_ID', positionId: old.id, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
