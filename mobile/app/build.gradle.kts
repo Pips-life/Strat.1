@@ -62,6 +62,10 @@ val patchStrategyUi by tasks.registering {
             "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, context: Context, openMt5: () -> Unit) {"
         )
         text = text.replace(
+            "private val SERVER = stringPreferencesKey(\"server\")",
+            "private val SERVER = stringPreferencesKey(\"server\")\nprivate val SELECTED_STRATEGY = stringPreferencesKey(\"selected_strategy\")"
+        )
+        text = text.replace(
             "var bot by remember { mutableStateOf<BotState?>(null) }\n    var busy by remember { mutableStateOf(false) }",
             "var bot by remember { mutableStateOf<BotState?>(null) }\n    var selectedStrategy by remember { mutableStateOf(\"001\") }\n    var busy by remember { mutableStateOf(false) }"
         )
@@ -69,7 +73,7 @@ val patchStrategyUi by tasks.registering {
             "LaunchedEffect(session) {\n        if (session == null) { state = null; bot = null }",
             "LaunchedEffect(session) {\n        selectedStrategy = context.pipsDataStore.data.first()[SELECTED_STRATEGY]?.takeIf { it == \"001\" || it == \"002\" } ?: \"001\"\n        if (session == null) { state = null; bot = null }"
         )
-        text = text.replace(
+        text = text.replaceFirst(
             "api.botStatus(session).onSuccess { bot = it }",
             "api.botStatus(session).onSuccess { it -> bot = it; if (it.configured && it.strategy in setOf(\"001\", \"002\")) selectedStrategy = it.strategy }"
         )
