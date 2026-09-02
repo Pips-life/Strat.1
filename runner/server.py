@@ -2,8 +2,8 @@
 
 The Next.js API is the control plane. This service is the long-lived process that
 owns the MetaApi streaming connection. Strategy 002 executes directly from
-MetaApi synchronization events: no polling loop, no HTTP round-trip per tick,
-and no blocking strategy work in the quote callback.
+MetaApi tick synchronization events: no polling loop, no HTTP round-trip per
+tick, and no blocking strategy work in the quote callback.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from metaapi_cloud_sdk import MetaApi, SynchronizationListener
 
 from strat.bot.engine import BotEngine
 
-app = FastAPI(title="Pips-life Live Bot Runner", version="1.1.0")
+app = FastAPI(title="Pips-life Live Bot Runner", version="1.1.1")
 
 CONTROL_TOKEN = os.getenv("PIPSLIFE_BOT_CONTROL_TOKEN", "").strip()
 METAAPI_TOKEN = os.getenv("METAAPI_TOKEN", "").strip()
@@ -68,54 +68,11 @@ runtimes: dict[str, AccountRuntime] = {}
 _metaapi: MetaApi | None = None
 
 
-async def _ensure_connection(runtime: AccountRuntime) -> None:
-    global _metaapi
-    if runtime.connection is not None:
-        return
-    if not METAAPI_TOKEN:
-        raise HTTPException(status_code=503, detail="METAAPI_TOKEN is not configured")
-    if _metaapi is None:
-        _metaapi = MetaApi(METAAPI_TOKEN)
-    account = await _metaapi.metatrader_account_api.get_account(runtime.account_id)
-    if account.state != "DEPLOYED":
-        await account.deploy()
-    if account.connection_status != "CONNECTED":
-        await account.wait_connected()
-    connection = account.get_streaming_connection()
-    listener = Strategy002Listener(runtime) if runtime.selected_strategy == "002" else None
-    if listener is not None:
-        connection.add_synchronization_listener(listener)
-    await connection.connect()
-    await connection.wait_synchronized()
-    await connection.subscribe_to_market_data(runtime.symbol, [{'type': 'ticks'}])
-    runtime.connection = connection
-    runtime.listener = listener
-
-
 class Strategy002Listener(SynchronizationListener):
     """Non-blocking MetaApi tick listener for the Strategy 002 hot path."""
 
     def __init__(self, runtime: AccountRuntime):
         self.runtime = runtime
-
-    async def on_symbol_price_updated(self, _instance_index: int, price: Any):
-        if _value(price, "symbol") != self.runtime.symbol:
-            return
-        bid = float(_value(price, "bid", 0.0) or 0.0)
-        ask = float(_value(price, "ask", 0.0) or 0.0)
-        last = float(_value(price, "last", 0.0) or 0.0)
-        current = (bid + ask) / 2.0 if bid > 0 and ask > 0 else last
-        if current <= 0:
-            return
-        previous = self.runtime.last_price
-        self.runtime.last_price = current
-        if previous <= 0 or current == previous:
-            return
-        self.runtime.tick_count += 1
-        received = time.perf_counter_ns()
-        task = asyncio.create_task(_execute_strategy002_tick(self.runtime, previous, current, received))
-        self.runtime.execution_tasks.add(task)
-        task.add_done_callback(self.runtime.execution_tasks.discard)
 
     async def on_ticks_updated(self, _instance_index: int, ticks: list[Any], **_kwargs: Any):
         for tick in ticks:
@@ -138,6 +95,37 @@ class Strategy002Listener(SynchronizationListener):
             task.add_done_callback(self.runtime.execution_tasks.discard)
 
 
+async def _ensure_connection(runtime: AccountRuntime) -> None:
+    global _metaapi
+    if runtime.connection is not None:
+        return
+    if not METAAPI_TOKEN:
+        raise HTTPException(status_code=503, detail="METAAPI_TOKEN is not configured")
+    if _metaapi is None:
+        _metaapi = MetaApi(METAAPI_TOKEN)
+    account = await _metaapi.metatrader_account_api.get_account(runtime.account_id)
+    if account.state != "DEPLOYED":
+        await account.deploy()
+    if account.connection_status != "CONNECTED":
+        await account.wait_connected()
+    connection = account.get_streaming_connection()
+    listener = Strategy002Listener(runtime) if runtime.selected_strategy == "002" else None
+    if listener is not None:
+        connection.add_synchronization_listener(listener)
+    await connection.connect()
+    await connection.wait_synchronized()
+    specification = connection.terminal_state.specification(runtime.symbol)
+    pip_size = _value(specification, "pipSize", None)
+    point = _value(specification, "point", None)
+    if pip_size:
+        runtime.pip_size = float(pip_size)
+    elif point:
+        runtime.pip_size = float(point)
+    await connection.subscribe_to_market_data(runtime.symbol, [{'type': 'ticks'}])
+    runtime.connection = connection
+    runtime.listener = listener
+
+
 async def _execute_strategy002_tick(runtime: AccountRuntime, previous: float, current: float, received_ns: int) -> None:
     """Execute from an already-received tick with only in-memory work before the order call."""
     if runtime.selected_strategy != "002" or runtime.state != "RUNNING":
@@ -158,13 +146,12 @@ async def _execute_strategy002_tick(runtime: AccountRuntime, previous: float, cu
         }
         order_start_ns = time.perf_counter_ns()
         if direction == "BUY":
-            result = await runtime.connection.create_market_buy_order(runtime.symbol, STRATEGY002_VOLUME, None, None, options)
+            await runtime.connection.create_market_buy_order(runtime.symbol, STRATEGY002_VOLUME, None, None, options)
         else:
-            result = await runtime.connection.create_market_sell_order(runtime.symbol, STRATEGY002_VOLUME, None, None, options)
+            await runtime.connection.create_market_sell_order(runtime.symbol, STRATEGY002_VOLUME, None, None, options)
         ack_us = (time.perf_counter_ns() - order_start_ns) / 1_000.0
         runtime.activity = f"002 {direction} {runtime.symbol} reaction={decision_us:.0f}us order_ack={ack_us:.0f}us"
         asyncio.create_task(_maintain_strategy002_stops(runtime, current))
-        _ = result
     except Exception as exc:
         runtime.activity = f"002 {direction} execution error: {exc}"
 
@@ -275,6 +262,7 @@ async def _stop(runtime: AccountRuntime) -> None:
     runtime.connection = None
     runtime.listener = None
     runtime.task = None
+    runtime.stop_orders.clear()
     runtime.state = "STOPPED"
     runtime.activity = "Trading stopped"
 
@@ -292,6 +280,11 @@ async def get_state(accountId: str | None = None) -> dict[str, Any]:
         return {"configured": True, "state": "READY", "strategy": "001", "activity": "Runner online"}
     return {"configured": True, "state": runtime.state, "strategy": runtime.selected_strategy,
             "activity": runtime.activity, "ticks": runtime.tick_count}
+
+
+def _check_control_token(authorization: str | None) -> None:
+    if CONTROL_TOKEN and authorization != f"Bearer {CONTROL_TOKEN}":
+        raise HTTPException(status_code=401, detail="invalid runner control token")
 
 
 @app.post("/")
@@ -332,8 +325,3 @@ async def control(body: ControlRequest, authorization: str | None = Header(defau
         return {"configured": True, "state": runtime.state, "strategy": runtime.selected_strategy, "activity": runtime.activity}
 
     raise HTTPException(status_code=400, detail=f"unsupported action: {action}")
-
-
-def _check_control_token(authorization: str | None) -> None:
-    if CONTROL_TOKEN and authorization != f"Bearer {CONTROL_TOKEN}":
-        raise HTTPException(status_code=401, detail="invalid runner control token")
