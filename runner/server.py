@@ -19,7 +19,6 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from metaapi_cloud_sdk import MetaApi, SynchronizationListener
-
 from strat.bot.engine import BotEngine
 
 app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.0")
@@ -343,3 +342,14 @@ async def control(body: ControlRequest, authorization: str | None = Header(defau
         await _stop(runtime)
         return await get_state(account_id)
     raise HTTPException(status_code=400, detail=f"unsupported action: {action}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "runner.server:app",
+        host=os.getenv("PIPSLIFE_RUNNER_HOST", "0.0.0.0"),
+        port=int(os.getenv("PIPSLIFE_RUNNER_PORT", "8000")),
+        reload=False,
+    )
