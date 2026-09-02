@@ -53,17 +53,17 @@ export async function POST(request: Request) {
   try { body = await request.json() as ControlBody; } catch { return NextResponse.json({ error: 'invalid JSON' }, { status: 400 }); }
   const accountId = body.accountId?.trim();
   if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
+  let action = String(body.action ?? '').trim().toLowerCase();
+  let strategy = String(body.strategy ?? '').trim();
+  const match = action.match(/^select:(.+)$/);
+  if (match) { action = 'select'; strategy = match[1].trim(); }
+  if (!['select', 'start', 'stop'].includes(action)) return NextResponse.json({ error: 'unsupported action' }, { status: 400 });
+  if (action !== 'stop') {
+    validateStrategy(strategy || '001');
+    strategy = strategy || '001';
+  }
   try {
     verifyAccountSession(request, accountId);
-    let action = String(body.action ?? '').trim().toLowerCase();
-    let strategy = String(body.strategy ?? '').trim();
-    const match = action.match(/^select:(.+)$/);
-    if (match) { action = 'select'; strategy = match[1].trim(); }
-    if (!['select', 'start', 'stop'].includes(action)) return NextResponse.json({ error: 'unsupported action' }, { status: 400 });
-    if (action !== 'stop') {
-      validateStrategy(strategy || '001');
-      strategy = strategy || '001';
-    }
     const data = await runnerRequest('/', { method: 'POST', body: JSON.stringify({ action, strategy: strategy || undefined, accountId }) });
     return NextResponse.json(data, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
