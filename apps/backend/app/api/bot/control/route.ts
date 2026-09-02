@@ -10,10 +10,10 @@ const CLIENT_ID = 'PIPS002';
 const PIP_SIZE = 0.01;
 const TRAIL_PIPS = 100;
 const TRAIL_DISTANCE = PIP_SIZE * TRAIL_PIPS;
-const BASELINE_WINDOW = 20;
-const MIN_VELOCITY_RATIO = 1.5;
-const MIN_ACCELERATION_RATIO = 1.05;
-const MIN_CONFIDENCE = 70;
+// Strategy 002 is intentionally momentum-sensitive: any genuine non-zero
+// directional tick can trigger an entry. The historical feed is used only to
+// establish direction immediately; it is not a restrictive velocity baseline.
+const DIRECTION_EPSILON = 1e-9;
 const EXECUTION_MODE = (process.env.PIPSLIFE_EXECUTION_MODE ?? 'demo').trim().toLowerCase();
 
 export const runtime = 'nodejs';
@@ -44,15 +44,15 @@ async function accountInfo(accountId: string): Promise<{ account: Account; api: 
 }
 function normaliseSide(value: unknown): 'BUY' | 'SELL' | undefined { const v = String(value ?? '').toUpperCase(); if (v.includes('BUY')) return 'BUY'; if (v.includes('SELL')) return 'SELL'; return undefined; }
 function priceFromTick(t: Tick) { const bid = Number(t.bid ?? 0), ask = Number(t.ask ?? 0), last = Number(t.last ?? 0); return bid > 0 && ask > 0 ? (bid + ask) / 2 : last; }
+function tickArray(raw: any): Tick[] { if (Array.isArray(raw)) return raw as Tick[]; if (Array.isArray(raw?.ticks)) return raw.ticks as Tick[]; if (Array.isArray(raw?.items)) return raw.items as Tick[]; return []; }
 function analyseTicks(ticks: Tick[]) {
   const samples = ticks.map(t => ({ t: new Date(String(t.time ?? '')).getTime() / 1000, p: priceFromTick(t) })).filter(x => Number.isFinite(x.t) && x.p > 0).sort((a, b) => a.t - b.t);
-  const needed = BASELINE_WINDOW + 2; if (samples.length < needed) return { expanding: false, reason: `waiting for velocity samples (${samples.length}/${needed})`, price: samples.at(-1)?.p ?? 0 };
-  const recent = samples.slice(-(BASELINE_WINDOW + 2)); const velocities: number[] = [];
-  for (let i = 1; i < recent.length; i++) { const dt = recent[i].t - recent[i - 1].t; velocities.push(dt > 0 ? (recent[i].p - recent[i - 1].p) / dt : 0); }
-  const current = velocities.at(-1) ?? 0, previous = velocities.at(-2) ?? 0; const baselineValues = velocities.slice(0, -1).map(Math.abs).sort((a, b) => a - b); const middle = Math.floor(baselineValues.length / 2);
-  const baseline = Math.max(baselineValues.length % 2 ? baselineValues[middle] : (baselineValues[middle - 1] + baselineValues[middle]) / 2, 1e-12); const expansionRatio = Math.abs(current) / baseline; const accelerationRatio = Math.abs(current) / Math.max(Math.abs(previous), 1e-12);
-  const expanding = expansionRatio >= MIN_VELOCITY_RATIO && accelerationRatio >= MIN_ACCELERATION_RATIO; const direction = current > 0 ? 'BUY' : current < 0 ? 'SELL' : 'WAIT'; const confidence = Math.min(99, 50 + 20 * Math.max(0, expansionRatio - 1) + 20 * Math.max(0, accelerationRatio - 1));
-  return { expanding, direction, confidence, price: samples.at(-1)?.p ?? 0, expansionRatio, accelerationRatio };
+  if (samples.length < 2) return { expanding: false, reason: `waiting for live directional tick (${samples.length}/2)`, price: samples.at(-1)?.p ?? 0 };
+  const previous = samples.at(-2)!.p;
+  const current = samples.at(-1)!.p;
+  const delta = current - previous;
+  const direction = delta > DIRECTION_EPSILON ? 'BUY' : delta < -DIRECTION_EPSILON ? 'SELL' : 'WAIT';
+  return { expanding: direction !== 'WAIT', direction, confidence: direction === 'WAIT' ? 0 : 100, price: current, delta, sampleCount: samples.length };
 }
 async function trade(api: string, accountId: string, body: Record<string, unknown>) { return await metaFetch(`${api}/users/current/accounts/${encodeURIComponent(accountId)}/trade`, { method: 'POST', body: JSON.stringify(body) }); }
 
@@ -66,13 +66,22 @@ async function execute002(accountId: string, api: string): Promise<RunnerState> 
     metaFetch(`${marketApi}/users/current/accounts/${encodeURIComponent(accountId)}/historical-market-data/symbols/${encodeURIComponent(SYMBOL)}/ticks?limit=64`)
   ]);
   if (info?.tradeAllowed === false) return { configured: true, state: 'ERROR', strategy: '002', activity: 'MT5 account does not allow trading.' };
-  const positions = (Array.isArray(positionsRaw) ? positionsRaw : []) as Position[]; const orders = (Array.isArray(ordersRaw) ? ordersRaw : []) as Order[]; const ticks = (Array.isArray(ticksRaw) ? ticksRaw : []) as Tick[];
+  const positions = (Array.isArray(positionsRaw) ? positionsRaw : []) as Position[]; const orders = (Array.isArray(ordersRaw) ? ordersRaw : []) as Order[]; const ticks = tickArray(ticksRaw);
   const managedPositions = positions.filter(p => p.symbol === SYMBOL && (Number(p.magic) === MAGIC || p.clientId === CLIENT_ID)); const managedOrders = orders.filter(o => o.symbol === SYMBOL && (Number(o.magic) === MAGIC || o.clientId === CLIENT_ID)); const analysis = analyseTicks(ticks);
   if (managedPositions.length > 1) { const sorted = [...managedPositions].sort((a, b) => new Date(String(a.time ?? 0)).getTime() - new Date(String(b.time ?? 0)).getTime()); for (const old of sorted.slice(0, -1)) if (old.id) await trade(api, accountId, { actionType: 'POSITION_CLOSE_ID', positionId: old.id, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' }); }
   const livePosition = [...managedPositions].sort((a, b) => new Date(String(b.time ?? 0)).getTime() - new Date(String(a.time ?? 0)).getTime())[0]; const liveSide = normaliseSide(livePosition?.type); const pending = managedOrders.find(o => normaliseSide(o.type) === (liveSide === 'BUY' ? 'SELL' : liveSide === 'SELL' ? 'BUY' : undefined));
   if (livePosition && !pending) { const entry = Number(livePosition.openPrice ?? analysis.price); const opposite = liveSide === 'BUY' ? 'ORDER_TYPE_SELL_STOP' : 'ORDER_TYPE_BUY_STOP'; const stopPrice = liveSide === 'BUY' ? entry - TRAIL_DISTANCE : entry + TRAIL_DISTANCE; await trade(api, accountId, { actionType: opposite, symbol: SYMBOL, volume: Number(livePosition.volume ?? 0.01), openPrice: Number(stopPrice.toFixed(2)), magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' }); return { configured: true, state: 'RUNNING', strategy: '002', activity: `Strategy 002 running: ${liveSide} ${livePosition.volume ?? 0.01} with ${TRAIL_PIPS}-pip opposite stop at ${stopPrice.toFixed(2)}`, positionCount: managedPositions.length, pendingCount: 1 }; }
-  if (!livePosition && analysis.expanding && (analysis.direction === 'BUY' || analysis.direction === 'SELL') && analysis.confidence >= MIN_CONFIDENCE && analysis.price > 0) { const side = analysis.direction; const actionType = side === 'BUY' ? 'ORDER_TYPE_BUY' : 'ORDER_TYPE_SELL'; const entry = analysis.price; await trade(api, accountId, { actionType, symbol: SYMBOL, volume: 0.01, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' }); const stopPrice = side === 'BUY' ? entry - TRAIL_DISTANCE : entry + TRAIL_DISTANCE; await trade(api, accountId, { actionType: side === 'BUY' ? 'ORDER_TYPE_SELL_STOP' : 'ORDER_TYPE_BUY_STOP', symbol: SYMBOL, volume: 0.01, openPrice: Number(stopPrice.toFixed(2)), magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' }); return { configured: true, state: 'RUNNING', strategy: '002', activity: `TRADE EXECUTED: ${side} 0.01 ${SYMBOL} near ${entry.toFixed(2)}; opposite stop ${stopPrice.toFixed(2)}.`, positionCount: 1, pendingCount: 1 }; }
-  const wait = analysis.expanding ? `velocity expanding ${analysis.direction} (${analysis.confidence?.toFixed(1)}%)` : analysis.reason ?? 'waiting for velocity expansion'; return { configured: true, state: 'RUNNING', strategy: '002', activity: `Strategy 002 monitoring ${SYMBOL}: ${wait}`, positionCount: managedPositions.length, pendingCount: managedOrders.length };
+  if (!livePosition && analysis.expanding && (analysis.direction === 'BUY' || analysis.direction === 'SELL') && analysis.price > 0) {
+    const side = analysis.direction; const actionType = side === 'BUY' ? 'ORDER_TYPE_BUY' : 'ORDER_TYPE_SELL';
+    await trade(api, accountId, { actionType, symbol: SYMBOL, volume: 0.01, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
+    // Re-read positions so the 100-pip stop is anchored to the broker-confirmed fill price.
+    const afterRaw = await metaFetch(`${api}/users/current/accounts/${encodeURIComponent(accountId)}/positions`); const after = (Array.isArray(afterRaw) ? afterRaw : []) as Position[];
+    const filled = after.filter(p => p.symbol === SYMBOL && (Number(p.magic) === MAGIC || p.clientId === CLIENT_ID)).sort((a, b) => new Date(String(b.time ?? 0)).getTime() - new Date(String(a.time ?? 0)).getTime())[0];
+    const actualEntry = Number(filled?.openPrice ?? analysis.price); const stopPrice = side === 'BUY' ? actualEntry - TRAIL_DISTANCE : actualEntry + TRAIL_DISTANCE;
+    await trade(api, accountId, { actionType: side === 'BUY' ? 'ORDER_TYPE_SELL_STOP' : 'ORDER_TYPE_BUY_STOP', symbol: SYMBOL, volume: Number(filled?.volume ?? 0.01), openPrice: Number(stopPrice.toFixed(2)), magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
+    return { configured: true, state: 'RUNNING', strategy: '002', activity: `TRADE EXECUTED: ${side} 0.01 ${SYMBOL} at ${actualEntry.toFixed(2)}; opposite stop ${stopPrice.toFixed(2)}.`, positionCount: 1, pendingCount: 1 };
+  }
+  const wait = analysis.expanding ? `direction ${analysis.direction} detected (${analysis.delta?.toFixed(5)} price change)` : analysis.reason ?? 'waiting for directional movement'; return { configured: true, state: 'RUNNING', strategy: '002', activity: `Strategy 002 monitoring ${SYMBOL}: ${wait}`, positionCount: managedPositions.length, pendingCount: managedOrders.length };
 }
 
 export async function GET(request: Request) {
