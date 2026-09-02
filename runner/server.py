@@ -1,13 +1,15 @@
 """Persistent Pips-life bot runner.
 
-The Next.js API is a control plane. This service is the long-lived process that
-owns BotEngine and the MetaApi streaming connection. Never put MetaApi
-credentials in the Android app.
+The Next.js API is the control plane. This service is the long-lived process that
+owns the MetaApi streaming connection. Strategy 002 executes directly from
+MetaApi synchronization events: no polling loop, no HTTP round-trip per tick,
+and no blocking strategy work in the quote callback.
 """
 from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -15,16 +17,20 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
-from metaapi_cloud_sdk import MetaApi
+from metaapi_cloud_sdk import MetaApi, SynchronizationListener
 
 from strat.bot.engine import BotEngine
 
-app = FastAPI(title="Pips-life Live Bot Runner", version="1.0.1")
+app = FastAPI(title="Pips-life Live Bot Runner", version="1.1.0")
 
 CONTROL_TOKEN = os.getenv("PIPSLIFE_BOT_CONTROL_TOKEN", "").strip()
 METAAPI_TOKEN = os.getenv("METAAPI_TOKEN", "").strip()
 DEFAULT_SYMBOL = os.getenv("PIPSLIFE_SYMBOL", "XAUUSD").strip()
 LIVE_TRADING_ENABLED = os.getenv("PIPSLIFE_LIVE_TRADING_ENABLED", "false").strip().lower() == "true"
+STRATEGY002_VOLUME = float(os.getenv("PIPSLIFE_STRATEGY002_VOLUME", "0.01"))
+STRATEGY002_PIPS = float(os.getenv("PIPSLIFE_STRATEGY002_TRAIL_PIPS", "100"))
+STRATEGY002_MAGIC = 100002
+STRATEGY002_CLIENT_ID = "PIPS002"
 
 
 def _value(obj: Any, name: str, default: Any = None) -> Any:
@@ -48,8 +54,14 @@ class AccountRuntime:
     activity: str = "Runner online"
     symbol: str = DEFAULT_SYMBOL
     connection: Any = None
+    listener: Any = None
     task: asyncio.Task | None = None
     samples: deque[tuple[float, float]] = field(default_factory=lambda: deque(maxlen=64))
+    last_price: float = 0.0
+    pip_size: float = 0.01
+    stop_orders: dict[str, str] = field(default_factory=dict)
+    execution_tasks: set[asyncio.Task] = field(default_factory=set)
+    tick_count: int = 0
 
 
 runtimes: dict[str, AccountRuntime] = {}
@@ -70,29 +82,147 @@ async def _ensure_connection(runtime: AccountRuntime) -> None:
     if account.connection_status != "CONNECTED":
         await account.wait_connected()
     connection = account.get_streaming_connection()
+    listener = Strategy002Listener(runtime) if runtime.selected_strategy == "002" else None
+    if listener is not None:
+        connection.add_synchronization_listener(listener)
     await connection.connect()
     await connection.wait_synchronized()
-    await connection.subscribe_to_market_data(runtime.symbol)
+    await connection.subscribe_to_market_data(runtime.symbol, [{'type': 'ticks'}])
     runtime.connection = connection
+    runtime.listener = listener
 
 
-def _check_control_token(authorization: str | None) -> None:
-    if CONTROL_TOKEN and authorization != f"Bearer {CONTROL_TOKEN}":
-        raise HTTPException(status_code=401, detail="invalid runner control token")
+class Strategy002Listener(SynchronizationListener):
+    """Non-blocking MetaApi tick listener for the Strategy 002 hot path."""
+
+    def __init__(self, runtime: AccountRuntime):
+        self.runtime = runtime
+
+    async def on_symbol_price_updated(self, _instance_index: int, price: Any):
+        if _value(price, "symbol") != self.runtime.symbol:
+            return
+        bid = float(_value(price, "bid", 0.0) or 0.0)
+        ask = float(_value(price, "ask", 0.0) or 0.0)
+        last = float(_value(price, "last", 0.0) or 0.0)
+        current = (bid + ask) / 2.0 if bid > 0 and ask > 0 else last
+        if current <= 0:
+            return
+        previous = self.runtime.last_price
+        self.runtime.last_price = current
+        if previous <= 0 or current == previous:
+            return
+        self.runtime.tick_count += 1
+        received = time.perf_counter_ns()
+        task = asyncio.create_task(_execute_strategy002_tick(self.runtime, previous, current, received))
+        self.runtime.execution_tasks.add(task)
+        task.add_done_callback(self.runtime.execution_tasks.discard)
+
+    async def on_ticks_updated(self, _instance_index: int, ticks: list[Any], **_kwargs: Any):
+        for tick in ticks:
+            if _value(tick, "symbol") != self.runtime.symbol:
+                continue
+            bid = float(_value(tick, "bid", 0.0) or 0.0)
+            ask = float(_value(tick, "ask", 0.0) or 0.0)
+            last = float(_value(tick, "last", 0.0) or 0.0)
+            current = (bid + ask) / 2.0 if bid > 0 and ask > 0 else last
+            if current <= 0:
+                continue
+            previous = self.runtime.last_price
+            self.runtime.last_price = current
+            if previous <= 0 or current == previous:
+                continue
+            self.runtime.tick_count += 1
+            received = time.perf_counter_ns()
+            task = asyncio.create_task(_execute_strategy002_tick(self.runtime, previous, current, received))
+            self.runtime.execution_tasks.add(task)
+            task.add_done_callback(self.runtime.execution_tasks.discard)
+
+
+async def _execute_strategy002_tick(runtime: AccountRuntime, previous: float, current: float, received_ns: int) -> None:
+    """Execute from an already-received tick with only in-memory work before the order call."""
+    if runtime.selected_strategy != "002" or runtime.state != "RUNNING":
+        return
+    direction = "BUY" if current > previous else "SELL"
+    decision_ns = time.perf_counter_ns()
+    decision_us = (decision_ns - received_ns) / 1_000.0
+
+    if not LIVE_TRADING_ENABLED:
+        runtime.activity = f"002 {direction} {current:.2f} reaction={decision_us:.0f}us — execution gated"
+        return
+
+    try:
+        options = {
+            "comment": "PipsLife002",
+            "clientId": STRATEGY002_CLIENT_ID,
+            "magic": STRATEGY002_MAGIC,
+        }
+        order_start_ns = time.perf_counter_ns()
+        if direction == "BUY":
+            result = await runtime.connection.create_market_buy_order(runtime.symbol, STRATEGY002_VOLUME, None, None, options)
+        else:
+            result = await runtime.connection.create_market_sell_order(runtime.symbol, STRATEGY002_VOLUME, None, None, options)
+        ack_us = (time.perf_counter_ns() - order_start_ns) / 1_000.0
+        runtime.activity = f"002 {direction} {runtime.symbol} reaction={decision_us:.0f}us order_ack={ack_us:.0f}us"
+        asyncio.create_task(_maintain_strategy002_stops(runtime, current))
+        _ = result
+    except Exception as exc:
+        runtime.activity = f"002 {direction} execution error: {exc}"
+
+
+async def _maintain_strategy002_stops(runtime: AccountRuntime, current_price: float) -> None:
+    """Maintain the opposite 100-pip stop outside the tick decision hot path."""
+    try:
+        terminal = runtime.connection.terminal_state
+        positions = terminal.positions or []
+        distance = STRATEGY002_PIPS * runtime.pip_size
+        for position in positions:
+            symbol = _value(position, "symbol")
+            client_id = _value(position, "clientId")
+            magic = _value(position, "magic")
+            if symbol != runtime.symbol or (client_id != STRATEGY002_CLIENT_ID and int(magic or 0) != STRATEGY002_MAGIC):
+                continue
+            position_id = _value(position, "id")
+            volume = float(_value(position, "volume", STRATEGY002_VOLUME) or STRATEGY002_VOLUME)
+            position_type = str(_value(position, "type", "")).upper()
+            if not position_id:
+                continue
+            if "BUY" in position_type:
+                stop_price = current_price - distance
+                if stop_price <= 0:
+                    continue
+                existing_id = runtime.stop_orders.get(position_id)
+                if existing_id:
+                    await runtime.connection.modify_order(existing_id, stop_price, None, None)
+                else:
+                    result = await runtime.connection.create_stop_sell_order(
+                        runtime.symbol, volume, stop_price, None, None,
+                        {"comment": f"PipsLife002:{position_id}", "clientId": STRATEGY002_CLIENT_ID, "magic": STRATEGY002_MAGIC},
+                    )
+                    runtime.stop_orders[position_id] = _value(result, "orderId", "") or _value(result, "id", "")
+            elif "SELL" in position_type:
+                stop_price = current_price + distance
+                existing_id = runtime.stop_orders.get(position_id)
+                if existing_id:
+                    await runtime.connection.modify_order(existing_id, stop_price, None, None)
+                else:
+                    result = await runtime.connection.create_stop_buy_order(
+                        runtime.symbol, volume, stop_price, None, None,
+                        {"comment": f"PipsLife002:{position_id}", "clientId": STRATEGY002_CLIENT_ID, "magic": STRATEGY002_MAGIC},
+                    )
+                    runtime.stop_orders[position_id] = _value(result, "orderId", "") or _value(result, "id", "")
+    except Exception as exc:
+        runtime.activity = f"002 stop maintenance error: {exc}"
 
 
 async def _market_loop(runtime: AccountRuntime) -> None:
-    """Feed live prices into the canonical BotEngine.
-
-    Strategy evaluation is live here. Actual order placement remains explicitly
-    gated until the MT5 position-accounting mode and the Strategy 002 reversal
-    adapter are validated for the connected account. This prevents a netting
-    account from being treated like a hedging account.
-    """
+    """Strategy 001 remains on the canonical engine; Strategy 002 is event-driven."""
     runtime.state = "RUNNING"
     runtime.activity = f"Strategy {runtime.selected_strategy} running on {runtime.symbol}"
     try:
         runtime.engine.select_strategy(runtime.selected_strategy)
+        if runtime.selected_strategy == "002":
+            while True:
+                await asyncio.sleep(3600)
         while True:
             price_obj = runtime.connection.terminal_state.price(runtime.symbol)
             bid = float(_value(price_obj, "bid", 0.0)) if price_obj else 0.0
@@ -107,8 +237,6 @@ async def _market_loop(runtime: AccountRuntime) -> None:
                     runtime.activity = f"{runtime.selected_strategy} signal {signal.action} at {price}"
                     if not LIVE_TRADING_ENABLED:
                         runtime.activity += " — execution gated"
-                    else:
-                        runtime.activity += " — execution adapter not armed"
             await asyncio.sleep(0.25)
     except asyncio.CancelledError:
         raise
@@ -127,6 +255,25 @@ async def _stop(runtime: AccountRuntime) -> None:
             await runtime.task
         except asyncio.CancelledError:
             pass
+    for task in list(runtime.execution_tasks):
+        task.cancel()
+    runtime.execution_tasks.clear()
+    if runtime.connection is not None:
+        try:
+            if runtime.listener is not None:
+                runtime.connection.remove_synchronization_listener(runtime.listener)
+        except Exception:
+            pass
+        try:
+            await runtime.connection.unsubscribe_from_market_data(runtime.symbol)
+        except Exception:
+            pass
+        try:
+            await runtime.connection.close()
+        except Exception:
+            pass
+    runtime.connection = None
+    runtime.listener = None
     runtime.task = None
     runtime.state = "STOPPED"
     runtime.activity = "Trading stopped"
@@ -144,7 +291,7 @@ async def get_state(accountId: str | None = None) -> dict[str, Any]:
     if runtime is None:
         return {"configured": True, "state": "READY", "strategy": "001", "activity": "Runner online"}
     return {"configured": True, "state": runtime.state, "strategy": runtime.selected_strategy,
-            "activity": runtime.activity}
+            "activity": runtime.activity, "ticks": runtime.tick_count}
 
 
 @app.post("/")
@@ -160,8 +307,7 @@ async def control(body: ControlRequest, authorization: str | None = Header(defau
         strategy = body.strategy
         if strategy not in {"001", "002"}:
             raise HTTPException(status_code=400, detail="strategy must be 001 or 002")
-        if runtime.task and not runtime.task.done():
-            await _stop(runtime)
+        await _stop(runtime)
         runtime.engine.select_strategy(strategy)
         runtime.selected_strategy = strategy
         runtime.state = "SELECTED"
@@ -172,11 +318,11 @@ async def control(body: ControlRequest, authorization: str | None = Header(defau
         strategy = body.strategy or runtime.selected_strategy
         if strategy not in {"001", "002"}:
             raise HTTPException(status_code=400, detail="strategy must be 001 or 002")
-        await _ensure_connection(runtime)
         if runtime.task and not runtime.task.done():
             await _stop(runtime)
-        runtime.engine.select_strategy(strategy)
         runtime.selected_strategy = strategy
+        await _ensure_connection(runtime)
+        runtime.engine.select_strategy(strategy)
         runtime.task = asyncio.create_task(_market_loop(runtime))
         await asyncio.sleep(0)
         return {"configured": True, "state": runtime.state, "strategy": strategy, "activity": runtime.activity}
@@ -186,3 +332,8 @@ async def control(body: ControlRequest, authorization: str | None = Header(defau
         return {"configured": True, "state": runtime.state, "strategy": runtime.selected_strategy, "activity": runtime.activity}
 
     raise HTTPException(status_code=400, detail=f"unsupported action: {action}")
+
+
+def _check_control_token(authorization: str | None) -> None:
+    if CONTROL_TOKEN and authorization != f"Bearer {CONTROL_TOKEN}":
+        raise HTTPException(status_code=401, detail="invalid runner control token")
