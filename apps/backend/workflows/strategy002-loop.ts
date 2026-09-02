@@ -1,6 +1,8 @@
 import { sleep } from 'workflow';
 import { executeStrategy002Tick, readStrategy002State } from './strategy002-loop-steps';
 
+const POLL_INTERVAL = '100ms';
+
 export async function strategy002Loop(accountId: string, loopToken: string) {
   'use workflow';
 
@@ -11,6 +13,6 @@ export async function strategy002Loop(accountId: string, loopToken: string) {
     }
 
     await executeStrategy002Tick(accountId);
-    await sleep('1s');
+    await sleep(POLL_INTERVAL);
   }
 }
