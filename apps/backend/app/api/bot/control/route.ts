@@ -25,7 +25,7 @@ type BotState = { running: boolean; strategy: string; runId?: string; loopToken?
 type RunnerState = { configured: boolean; state: string; strategy: string; activity: string; error?: string; positionCount?: number; pendingCount?: number };
 
 function cacheKey(accountId: string) { return `pipslife:bot:${accountId}`; }
-export async function getState(accountId: string) { return await getCache().get(cacheKey(accountId)) as BotState | null; }
+async function getState(accountId: string) { return await getCache().get(cacheKey(accountId)) as BotState | null; }
 async function saveState(accountId: string, running: boolean, strategy: string, runId?: string, loopToken?: string) {
   await getCache().set(cacheKey(accountId), { running, strategy, ...(runId ? { runId } : {}), ...(loopToken ? { loopToken } : {}) }, { ttl: 86400, tags: [`pipslife-bot-${accountId}`], name: `bot ${accountId}` });
 }
@@ -38,7 +38,7 @@ async function metaFetch(url: string, init?: RequestInit) {
   if (!response.ok) throw new Error(String(data?.message ?? data?.error ?? `MetaApi request failed (${response.status})`));
   return data;
 }
-export async function accountInfo(accountId: string): Promise<{ account: Account; api: string }> {
+async function accountInfo(accountId: string): Promise<{ account: Account; api: string }> {
   const account = await metaFetch(`${PROVISIONING}/users/current/accounts/${encodeURIComponent(accountId)}`) as Account;
   const api = account.region ? `https://mt-client-api-v1.${account.region}.agiliumtrade.ai` : CLIENT_DEFAULT;
   return { account, api };
@@ -57,7 +57,6 @@ async function ensureStrategy002Loop(accountId: string) {
       if (status === 'running' || status === 'pending') return saved.runId;
     } catch {}
   }
-
   const loopToken = crypto.randomUUID();
   await saveState(accountId, true, '002', undefined, loopToken);
   try {
@@ -70,11 +69,9 @@ async function ensureStrategy002Loop(accountId: string) {
   }
 }
 
-export async function execute002(accountId: string, api: string, startLoop = true): Promise<RunnerState> {
+async function execute002(accountId: string, api: string, startLoop = true): Promise<RunnerState> {
   if (EXECUTION_MODE !== 'demo') return { configured: true, state: 'READY', strategy: '002', activity: `Execution locked: PIPSLIFE_EXECUTION_MODE=${EXECUTION_MODE}. Demo mode is required for this test build.` };
-
   if (startLoop) await ensureStrategy002Loop(accountId);
-
   const region = api.match(/mt-client-api-v1\.([^.]+)\.agiliumtrade\.ai/)?.[1] ?? 'new-york';
   const marketApi = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
   const accountPath = `${encodeURIComponent(accountId)}`;
@@ -85,11 +82,9 @@ export async function execute002(accountId: string, api: string, startLoop = tru
     metaFetch(`${marketApi}/users/current/accounts/${accountPath}/historical-market-data/symbols/${encodeURIComponent(SYMBOL)}/ticks?limit=64`),
     metaFetch(`${api}/users/current/accounts/${accountPath}/symbols/${encodeURIComponent(SYMBOL)}/current-tick`)
   ]);
-
   if (info?.tradeAllowed === false) return { configured: true, state: 'ERROR', strategy: '002', activity: 'MT5 account does not allow trading.' };
   const connection = String(info?.connectionStatus ?? '').toUpperCase();
   if (connection && connection !== 'CONNECTED') return { configured: true, state: 'ERROR', strategy: '002', activity: `MetaApi account is ${connection}; waiting for broker connection.` };
-
   const positions = (Array.isArray(positionsRaw) ? positionsRaw : []) as Position[];
   const orders = (Array.isArray(ordersRaw) ? ordersRaw : []) as Order[];
   const historical = ticks(historyRaw).filter(t => price(t) > 0);
@@ -98,27 +93,22 @@ export async function execute002(accountId: string, api: string, startLoop = tru
   const previous = historical.length ? price(historical[historical.length - 1]) : 0;
   const delta = currentPrice > 0 && previous > 0 ? currentPrice - previous : 0;
   const direction: 'BUY' | 'SELL' | 'WAIT' = delta > 0 ? 'BUY' : delta < 0 ? 'SELL' : 'WAIT';
-
   const managedPositions = positions.filter(p => p.symbol === SYMBOL && (Number(p.magic) === MAGIC || p.clientId === CLIENT_ID));
   const managedOrders = orders.filter(o => o.symbol === SYMBOL && (Number(o.magic) === MAGIC || o.clientId === CLIENT_ID));
   const livePosition = [...managedPositions].sort((a, b) => new Date(String(b.time ?? 0)).getTime() - new Date(String(a.time ?? 0)).getTime())[0];
   const liveSide = side(livePosition?.type);
-
   if (managedPositions.length > 1) {
     const sorted = [...managedPositions].sort((a, b) => new Date(String(a.time ?? 0)).getTime() - new Date(String(b.time ?? 0)).getTime());
     for (const old of sorted.slice(0, -1)) if (old.id) await trade(api, accountId, { actionType: 'POSITION_CLOSE_ID', positionId: old.id, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
   }
-
   const wantedStopSide = liveSide === 'BUY' ? 'SELL' : liveSide === 'SELL' ? 'BUY' : undefined;
   const pending = wantedStopSide ? managedOrders.find(o => side(o.type) === wantedStopSide) : undefined;
-
   if (livePosition && !pending) {
     const entry = Number(livePosition.openPrice ?? currentPrice);
     const stop = liveSide === 'BUY' ? entry - TRAIL_DISTANCE : entry + TRAIL_DISTANCE;
     if (entry > 0 && liveSide) await trade(api, accountId, { actionType: liveSide === 'BUY' ? 'ORDER_TYPE_SELL_STOP' : 'ORDER_TYPE_BUY_STOP', symbol: SYMBOL, volume: Number(livePosition.volume ?? 0.01), openPrice: Number(stop.toFixed(2)), magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
     return { configured: true, state: 'RUNNING', strategy: '002', activity: `LIVE ${liveSide}: ${SYMBOL} ${Number(livePosition.volume ?? 0.01).toFixed(2)} · 100-pip opposite stop ${stop.toFixed(2)}`, positionCount: managedPositions.length, pendingCount: 1 };
   }
-
   if (!livePosition && direction !== 'WAIT' && currentPrice > 0) {
     const actionType = direction === 'BUY' ? 'ORDER_TYPE_BUY' : 'ORDER_TYPE_SELL';
     await trade(api, accountId, { actionType, symbol: SYMBOL, volume: 0.01, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
@@ -130,20 +120,21 @@ export async function execute002(accountId: string, api: string, startLoop = tru
     if (entry > 0) await trade(api, accountId, { actionType: direction === 'BUY' ? 'ORDER_TYPE_SELL_STOP' : 'ORDER_TYPE_BUY_STOP', symbol: SYMBOL, volume: Number(filled?.volume ?? 0.01), openPrice: Number(stop.toFixed(2)), magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
     return { configured: true, state: 'RUNNING', strategy: '002', activity: `TRADE EXECUTED: ${direction} 0.01 ${SYMBOL} at ${entry.toFixed(2)} · opposite stop ${stop.toFixed(2)} · live delta ${delta.toFixed(5)}`, positionCount: 1, pendingCount: 1 };
   }
-
   return { configured: true, state: 'RUNNING', strategy: '002', activity: `LIVE MARKET ${SYMBOL}: ${currentPrice > 0 ? currentPrice.toFixed(2) : 'no tick'} · delta ${delta.toFixed(5)} · ${historical.length} history ticks loaded · waiting for next directional tick`, positionCount: managedPositions.length, pendingCount: managedOrders.length };
 }
 
 export async function GET(request: Request) {
   const accountId = new URL(request.url).searchParams.get('accountId')?.trim();
   if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
+  const workflowToken = process.env.METAAPI_TOKEN?.trim();
+  const internalWorkflow = Boolean(workflowToken) && request.headers.get('x-pipslife-workflow') === workflowToken;
   try {
-    verifyAccountSession(request, accountId);
+    if (!internalWorkflow) verifyAccountSession(request, accountId);
     const saved = await getState(accountId);
     if (!saved) return NextResponse.json({ configured: true, state: 'READY', strategy: '001', activity: 'Vercel bot engine ready' }, { headers: { 'cache-control': 'no-store' } });
     if (!saved.running) return NextResponse.json({ configured: true, state: 'SELECTED', strategy: saved.strategy, activity: `Strategy ${saved.strategy} selected; trading stopped.` }, { headers: { 'cache-control': 'no-store' } });
     const { account, api } = await accountInfo(accountId);
-    if (saved.strategy === '002') return NextResponse.json(await execute002(accountId, api), { headers: { 'cache-control': 'no-store' } });
+    if (saved.strategy === '002') return NextResponse.json(await execute002(accountId, api, !internalWorkflow), { headers: { 'cache-control': 'no-store' } });
     return NextResponse.json({ configured: true, state: 'RUNNING', strategy: saved.strategy, activity: `Strategy ${saved.strategy} running on ${account.server ?? SYMBOL}` }, { headers: { 'cache-control': 'no-store' } });
   } catch (e) { if (e instanceof Response) return e; return NextResponse.json({ configured: true, state: 'ERROR', strategy: '002', error: e instanceof Error ? e.message : 'Bot execution failed' }, { status: 502, headers: { 'cache-control': 'no-store' } }); }
 }
