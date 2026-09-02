@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: pips-life-ci-${{ github.ref }}
@@ -62,3 +62,50 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pips-life-apk
+          path: mobile/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  publish:
+    name: Publish progressive GitHub release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [python, backend, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download verified APK
+        uses: actions/download-artifact@v4
+        with:
+          name: pips-life-apk
+          path: release
+      - name: Calculate next release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
+          if [[ -z "$latest" ]]; then
+            next="0.1.0"
+          else
+            current="${latest#v}"
+            IFS=. read -r major minor patch <<< "$current"
+            next="${major}.${minor}.$((patch + 1))"
+          fi
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+      - name: Rename APK
+        run: mv release/app-debug.apk "release/pips-life-${{ steps.version.outputs.version }}.apk"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "release/pips-life-${{ steps.version.outputs.version }}.apk" \
+            --title "Pips-life ${{ steps.version.outputs.version }}" \
+            --generate-notes
