@@ -21,13 +21,13 @@ type Account = { _id?: string; login?: string | number; server?: string; region?
 type Position = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; time?: string; clientId?: string; magic?: number };
 type Order = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; time?: string; clientId?: string; magic?: number; state?: string };
 type Tick = { time?: string; bid?: number; ask?: number; last?: number };
-type BotState = { running: boolean; strategy: string; runId?: string };
+type BotState = { running: boolean; strategy: string; runId?: string; loopToken?: string };
 type RunnerState = { configured: boolean; state: string; strategy: string; activity: string; error?: string; positionCount?: number; pendingCount?: number };
 
 function cacheKey(accountId: string) { return `pipslife:bot:${accountId}`; }
 export async function getState(accountId: string) { return await getCache().get(cacheKey(accountId)) as BotState | null; }
-async function saveState(accountId: string, running: boolean, strategy: string, runId?: string) {
-  await getCache().set(cacheKey(accountId), { running, strategy, ...(runId ? { runId } : {}) }, { ttl: 86400, tags: [`pipslife-bot-${accountId}`], name: `bot ${accountId}` });
+async function saveState(accountId: string, running: boolean, strategy: string, runId?: string, loopToken?: string) {
+  await getCache().set(cacheKey(accountId), { running, strategy, ...(runId ? { runId } : {}), ...(loopToken ? { loopToken } : {}) }, { ttl: 86400, tags: [`pipslife-bot-${accountId}`], name: `bot ${accountId}` });
 }
 async function readJson(response: Response): Promise<any> { const text = await response.text(); try { return text ? JSON.parse(text) : null; } catch { return { error: text }; } }
 async function metaFetch(url: string, init?: RequestInit) {
@@ -51,21 +51,29 @@ async function trade(api: string, accountId: string, body: Record<string, unknow
 async function ensureStrategy002Loop(accountId: string) {
   if (EXECUTION_MODE !== 'demo') return undefined;
   const saved = await getState(accountId);
-  if (saved?.runId) {
+  if (saved?.runId && saved.loopToken) {
     try {
       const status = await getRun(saved.runId).status;
       if (status === 'running' || status === 'pending') return saved.runId;
     } catch {}
   }
-  const run = await start(strategy002Loop, [accountId]);
-  await saveState(accountId, true, '002', run.runId);
-  return run.runId;
+
+  const loopToken = crypto.randomUUID();
+  await saveState(accountId, true, '002', undefined, loopToken);
+  try {
+    const run = await start(strategy002Loop, [accountId, loopToken]);
+    await saveState(accountId, true, '002', run.runId, loopToken);
+    return run.runId;
+  } catch (error) {
+    await saveState(accountId, false, '002');
+    throw error;
+  }
 }
 
-export async function execute002(accountId: string, api: string): Promise<RunnerState> {
+export async function execute002(accountId: string, api: string, startLoop = true): Promise<RunnerState> {
   if (EXECUTION_MODE !== 'demo') return { configured: true, state: 'READY', strategy: '002', activity: `Execution locked: PIPSLIFE_EXECUTION_MODE=${EXECUTION_MODE}. Demo mode is required for this test build.` };
 
-  await ensureStrategy002Loop(accountId);
+  if (startLoop) await ensureStrategy002Loop(accountId);
 
   const region = api.match(/mt-client-api-v1\.([^.]+)\.agiliumtrade\.ai/)?.[1] ?? 'new-york';
   const marketApi = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
