@@ -220,6 +220,7 @@ jobs:
       - name: Verify published release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: "${{ needs.release.outputs.tag }}"
         run: |
           set -euo pipefail
           gh release view "$TAG" --json tagName,name,assets
