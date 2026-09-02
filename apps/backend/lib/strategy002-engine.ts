@@ -12,6 +12,7 @@ type Tick = { bid?: number; ask?: number; last?: number; time?: string };
 type Position = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; time?: string; clientId?: string; magic?: number };
 type Order = { id?: string; type?: string; symbol?: string; volume?: number; openPrice?: number; comment?: string; clientId?: string; magic?: number };
 type Account = { server?: string; region?: string };
+type TickState = { price: number; time?: string };
 
 async function json(response: Response): Promise<any> { const text = await response.text(); try { return text ? JSON.parse(text) : null; } catch { return { error: text }; } }
 async function metaFetch(url: string, init?: RequestInit) {
@@ -35,11 +36,11 @@ export async function executeStrategy002(accountId: string, startLoop: () => Pro
   const accountPath = encodeURIComponent(accountId);
   const region = api.match(/mt-client-api-v1\.([^.]+)\.agiliumtrade\.ai/)?.[1] ?? 'new-york';
   const marketApi = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
-  const [info, positionsRaw, ordersRaw, historyRaw, currentRaw] = await Promise.all([
+
+  const [info, positionsRaw, ordersRaw, currentRaw] = await Promise.all([
     metaFetch(`${api}/users/current/accounts/${accountPath}/account-information`),
     metaFetch(`${api}/users/current/accounts/${accountPath}/positions`),
     metaFetch(`${api}/users/current/accounts/${accountPath}/orders`),
-    metaFetch(`${marketApi}/users/current/accounts/${accountPath}/historical-market-data/symbols/${encodeURIComponent(SYMBOL)}/ticks?limit=2`),
     metaFetch(`${api}/users/current/accounts/${accountPath}/symbols/${encodeURIComponent(SYMBOL)}/current-tick?keepSubscription=true`),
   ]);
   if (info?.tradeAllowed === false) return { configured: true, state: 'ERROR', strategy: '002', activity: 'MT5 account does not allow trading.' };
@@ -48,18 +49,33 @@ export async function executeStrategy002(accountId: string, startLoop: () => Pro
 
   const positions = managed((Array.isArray(positionsRaw) ? positionsRaw : []) as Position[]);
   const orders = managed((Array.isArray(ordersRaw) ? ordersRaw : []) as Order[]);
-  const historical = (Array.isArray(historyRaw) ? historyRaw : Array.isArray(historyRaw?.ticks) ? historyRaw.ticks : []) as Tick[];
   const current = currentRaw as Tick;
   const currentPrice = p(current);
-  const previous = historical.length ? p(historical[historical.length - 1]) : 0;
-  const delta = currentPrice > 0 && previous > 0 ? currentPrice - previous : 0;
+  if (!(currentPrice > 0)) return { configured: true, state: 'RUNNING', strategy: '002', activity: `No live ${SYMBOL} tick received yet.`, positionCount: positions.length };
+
+  // Compare the live tick with our own last processed tick. Do not compare against
+  // historical data: that can return the same latest tick and produce delta=0 forever.
+  const cache = getCache();
+  const tickKey = `pipslife:strategy002:tick:${accountId}`;
+  const previous = await cache.get(tickKey) as TickState | null;
+  const delta = previous?.price > 0 ? currentPrice - previous.price : 0;
+  const changed = delta !== 0 || (current.time && current.time !== previous?.time);
+  await cache.set(tickKey, { price: currentPrice, time: current.time }, { ttl: 3600, name: `strategy002 tick ${accountId}` });
   const direction: 'BUY' | 'SELL' | 'WAIT' = delta > 0 ? 'BUY' : delta < 0 ? 'SELL' : 'WAIT';
 
-  // Every open position gets its own opposite pending stop, trailing live price by exactly 100 pips.
+  // Execute the market entry before any trailing-stop maintenance so the entry path
+  // is as short as possible when a new tick arrives.
+  let opened = false;
+  if (changed && direction !== 'WAIT') {
+    await trade(api, accountId, { actionType: direction === 'BUY' ? 'ORDER_TYPE_BUY' : 'ORDER_TYPE_SELL', symbol: SYMBOL, volume: VOLUME, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
+    opened = true;
+  }
+
+  // Every open position gets its own opposite pending stop, trailing live price by 100 pips.
   const usedOrderIds = new Set<string>();
-  for (const position of positions) {
+  await Promise.all(positions.map(async (position) => {
     const positionSide = side(position.type);
-    if (!positionSide || !position.id || currentPrice <= 0) continue;
+    if (!positionSide || !position.id) return;
     const wanted = positionSide === 'BUY' ? 'SELL' : 'BUY';
     const desired = positionSide === 'BUY' ? currentPrice - TRAIL_DISTANCE : currentPrice + TRAIL_DISTANCE;
     const marker = `PipsLife002:${position.id}`;
@@ -72,13 +88,16 @@ export async function executeStrategy002(accountId: string, startLoop: () => Pro
       const shouldMove = positionSide === 'BUY' ? desired > oldPrice : desired < oldPrice;
       if (shouldMove && desired > 0) await trade(api, accountId, { actionType: 'ORDER_MODIFY', orderId: existing.id, openPrice: Number(desired.toFixed(2)), magic: MAGIC, clientId: CLIENT_ID, comment: marker });
     }
-  }
+  }));
 
-  // Zero entry threshold: any non-zero tick movement opens immediately in that direction.
-  if (direction !== 'WAIT' && currentPrice > 0) {
-    await trade(api, accountId, { actionType: direction === 'BUY' ? 'ORDER_TYPE_BUY' : 'ORDER_TYPE_SELL', symbol: SYMBOL, volume: VOLUME, magic: MAGIC, clientId: CLIENT_ID, comment: 'PipsLife002' });
-    return { configured: true, state: 'RUNNING', strategy: '002', activity: `VELOCITY ${direction}: ${SYMBOL} delta=${delta.toFixed(5)} · market order opened immediately · ${positions.length + 1} position(s)`, positionCount: positions.length + 1 };
-  }
-
-  return { configured: true, state: 'RUNNING', strategy: '002', activity: `VELOCITY ${direction}: ${SYMBOL} price=${currentPrice > 0 ? currentPrice.toFixed(2) : 'no tick'} delta=${delta.toFixed(5)} · ${positions.length} position(s) · opposite stops maintained at 100 pips`, positionCount: positions.length, pendingCount: orders.length };
+  return {
+    configured: true,
+    state: 'RUNNING',
+    strategy: '002',
+    activity: opened
+      ? `VELOCITY ${direction}: ${SYMBOL} delta=${delta.toFixed(5)} · market order opened on live tick · trailing stops maintained at 100 pips`
+      : `VELOCITY WAIT: ${SYMBOL} price=${currentPrice.toFixed(2)} · ${positions.length} position(s) · trailing stops maintained at 100 pips`,
+    positionCount: positions.length + (opened ? 1 : 0),
+    pendingCount: orders.length,
+  };
 }
