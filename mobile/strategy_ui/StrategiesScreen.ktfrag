@@ -6,21 +6,28 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Choose the strategy the bot should trade.") }
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(session) {
-        if (session != null) while (true) {
-            api.botStatus(session).onSuccess {
-                bot = it
-                val serverStrategy = it.strategy
-                if (pendingSelection == null && (serverStrategy == "001" || serverStrategy == "002")) {
-                    selected = serverStrategy
-                } else if (pendingSelection != null && serverStrategy == pendingSelection) {
-                    selected = serverStrategy
-                    pendingSelection = null
-                    message = "Strategy ${serverStrategy} active in engine."
+        if (session != null) {
+            val saved = context.pipsDataStore.data.first()[stringPreferencesKey("selected_strategy")]
+            if (saved == "001" || saved == "002") selected = saved
+            while (true) {
+                api.botStatus(session).onSuccess {
+                    bot = it
+                    val serverStrategy = it.strategy
+                    if (it.configured && pendingSelection == null && (serverStrategy == "001" || serverStrategy == "002")) {
+                        selected = serverStrategy
+                        context.pipsDataStore.edit { prefs -> prefs[stringPreferencesKey("selected_strategy")] = serverStrategy }
+                    } else if (pendingSelection != null && serverStrategy == pendingSelection) {
+                        selected = serverStrategy
+                        pendingSelection = null
+                        message = "Strategy ${serverStrategy} active in engine."
+                        context.pipsDataStore.edit { prefs -> prefs[stringPreferencesKey("selected_strategy")] = serverStrategy }
+                    }
                 }
+                delay(3000)
             }
-            delay(3000)
         }
     }
 
@@ -34,6 +41,7 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
         message = "Activating Strategy $strategy…"
         busy = true
         scope.launch {
+            context.pipsDataStore.edit { prefs -> prefs[stringPreferencesKey("selected_strategy")] = strategy }
             api.botCommand(session, "select", strategy)
                 .onSuccess { selection ->
                     bot = selection
@@ -58,8 +66,7 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
                     }
                 }
                 .onFailure {
-                    pendingSelection = null
-                    message = it.message ?: "Strategy selection failed."
+                    message = it.message ?: "Strategy saved, but the engine connection is unavailable."
                 }
             busy = false
         }

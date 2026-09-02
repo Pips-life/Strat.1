@@ -42,9 +42,6 @@ android {
     }
 }
 
-// Apply the strategy-selection UI immediately before Kotlin compilation. Keeping the
-// replacement isolated in a template prevents another hand-edited MainActivity brace
-// regression while preserving the existing stable screen implementation.
 val patchStrategyUi by tasks.registering {
     doLast {
         val source = file("src/main/java/life/pips/strat1/MainActivity.kt")
@@ -53,16 +50,16 @@ val patchStrategyUi by tasks.registering {
         val start = text.indexOf("@Composable private fun StrategiesScreen")
         val end = text.indexOf("@Composable private fun StrategyDetail", start)
         check(start >= 0 && end > start) { "Could not locate StrategiesScreen in MainActivity.kt" }
-        source.writeText(text.substring(0, start) + template + "\n" + text.substring(end))
+        var patched = text.substring(0, start) + template + "\n" + text.substring(end)
+        patched = patched.replace(
+            "Text(\"Strategy 001 · QOF\", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Black)",
+            "Text(if (bot?.strategy == \"002\") \"Strategy 002 · Velocity Expansion\" else \"Strategy 001 · QOF\", color = Primary, fontSize = 19.sp, fontWeight = FontWeight.Black)"
+        )
+        source.writeText(patched)
     }
 }
 
 tasks.named("preBuild").configure { dependsOn(patchStrategyUi) }
-
-// Release 0.2.31 includes the selectable strategy UI and MT5 backend fixes.
-// Release trigger: publish the seamless strategy-to-engine activation flow.
-
-// Strategy activation fix: the app now forwards the selected strategy to the command API.
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.02.00"))
