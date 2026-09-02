@@ -26,10 +26,16 @@ app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.0")
 CONTROL_TOKEN = os.getenv("PIPSLIFE_BOT_CONTROL_TOKEN", "").strip()
 METAAPI_TOKEN = os.getenv("METAAPI_TOKEN", "").strip()
 DEFAULT_SYMBOL = os.getenv("PIPSLIFE_SYMBOL", "XAUUSD").strip()
-# Live execution is intentionally ON for the configured runner. Deployments can still
-# explicitly set PIPSLIFE_LIVE_TRADING_ENABLED=false as an emergency kill switch.
+# Live execution remains enabled by default. This is the execution switch for the
+# configured MetaApi account; the account itself must be the intended demo account.
 LIVE_TRADING_ENABLED = os.getenv("PIPSLIFE_LIVE_TRADING_ENABLED", "true").strip().lower() == "true"
-DEFAULT_VOLUME = float(os.getenv("PIPSLIFE_EXECUTION_VOLUME", "0.01"))
+# Do not silently impose a 0.01-lot default. The execution volume must be explicitly
+# configured by the deployment so the strategy is not artificially capped at 0.01.
+EXECUTION_VOLUME_ENV = os.getenv("PIPSLIFE_EXECUTION_VOLUME", "").strip()
+try:
+    EXECUTION_VOLUME = float(EXECUTION_VOLUME_ENV) if EXECUTION_VOLUME_ENV else None
+except ValueError:
+    EXECUTION_VOLUME = None
 TRAIL_PIPS = float(os.getenv("PIPSLIFE_STRATEGY002_TRAIL_PIPS", "100"))
 MAGIC_BY_STRATEGY = {"strategy_001": 100001, "strategy_002": 100002}
 CLIENT_BY_STRATEGY = {"strategy_001": "PIPS001", "strategy_002": "PIPS002"}
@@ -156,15 +162,18 @@ async def _execute_signal(runtime: AccountRuntime, signal: Any) -> None:
         if not LIVE_TRADING_ENABLED:
             runtime.activity = f"{runtime.selected_strategy[-3:]} {signal.action} {runtime.symbol} reaction={runtime.latest_decision_us:.0f}us — execution gated"
             return
+        if EXECUTION_VOLUME is None or EXECUTION_VOLUME <= 0:
+            runtime.activity = "Execution blocked: PIPSLIFE_EXECUTION_VOLUME must be configured to a positive lot size"
+            return
         strategy = runtime.selected_strategy
         options = {"comment": f"PipsLife{strategy[-3:]}", "clientId": CLIENT_BY_STRATEGY[strategy], "magic": MAGIC_BY_STRATEGY[strategy]}
         started = time.perf_counter_ns()
         stop = getattr(signal, "stop_loss", None) if strategy != "strategy_002" else None
         target = getattr(signal, "take_profit", None)
         if signal.action == "BUY":
-            await runtime.connection.create_market_buy_order(runtime.symbol, DEFAULT_VOLUME, stop, target, options)
+            await runtime.connection.create_market_buy_order(runtime.symbol, EXECUTION_VOLUME, stop, target, options)
         else:
-            await runtime.connection.create_market_sell_order(runtime.symbol, DEFAULT_VOLUME, stop, target, options)
+            await runtime.connection.create_market_sell_order(runtime.symbol, EXECUTION_VOLUME, stop, target, options)
         runtime.latest_order_ack_us = (time.perf_counter_ns() - started) / 1_000.0
         runtime.activity = f"{strategy[-3:]} {signal.action} {runtime.symbol} reaction={runtime.latest_decision_us:.0f}us order_ack={runtime.latest_order_ack_us:.0f}us"
         if strategy == "strategy_002":
@@ -186,8 +195,8 @@ async def _stop_worker(runtime: AccountRuntime) -> None:
             for position in positions:
                 position_id = str(_value(position, "id", ""))
                 position_side = _side(_value(position, "type"))
-                volume = float(_value(position, "volume", DEFAULT_VOLUME) or DEFAULT_VOLUME)
-                if not position_id or not position_side:
+                volume = float(_value(position, "volume", EXECUTION_VOLUME or 0.0) or EXECUTION_VOLUME or 0.0)
+                if not position_id or not position_side or volume <= 0:
                     continue
                 if position_side == "BUY":
                     desired, wanted, create = runtime.latest_price - distance, "SELL", runtime.connection.create_stop_sell_order
@@ -295,7 +304,7 @@ async def _stop(runtime: AccountRuntime) -> None:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "runner": "online", "execution": "tick-event-driven", "metaapiConfigured": bool(METAAPI_TOKEN), "liveTradingEnabled": LIVE_TRADING_ENABLED, "accounts": len(runtimes)}
+    return {"ok": True, "runner": "online", "execution": "tick-event-driven", "metaapiConfigured": bool(METAAPI_TOKEN), "liveTradingEnabled": LIVE_TRADING_ENABLED, "executionVolumeConfigured": EXECUTION_VOLUME is not None and EXECUTION_VOLUME > 0, "accounts": len(runtimes)}
 
 
 @app.get("/")
