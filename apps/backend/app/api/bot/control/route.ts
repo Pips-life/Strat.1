@@ -1,6 +1,4 @@
-import { NextResponse } from 'next/server';
-import { getCache } from '@vercel/functions';
-import { after } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { verifyAccountSession } from '@/lib/session';
 import { startStrategy002Stream, stopStrategy002Stream, strategy002StreamPromise } from '@/lib/strategy002-stream';
 
@@ -8,10 +6,10 @@ export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 type BotState = { running: boolean; strategy: string };
-const key = (accountId: string) => `pipslife:bot:${accountId}`;
-const readState = async (accountId: string) => await getCache().get(key(accountId)) as BotState | null;
+const botStates = new Map<string, BotState>();
+const readState = async (accountId: string) => botStates.get(accountId) ?? null;
 const writeState = async (accountId: string, running: boolean, strategy: string) => {
-  await getCache().set(key(accountId), { running, strategy }, { ttl: 86400, tags: [`pipslife-bot-${accountId}`], name: `bot ${accountId}` });
+  botStates.set(accountId, { running, strategy });
 };
 
 async function runStream(accountId: string) {
