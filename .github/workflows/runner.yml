@@ -46,7 +46,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          docker run -d --name pips-life-runner-smoke -p 18080:8080 -e PIPSLIFE_BOT_CONTROL_TOKEN=smoke-token ghcr.io/pips-life/pips-life-runner:${{ github.sha }}
+          docker run -d --name pips-life-runner-smoke -p 18080:10000 -e PIPSLIFE_BOT_CONTROL_TOKEN=smoke-token ghcr.io/pips-life/pips-life-runner:${{ github.sha }}
           trap 'docker logs pips-life-runner-smoke || true; docker rm -f pips-life-runner-smoke || true' EXIT
           for i in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/health; then echo; exit 0; fi
@@ -96,7 +96,7 @@ jobs:
           if x <= 0: raise SystemExit('PIPSLIFE_EXECUTION_VOLUME must be positive')
           print('Execution volume configuration is valid.')
           PY
-          docker run -d --name pips-life-demo-verify -p 18081:8080 \
+          docker run -d --name pips-life-demo-verify -p 18081:10000 \
             -e METAAPI_TOKEN="$METAAPI_TOKEN" \
             -e METAAPI_ACCOUNT_ID="$METAAPI_ACCOUNT_ID" \
             -e PIPSLIFE_BOT_CONTROL_TOKEN="$CONTROL_TOKEN" \
