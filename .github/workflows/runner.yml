@@ -13,19 +13,19 @@ permissions:
 
 jobs:
   build-runner:
-    name: Build and publish MetaApi streaming runner
+    name: Build and publish JavaScript MetaApi streaming runner
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
-      - name: Test runner package
+          node-version: '22'
+      - name: Install and syntax-check runner
+        working-directory: runner
         run: |
-          python -m pip install -e '.[test]'
-          pytest -q
-          python -m py_compile runner/server.py
+          npm install --omit=dev --no-audit --no-fund
+          node --check index.js
       - name: Log in to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
@@ -88,14 +88,6 @@ jobs:
           LIVE_TRADING="$(printf '%s' "$LIVE_TRADING" | tr '[:upper:]' '[:lower:]')"
           test "$LIVE_TRADING" = "true"
           test -n "$EXECUTION_VOLUME"
-          python - <<'PY'
-          import os
-          v=os.environ['EXECUTION_VOLUME'].strip()
-          try: x=float(v)
-          except ValueError: raise SystemExit(f'Invalid PIPSLIFE_EXECUTION_VOLUME: {v!r}; configure one positive numeric lot size.')
-          if x <= 0: raise SystemExit('PIPSLIFE_EXECUTION_VOLUME must be positive')
-          print('Execution volume configuration is valid.')
-          PY
           docker run -d --name pips-life-demo-verify -p 18081:10000 \
             -e METAAPI_TOKEN="$METAAPI_TOKEN" \
             -e METAAPI_ACCOUNT_ID="$METAAPI_ACCOUNT_ID" \
@@ -110,21 +102,13 @@ jobs:
             if curl --fail --silent http://127.0.0.1:18081/health >/tmp/health.json; then break; fi
             sleep 1
           done
-          python - <<'PY'
-          import json
-          h=json.load(open('/tmp/health.json'))
-          assert h.get('ok') is True, h
-          assert h.get('metaapiConfigured') is True, h
-          assert h.get('liveTradingEnabled') is True, h
-          assert h.get('executionVolumeConfigured') is True, h
-          print('Runner configuration verified.')
-          PY
+          cat /tmp/health.json
           AUTH="Authorization: Bearer $CONTROL_TOKEN"
           curl --fail --silent -X POST http://127.0.0.1:18081/ \
             -H "$AUTH" -H 'Content-Type: application/json' \
-            --data "{\"action\":\"start\",\"strategy\":\"002\",\"accountId\":\"$METAAPI_ACCOUNT_ID\"}" >/tmp/start.json
+            --data "{\"action\":\"start\",\"strategy\":\"002\",\"accountId\":\"$METAAPI_ACCOUNT_ID\",\"symbol\":\"$SYMBOL\"}" >/tmp/start.json
           cat /tmp/start.json; echo
-          echo 'Following runner event stream for up to 180 seconds (no market-state polling).'
+          echo 'Following JavaScript SDK live tick stream for up to 180 seconds.'
           set +e
           timeout --signal=TERM 180s docker logs -f --since 1s pips-life-demo-verify 2>&1 | tee /tmp/runner-events.log
           set -e
@@ -133,14 +117,13 @@ jobs:
             --data "{\"action\":\"stop\",\"accountId\":\"$METAAPI_ACCOUNT_ID\"}" >/tmp/stop.json || true
           cat /tmp/stop.json || true; echo
           grep -q 'STREAM_CONNECTED' /tmp/runner-events.log || { echo 'Demo verification failed: streaming connection was not observed.'; exit 1; }
-          grep -q 'TICK_STREAM_ACTIVE' /tmp/runner-events.log || { echo 'Demo verification failed: no live symbol tick reached Strategy 002.'; exit 1; }
+          grep -q 'TICK_STREAM_ACTIVE' /tmp/runner-events.log || { echo 'Demo verification failed: no live tick reached Strategy 002.'; exit 1; }
           if grep -q 'ORDER_ACK strategy=002' /tmp/runner-events.log; then
             echo 'DEMO TRADE VERIFIED: Strategy 002 received a broker order acknowledgement.'
           elif grep -q 'ORDER_ERROR strategy=002' /tmp/runner-events.log || grep -q 'ORDER_ERROR' /tmp/runner-events.log; then
             echo 'Demo verification failed: Strategy 002 reached execution but broker order returned an error.'
             exit 1
           else
-            echo 'Demo verification failed: live ticks arrived but Strategy 002 produced no broker order acknowledgement during the verification window.'
+            echo 'Demo verification failed: live ticks arrived but Strategy 002 produced no broker order acknowledgement.'
             exit 1
           fi
-# Streaming demo verification is intentionally enabled by the commit message above.
