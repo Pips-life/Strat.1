@@ -353,7 +353,10 @@ async def get_state(accountId: str | None = None) -> dict[str, Any]:
 
 
 def _check_control_token(authorization: str | None) -> None:
-    if CONTROL_TOKEN and authorization != f"Bearer {CONTROL_TOKEN}":
+    if not CONTROL_TOKEN and not METAAPI_TOKEN:
+        return
+    accepted = {token for token in (CONTROL_TOKEN, METAAPI_TOKEN) if token}
+    if authorization not in {f"Bearer {token}" for token in accepted}:
         raise HTTPException(status_code=401, detail="invalid runner control token")
 
 
