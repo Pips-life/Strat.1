@@ -1,7 +1,7 @@
 @Composable
 private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
     var bot by remember { mutableStateOf<BotState?>(null) }
-    var selected by remember { mutableStateOf("001") }
+    var selected by remember { mutableStateOf<String?>(null) }
     var pendingSelection by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("Choose the strategy the bot should trade.") }
@@ -9,24 +9,29 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
     val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(session) {
-        if (session != null) {
-            val saved = context.pipsDataStore.data.first()[stringPreferencesKey("selected_strategy")]
-            if (saved == "001" || saved == "002") selected = saved
+        if (session == null) {
+            bot = null
+            selected = null
+            pendingSelection = null
+            message = "Connect MT5 before selecting a live trading strategy."
+        } else {
+            val saved = context.pipsDataStore.data.first()[SELECTED_STRATEGY]
+            selected = saved?.takeIf { it == "001" || it == "002" }
             while (true) {
                 api.botStatus(session).onSuccess {
                     bot = it
-                    val serverStrategy = it.strategy
-                    if (it.configured && pendingSelection == null && (serverStrategy == "001" || serverStrategy == "002")) {
+                    val serverStrategy = it.strategy.takeIf { strategy -> strategy == "001" || strategy == "002" }
+                    if (pendingSelection == null) {
                         selected = serverStrategy
-                        context.pipsDataStore.edit { prefs -> prefs[stringPreferencesKey("selected_strategy")] = serverStrategy }
-                    } else if (pendingSelection != null && serverStrategy == pendingSelection) {
+                        if (serverStrategy != null) context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
+                    } else if (serverStrategy == pendingSelection) {
                         selected = serverStrategy
                         pendingSelection = null
-                        message = "Strategy ${serverStrategy} active in engine."
-                        context.pipsDataStore.edit { prefs -> prefs[stringPreferencesKey("selected_strategy")] = serverStrategy }
+                        message = "Strategy $serverStrategy active in engine."
+                        context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
                     }
-                }
-                delay(3000)
+                }.onFailure { if (pendingSelection != null) message = "Waiting for engine confirmation…" }
+                delay(1500)
             }
         }
     }
@@ -41,13 +46,12 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
         message = "Activating Strategy $strategy…"
         busy = true
         scope.launch {
-            context.pipsDataStore.edit { prefs -> prefs[stringPreferencesKey("selected_strategy")] = strategy }
             api.botCommand(session, "select", strategy)
                 .onSuccess { selection ->
                     bot = selection
                     if (selection.strategy == strategy) {
-                        selected = strategy
-                        message = "Strategy $strategy active in engine. Starting trading…"
+                        context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = strategy }
+                        message = "Strategy $strategy selected in BotEngine. Starting trading…"
                         api.botCommand(session, "start", strategy)
                             .onSuccess { started ->
                                 bot = started
@@ -58,53 +62,26 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
                                     message = "Strategy $strategy selected; waiting for engine confirmation."
                                 }
                             }
-                            .onFailure {
-                                message = it.message ?: "Strategy selected, but trading could not be started."
-                            }
+                            .onFailure { message = it.message ?: "Strategy selected, but trading could not be started." }
                     } else {
                         message = "Strategy $strategy requested; waiting for engine confirmation."
                     }
                 }
-                .onFailure {
-                    message = it.message ?: "Strategy saved, but the engine connection is unavailable."
-                }
+                .onFailure { message = it.message ?: "Strategy selection failed; the engine will retry through status sync." }
             busy = false
         }
     }
 
-    LazyColumn(
-        modifier.fillMaxSize().background(Ink).padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp)
-    ) {
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp)) {
         item { TopBar("Strategies", "CHOOSE THE ACTIVE TRADING STRATEGY", session != null) }
-        item { Text(message, color = if (message.contains("active", true) || message.contains("trading", true)) Green else Muted, fontSize = 12.sp) }
         item {
-            Card(onClick = { if (!busy) choose("001") }, enabled = !busy, colors = CardDefaults.cardColors(containerColor = if (selected == "001") Panel2 else Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(2.dp, if (selected == "001") Cyan else Line, RoundedCornerShape(22.dp))) {
-                Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("STRATEGY 001", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 1.sp); StatusPill(if (selected == "001") "SELECTED" else "READY", if (selected == "001") Green else Cyan) }
-                    Text("QOF", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
-                    Text("Primary QOF strategy. Tap this card to make it the active strategy for the bot.", color = Muted, fontSize = 12.sp)
-                    Divider(color = Line)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Metric("ENGINE", "PROTECTED"); Metric("STATE", if (selected == "001") "SELECTED" else "READY"); Metric("ROLE", "PRIMARY") }
-                }
-            }
+            Text("SELECTED STRATEGY", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.height(5.dp))
+            Text(strategyLabel(selected), color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
+            Text(message, color = if (message.contains("active", true) || message.contains("trading", true)) Green else Muted, fontSize = 11.sp)
         }
-        item {
-            Card(onClick = { if (!busy) choose("002") }, enabled = !busy, colors = CardDefaults.cardColors(containerColor = if (selected == "002") Panel2 else Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(2.dp, if (selected == "002") Cyan else Line, RoundedCornerShape(22.dp))) {
-                Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("STRATEGY 002", color = Cyan, fontWeight = FontWeight.Bold, letterSpacing = 1.sp); StatusPill(if (selected == "002") "SELECTED" else "READY", if (selected == "002") Green else Cyan) }
-                    Text("Velocity Expansion", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
-                    Text("Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", color = Muted, fontSize = 12.sp)
-                    Divider(color = Line)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Metric("ENGINE", "PROTECTED"); Metric("STATE", if (selected == "002") "SELECTED" else "READY"); Metric("ROLE", "SECONDARY") }
-                }
-            }
-        }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(1.dp, Line, RoundedCornerShape(22.dp))) {
-                Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) { Text("STRATEGY 003", color = Purple, fontWeight = FontWeight.Bold, letterSpacing = 1.sp); StatusPill("LOCKED", Purple); Text("Reserved", color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black); Text("Future strategy slot.", color = Muted, fontSize = 12.sp) }
-            }
-        }
+        item { StrategyDetail("001", "QOF", if (selected == "001") bot?.state ?: "READY" else "READY", true, "Primary QOF strategy. Uses the reusable confluence engine and QOF decision path.", "PRIMARY", selected == "001", busy) { choose("001") } }
+        item { StrategyDetail("002", "Velocity Expansion", if (selected == "002") bot?.state ?: "READY" else "READY", true, "Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", "SECONDARY", selected == "002", busy) { choose("002") } }
+        item { StrategyDetail("003", "Reserved", "LOCKED", false, "Future strategy slot.", "RESERVED", false, busy) {} }
     }
 }
