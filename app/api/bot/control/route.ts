@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
-const control = () => process.env.PIPSLIFE_BOT_CONTROL_URL;
+// Canonical runner endpoint. Keep the legacy name as a compatibility fallback so
+// an older Vercel environment does not break while the deployment is migrated.
+const control = () => process.env.PIPSLIFE_RUNNER_URL?.trim() || process.env.PIPSLIFE_BOT_CONTROL_URL?.trim();
 export const runtime = 'nodejs';
 
 type RunnerState = { configured?: boolean; state?: string; strategy?: string; activity?: string; error?: string };
@@ -32,7 +34,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const url = control();
-  if (!url) return NextResponse.json({ configured: false, state: 'RUNNER_NOT_CONFIGURED', strategy: '001', error: 'PIPSLIFE_BOT_CONTROL_URL is not configured' }, { status: 503 });
+  if (!url) return NextResponse.json({ configured: false, state: 'RUNNER_NOT_CONFIGURED', strategy: '001', error: 'PIPSLIFE_RUNNER_URL is not configured' }, { status: 503 });
   try {
     const body = await request.json() as { action?: string; strategy?: string; accountId?: string };
     const rawAction = String(body.action ?? '').trim().toLowerCase();
