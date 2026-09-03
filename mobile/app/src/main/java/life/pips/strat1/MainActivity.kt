@@ -49,6 +49,7 @@ private val Context.pipsDataStore by preferencesDataStore("pips_life_session")
 private val ACCOUNT_ID = stringPreferencesKey("account_id")
 private val SESSION_TOKEN = stringPreferencesKey("session_token")
 private val SERVER = stringPreferencesKey("server")
+private val SELECTED_STRATEGY = stringPreferencesKey("selected_strategy")
 
 private val Ink = Color(0xFF040712)
 private val Panel = Color(0xFF0B1220)
@@ -81,6 +82,8 @@ private fun strategyLabel(strategy: String?): String {
         else -> "001 · QOF"
     }
 }
+
+private fun normalizeStrategy(strategy: String?): String = if (strategy?.trim() == "002" || strategy.equals("STRATEGY_002", true)) "002" else "001"
 
 @Composable
 private fun PipsLifeApp(context: Context) {
@@ -212,29 +215,108 @@ private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: Backe
 
 @Composable private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
     var bot by remember { mutableStateOf<BotState?>(null) }
-    LaunchedEffect(session) { if (session != null) while (true) { api.botStatus(session).onSuccess { bot = it }; delay(3000) } }
+    var selected by remember { mutableStateOf("001") }
+    var pendingSelection by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Choose the strategy the bot should trade.") }
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    LaunchedEffect(session) {
+        if (session == null) {
+            bot = null
+            selected = "001"
+            pendingSelection = null
+            message = "Connect MT5 before selecting a live trading strategy."
+        } else {
+            val saved = context.pipsDataStore.data.first()[SELECTED_STRATEGY]
+            if (saved == "001" || saved == "002") selected = saved
+            while (true) {
+                api.botStatus(session).onSuccess {
+                    bot = it
+                    val serverStrategy = normalizeStrategy(it.strategy)
+                    if (pendingSelection == null) {
+                        selected = serverStrategy
+                        context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
+                    } else if (serverStrategy == pendingSelection) {
+                        selected = serverStrategy
+                        pendingSelection = null
+                        message = "Strategy $serverStrategy active in engine."
+                        context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
+                    }
+                }.onFailure { if (pendingSelection != null) message = "Waiting for engine confirmation…" }
+                delay(1500)
+            }
+        }
+    }
+
+    fun choose(strategy: String) {
+        if (session == null) {
+            message = "Connect MT5 before selecting a live trading strategy."
+            return
+        }
+        selected = strategy
+        pendingSelection = strategy
+        message = "Activating Strategy $strategy…"
+        busy = true
+        scope.launch {
+            context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = strategy }
+            api.botCommand(session, "select", strategy)
+                .onSuccess { selection ->
+                    bot = selection
+                    if (normalizeStrategy(selection.strategy) == strategy) {
+                        message = "Strategy $strategy selected in BotEngine. Starting trading…"
+                        api.botCommand(session, "start", strategy)
+                            .onSuccess { started ->
+                                bot = started
+                                if (normalizeStrategy(started.strategy) == strategy) {
+                                    pendingSelection = null
+                                    message = "Strategy $strategy active and trading."
+                                } else {
+                                    message = "Strategy $strategy selected; waiting for engine confirmation."
+                                }
+                            }
+                            .onFailure { message = it.message ?: "Strategy selected, but trading could not be started." }
+                    } else {
+                        message = "Strategy $strategy requested; waiting for engine confirmation."
+                    }
+                }
+                .onFailure { message = it.message ?: "Strategy selection failed; the engine will retry through status sync." }
+            busy = false
+        }
+    }
+
     LazyColumn(modifier.fillMaxSize().background(Ink).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp)) {
-        item { TopBar("Strategies", "EVIDENCE → CONFLUENCE → EXECUTION", session != null) }
-        item { StrategyDetail("001", "QOF", bot?.state ?: "READY", true, "Primary strategy. The strategy engine remains untouched.", "PRIMARY") }
-        item { StrategyDetail("002", "Velocity Expansion", "READY", true, "Velocity-expansion strategy. Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", "SECONDARY") }
-        item { StrategyDetail("003", "Reserved", "LOCKED", false, "Future strategy slot.", "RESERVED") }
+        item { TopBar("Strategies", "CHOOSE THE ACTIVE TRADING STRATEGY", session != null) }
+        item {
+            Text("SELECTED STRATEGY", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.height(5.dp))
+            Text(strategyLabel(selected), color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
+            Text(message, color = if (message.contains("active", true) || message.contains("trading", true)) Green else Muted, fontSize = 11.sp)
+        }
+        item { StrategyDetail("001", "QOF", if (selected == "001") bot?.state ?: "READY" else "READY", true, "Primary QOF strategy. Uses the reusable confluence engine and QOF decision path.", "PRIMARY", selected == "001", busy) { choose("001") } }
+        item { StrategyDetail("002", "Velocity Expansion", if (selected == "002") bot?.state ?: "READY" else "READY", true, "Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", "SECONDARY", selected == "002", busy) { choose("002") } }
+        item { StrategyDetail("003", "Reserved", "LOCKED", false, "Future strategy slot.", "RESERVED", false, busy) {} }
     }
 }
 
-@Composable private fun StrategyDetail(number: String, name: String, state: String, active: Boolean, desc: String, role: String) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(1.dp, if (active) Cyan.copy(alpha = .55f) else Line, RoundedCornerShape(22.dp))) {
+@Composable private fun StrategyDetail(number: String, name: String, state: String, active: Boolean, desc: String, role: String, selected: Boolean, busy: Boolean, onSelect: () -> Unit) = Card(colors = CardDefaults.cardColors(containerColor = if (selected) Panel2 else Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(2.dp, if (selected) Cyan else if (active) Cyan.copy(alpha = .55f) else Line, RoundedCornerShape(22.dp))) {
     Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("STRATEGY $number", color = if (active) Cyan else Purple, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-            StatusPill(if (active && state == "READY") "READY" else state.replace('_', ' '), if (active) Green else Purple)
+            Text("STRATEGY $number", color = if (selected) Cyan else if (active) Cyan.copy(alpha = .75f) else Purple, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            StatusPill(if (selected) "SELECTED" else if (active && state == "READY") "READY" else state.replace('_', ' '), if (selected) Green else if (active) Green else Purple)
         }
         Text(name, color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
         Text(desc, color = Muted, fontSize = 12.sp)
+        Divider(color = Line)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Metric("ENGINE", if (selected) "ACTIVE" else "AVAILABLE")
+            Metric("STATE", state)
+            Metric("ROLE", role)
+        }
         if (active) {
-            Divider(color = Line)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Metric("ENGINE", "PROTECTED")
-                Metric("STATE", state)
-                Metric("ROLE", role)
+            Button(enabled = !busy && !selected && number != "003", onClick = onSelect, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(13.dp), colors = ButtonDefaults.buttonColors(containerColor = if (selected) Panel2 else Cyan, contentColor = Ink)) {
+                Text(if (busy) "SELECTING…" else if (selected) "CURRENT STRATEGY" else "SELECT STRATEGY $number", fontWeight = FontWeight.Black)
             }
         }
     }
