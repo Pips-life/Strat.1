@@ -6,9 +6,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val releaseProps = Properties().apply {
-    file("../release.properties").inputStream().use(::load)
-}
+val releaseProps = Properties().apply { file("../release.properties").inputStream().use(::load) }
 
 android {
     namespace = "life.pips.strat1"
@@ -52,7 +50,6 @@ val patchStrategyUi by tasks.registering {
         check(start >= 0 && end > start) { "Could not locate StrategiesScreen in MainActivity.kt" }
         text = text.substring(0, start) + template + "\n" + text.substring(end)
 
-        // Home uses the same persisted strategy and the same backend control endpoint.
         text = text.replace(
             "Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session) { screen = Screen.MT5 }",
             "Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session, context) { screen = Screen.MT5 }"
@@ -61,10 +58,12 @@ val patchStrategyUi by tasks.registering {
             "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, openMt5: () -> Unit) {",
             "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, context: Context, openMt5: () -> Unit) {"
         )
-        text = text.replace(
-            "private val SERVER = stringPreferencesKey(\"server\")",
-            "private val SERVER = stringPreferencesKey(\"server\")\nprivate val SELECTED_STRATEGY = stringPreferencesKey(\"selected_strategy\")"
-        )
+        if (!text.contains("private val SELECTED_STRATEGY")) {
+            text = text.replace(
+                "private val SERVER = stringPreferencesKey(\"server\")",
+                "private val SERVER = stringPreferencesKey(\"server\")\nprivate val SELECTED_STRATEGY = stringPreferencesKey(\"selected_strategy\")"
+            )
+        }
         text = text.replaceFirst(
             "var bot by remember { mutableStateOf<BotState?>(null) }\n    var busy by remember { mutableStateOf(false) }",
             "var bot by remember { mutableStateOf<BotState?>(null) }\n    var selectedStrategy by remember { mutableStateOf(\"001\") }\n    var busy by remember { mutableStateOf(false) }"
