@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   restore:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'fix: make strategy selection compile with nullable session'
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'run restore-mainactivity'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
