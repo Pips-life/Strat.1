@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: pips-life-runner
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./runner/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: METAAPI_TOKEN
+        sync: false
+      - key: METAAPI_ACCOUNT_ID
+        sync: false
+      - key: PIPSLIFE_BOT_CONTROL_TOKEN
+        generateValue: true
+      - key: PIPSLIFE_SYMBOL
+        value: XAUUSD
+      - key: PIPSLIFE_LIVE_TRADING_ENABLED
+        value: "false"
+      - key: PIPSLIFE_EXECUTION_VOLUME
+        sync: false
+      - key: PIPSLIFE_STRATEGY002_TRAIL_PIPS
+        value: "100"
