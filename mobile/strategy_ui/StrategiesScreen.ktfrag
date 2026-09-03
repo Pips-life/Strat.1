@@ -20,10 +20,10 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
             while (true) {
                 api.botStatus(session).onSuccess {
                     bot = it
-                    val serverStrategy = it.strategy.takeIf { strategy -> strategy == "001" || strategy == "002" }
+                    val serverStrategy: String = normalizeStrategy(it.strategy) ?: selected ?: "001"
                     if (pendingSelection == null) {
                         selected = serverStrategy
-                        if (serverStrategy != null) context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
+                        context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
                     } else if (serverStrategy == pendingSelection) {
                         selected = serverStrategy
                         pendingSelection = null
