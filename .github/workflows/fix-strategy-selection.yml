@@ -17,13 +17,10 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
-
           path = Path('mobile/app/src/main/java/life/pips/strat1/MainActivity.kt')
           text = path.read_text()
           start = text.index('@Composable private fun StrategiesScreen')
           end = text.index('@Composable private fun Mt5Screen', start)
-
           replacement = '''@Composable private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
     var bot by remember { mutableStateOf<BotState?>(null) }
     var busy by remember { mutableStateOf(false) }
