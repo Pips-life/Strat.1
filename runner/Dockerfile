@@ -14,6 +14,6 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install . \
     && python -m pip install uvicorn[standard]
 
-EXPOSE 8080
+EXPOSE 10000
 
-CMD ["uvicorn", "runner.server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "uvicorn runner.server:app --host 0.0.0.0 --port ${PORT:-10000}"]
