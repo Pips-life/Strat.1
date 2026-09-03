@@ -65,7 +65,14 @@ class BotEngine:
         current_positions: int = 0,
         daily_loss: float = 0.0,
     ):
-        """Process one market tick without awaiting or performing I/O."""
+        """Process one market tick without awaiting or performing I/O.
+
+        The live runner supplies ticks for every strategy. Strategy 002 consumes
+        those ticks directly. Strategy 001 also needs its richer QOF/options/bar
+        snapshot for a tradable decision; the small derived ATR below keeps the
+        strategy interface total and makes a tick-only snapshot a safe WAIT
+        rather than a KeyError/crash until that upstream data is available.
+        """
         if self.strategy is None:
             raise RuntimeError("No strategy selected")
         price = float(price)
@@ -75,12 +82,25 @@ class BotEngine:
         self._ticks.append((ts, price))
         self.tick_count += 1
 
-        analysis = self.strategy.analyze({"ticks": list(self._ticks)})
+        prices = [p for _, p in self._ticks]
+        derived_atr = max(max(prices) - min(prices), 1e-6)
+        market = {
+            "ticks": list(self._ticks),
+            "price": price,
+            "atr": derived_atr,
+            "timestamp": ts,
+        }
+        analysis = self.strategy.analyze(market)
         signal = self.strategy.generate_signal(analysis)
         self.last_decision_ns = time.perf_counter_ns()
 
         if signal.action == "WAIT":
             self._last_emitted_action = "WAIT"
+            return signal
+        if signal.action == "CLOSE":
+            # CLOSE is a position-management command and must not be filtered by
+            # the new-entry position-count gate below.
+            self._last_emitted_action = "CLOSE"
             return signal
         if current_positions >= self.risk_engine.limits.max_positions:
             signal.action = "WAIT"
