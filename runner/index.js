@@ -52,12 +52,10 @@ class Listener {
   async onDisconnected() {
     this.runtime.streamActive = false;
     this.runtime.activity = 'MetaApi streaming connection disconnected';
-    console.log(`STREAM_DISCONNECTED account=${this.runtime.accountId}`, flush());
+    console.log(`STREAM_DISCONNECTED account=${this.runtime.accountId}`);
   }
 }
 
-// JavaScript port of Strategy 002 (Velocity Expansion).
-// A non-zero live tick-to-tick movement creates an immediate directional entry.
 class Runtime {
   constructor(accountId) {
     this.accountId = accountId;
@@ -95,7 +93,7 @@ class Runtime {
     await this.connection.subscribeToMarketData(this.symbol, [{ type: 'ticks' }], 30);
     this.state = 'RUNNING';
     this.activity = `Strategy 002 running on MetaApi tick stream (${this.symbol})`;
-    console.log(`STREAM_CONNECTED account=${this.accountId} symbol=${this.symbol}`, 'flush');
+    console.log(`STREAM_CONNECTED account=${this.accountId} symbol=${this.symbol}`);
   }
 
   async onTick(tick) {
@@ -105,13 +103,14 @@ class Runtime {
     const price = bid > 0 && ask > 0 ? (bid + ask) / 2 : Number(field(tick, 'last', 0));
     if (!(price > 0)) return;
     const rawTime = field(tick, 'time', Date.now());
-    const time = rawTime instanceof Date ? rawTime.getTime() / 1000 : (Number(rawTime) || Date.now() / 1000);
+    const parsedTime = rawTime instanceof Date ? rawTime.getTime() / 1000 : Number(rawTime);
+    const time = Number.isFinite(parsedTime) && parsedTime > 0 ? parsedTime : Date.now() / 1000;
     this.lastTick = { symbol: this.symbol, bid, ask, price, time };
     this.tickCount++;
     if (!this.streamActive) {
       this.streamActive = true;
       this.activity = `TICK_STREAM_ACTIVE strategy=002 symbol=${this.symbol}`;
-      console.log(this.activity, 'flush');
+      console.log(this.activity);
     }
 
     const previous = this.previousPrice;
@@ -174,9 +173,6 @@ class Runtime {
       const orders = managed(this.connection.terminalState.orders || [], this.symbol);
       if (!positions.length) return;
 
-      // If the opposite stop has fired and both sides briefly coexist on a
-      // hedging account, close the previous running side first. The new side
-      // then becomes the sole running position.
       const newestSide = side(field(positions[positions.length - 1], 'type'));
       if (newestSide) {
         for (const position of positions) {
@@ -237,17 +233,10 @@ class Runtime {
 
   stateJson() {
     return {
-      configured: Boolean(TOKEN),
-      state: this.state,
-      strategy: this.strategy,
-      activity: this.activity,
-      accountId: this.accountId,
-      symbol: this.symbol,
-      ticks: this.tickCount,
-      streamActive: this.streamActive,
-      lastTick: this.lastTick,
-      liveTradingEnabled: LIVE_TRADING,
-      executionVolumeConfigured: EXECUTION_VOLUME > 0
+      configured: Boolean(TOKEN), state: this.state, strategy: this.strategy,
+      activity: this.activity, accountId: this.accountId, symbol: this.symbol,
+      ticks: this.tickCount, streamActive: this.streamActive, lastTick: this.lastTick,
+      liveTradingEnabled: LIVE_TRADING, executionVolumeConfigured: EXECUTION_VOLUME > 0
     };
   }
 }
@@ -271,7 +260,11 @@ async function control(data) {
     return runtime.stateJson();
   }
   if (action === 'stop') { await runtime.stop(); return runtime.stateJson(); }
-  if (action === 'subscribe') { if (!runtime.connection) throw new Error('runner is not streaming'); await runtime.connection.subscribeToMarketData(String(data.symbol), [{ type: 'ticks' }], 30); return runtime.stateJson(); }
+  if (action === 'subscribe') {
+    if (!runtime.connection) throw new Error('runner is not streaming');
+    await runtime.connection.subscribeToMarketData(String(data.symbol), [{ type: 'ticks' }], 30);
+    return runtime.stateJson();
+  }
   throw new Error('action must be start, stop, select or subscribe');
 }
 
