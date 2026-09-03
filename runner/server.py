@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from metaapi_cloud_sdk import MetaApi, SynchronizationListener
 from strat.bot.engine import BotEngine
 
-app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.1")
+app = FastAPI(title="Pips-life Live Bot Runner", version="2.0.2")
 CONTROL_TOKEN = os.getenv("PIPSLIFE_BOT_CONTROL_TOKEN", "").strip()
 METAAPI_TOKEN = os.getenv("METAAPI_TOKEN", "").strip()
 DEFAULT_SYMBOL = os.getenv("PIPSLIFE_SYMBOL", "XAUUSD").strip()
@@ -135,9 +135,15 @@ async def _dispatch_tick(runtime: AccountRuntime, tick: Any) -> None:
         print(runtime.activity, flush=True)
     positions = _managed(runtime.connection.terminal_state.positions or [], runtime.selected_strategy, runtime.symbol)
     received_ns = time.perf_counter_ns()
-    signal = runtime.engine.on_tick(current, _timestamp(tick), current_positions=len(positions))
+    try:
+        signal = runtime.engine.on_tick(current, _timestamp(tick), current_positions=len(positions))
+    except Exception as exc:
+        detail = _metaapi.format_error(exc) if _metaapi is not None else str(exc)
+        runtime.activity = f"{runtime.selected_strategy[-3:]} decision error: {detail}"
+        print(f"DECISION_ERROR strategy={runtime.selected_strategy[-3:]} symbol={runtime.symbol} error={detail}", flush=True)
+        return
     runtime.latest_decision_us = (time.perf_counter_ns() - received_ns) / 1_000.0
-    if signal is None or signal.action not in {"BUY", "SELL"}:
+    if signal is None or signal.action not in {"BUY", "SELL", "CLOSE"}:
         if runtime.selected_strategy == "strategy_002":
             runtime.stop_dirty = True
             _ensure_stop_worker(runtime)
@@ -155,15 +161,40 @@ def _ensure_stop_worker(runtime: AccountRuntime) -> None:
 
 async def _execute_signal(runtime: AccountRuntime, signal: Any) -> None:
     try:
+        strategy = runtime.selected_strategy
+        if signal.action == "CLOSE":
+            if not LIVE_TRADING_ENABLED:
+                runtime.activity = f"{strategy[-3:]} CLOSE {runtime.symbol} — execution gated"
+                print(f"EXECUTION_GATED strategy={strategy[-3:]} side=CLOSE symbol={runtime.symbol}", flush=True)
+                return
+            close_position = getattr(runtime.connection, "close_position", None)
+            if close_position is None:
+                raise RuntimeError("MetaApi streaming connection does not expose close_position")
+            positions = _managed(runtime.connection.terminal_state.positions or [], strategy, runtime.symbol)
+            if not positions:
+                runtime.activity = f"{strategy[-3:]} CLOSE requested but no managed position remains"
+                return
+            started = time.perf_counter_ns()
+            closed = 0
+            for position in positions:
+                position_id = str(_value(position, "id", ""))
+                if not position_id:
+                    continue
+                await close_position(position_id)
+                closed += 1
+            runtime.latest_order_ack_us = (time.perf_counter_ns() - started) / 1_000.0
+            runtime.activity = f"{strategy[-3:]} CLOSE {runtime.symbol} closed={closed} ack={runtime.latest_order_ack_us:.0f}us"
+            print(f"CLOSE_ACK strategy={strategy[-3:]} symbol={runtime.symbol} closed={closed} ack_us={runtime.latest_order_ack_us:.0f}", flush=True)
+            return
+
         if not LIVE_TRADING_ENABLED:
-            runtime.activity = f"{runtime.selected_strategy[-3:]} {signal.action} {runtime.symbol} — execution gated"
-            print(f"EXECUTION_GATED strategy={runtime.selected_strategy[-3:]} side={signal.action} symbol={runtime.symbol}", flush=True)
+            runtime.activity = f"{strategy[-3:]} {signal.action} {runtime.symbol} — execution gated"
+            print(f"EXECUTION_GATED strategy={strategy[-3:]} side={signal.action} symbol={runtime.symbol}", flush=True)
             return
         if EXECUTION_VOLUME is None or EXECUTION_VOLUME <= 0:
             runtime.activity = "Execution blocked: PIPSLIFE_EXECUTION_VOLUME must be configured to a positive lot size"
             print("ORDER_ERROR reason=invalid_execution_volume", flush=True)
             return
-        strategy = runtime.selected_strategy
         options = {"comment": f"PipsLife{strategy[-3:]}", "clientId": CLIENT_BY_STRATEGY[strategy]}
         started = time.perf_counter_ns()
         stop = getattr(signal, "stop_loss", None) if strategy != "strategy_002" else None
@@ -249,9 +280,9 @@ async def _ensure_connection(runtime: AccountRuntime) -> None:
         runtime.pip_size = float(pip_size)
     elif point:
         runtime.pip_size = float(point)
-    await connection.subscribe_to_market_data(runtime.symbol, [{"type": "ticks"}])
     runtime.connection = connection
     runtime.listener = listener
+    await connection.subscribe_to_market_data(runtime.symbol, [{"type": "ticks"}])
     print(f"STREAM_CONNECTED account={runtime.account_id} symbol={runtime.symbol}", flush=True)
 
 
