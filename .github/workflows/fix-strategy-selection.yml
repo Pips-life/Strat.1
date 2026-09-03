@@ -1,0 +1,100 @@
+name: Fix strategy selection
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch strategy selector
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path('mobile/app/src/main/java/life/pips/strat1/MainActivity.kt')
+          text = path.read_text()
+          start = text.index('@Composable private fun StrategiesScreen')
+          end = text.index('@Composable private fun Mt5Screen', start)
+
+          replacement = '''@Composable private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?) {
+    var bot by remember { mutableStateOf<BotState?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(session) {
+        if (session == null) { bot = null; message = null }
+        else while (true) {
+            api.botStatus(session).onSuccess { bot = it }
+            delay(3000)
+        }
+    }
+    val selected = bot?.strategy?.trim()?.let { if (it == "002" || it.equals("STRATEGY_002", true)) "002" else "001" } ?: "001"
+    LazyColumn(modifier.fillMaxSize().background(Ink).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 18.dp, bottom = 28.dp)) {
+        item { TopBar("Strategies", "EVIDENCE → CONFLUENCE → EXECUTION", session != null) }
+        item {
+            Text("SELECTED STRATEGY", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.height(5.dp))
+            Text(strategyLabel(selected), color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
+            if (!message.isNullOrBlank()) Text(message!!, color = if (message!!.contains("selected", true)) Green else Red, fontSize = 11.sp)
+        }
+        item { StrategyDetail("001", "QOF", if (selected == "001") bot?.state ?: "READY" else "READY", true, "Primary strategy. Uses the reusable confluence engine and QOF decision path.", "PRIMARY", selected == "001", busy) {
+            if (session == null) return@StrategyDetail
+            busy = true
+            scope.launch {
+                api.botCommand(session, "select", "001").onSuccess { bot = it; message = "Strategy 001 selected in BotEngine." }.onFailure { message = it.message ?: "Strategy selection failed." }
+                busy = false
+            }
+        } }
+        item { StrategyDetail("002", "Velocity Expansion", if (selected == "002") bot?.state ?: "READY" else "READY", true, "Velocity-expansion strategy. Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", "SECONDARY", selected == "002", busy) {
+            if (session == null) return@StrategyDetail
+            busy = true
+            scope.launch {
+                api.botCommand(session, "select", "002").onSuccess { bot = it; message = "Strategy 002 selected in BotEngine." }.onFailure { message = it.message ?: "Strategy selection failed." }
+                busy = false
+            }
+        } }
+        item { StrategyDetail("003", "Reserved", "LOCKED", false, "Future strategy slot.", "RESERVED", false, busy) {} }
+    }
+}
+
+@Composable private fun StrategyDetail(number: String, name: String, state: String, active: Boolean, desc: String, role: String, selected: Boolean, busy: Boolean, onSelect: () -> Unit) = Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().border(1.dp, if (selected) Cyan else if (active) Cyan.copy(alpha = .55f) else Line, RoundedCornerShape(22.dp))) {
+    Column(Modifier.padding(19.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("STRATEGY $number", color = if (selected) Cyan else if (active) Cyan.copy(alpha = .75f) else Purple, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            StatusPill(if (selected) "SELECTED" else if (active && state == "READY") "READY" else state.replace('_', ' '), if (selected) Green else if (active) Green else Purple)
+        }
+        Text(name, color = Primary, fontSize = 23.sp, fontWeight = FontWeight.Black)
+        Text(desc, color = Muted, fontSize = 12.sp)
+        Divider(color = Line)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Metric("ENGINE", if (selected) "ACTIVE" else "AVAILABLE")
+            Metric("STATE", state)
+            Metric("ROLE", role)
+        }
+        if (active) {
+            Button(enabled = session != null && !busy && !selected, onClick = onSelect, modifier = Modifier.fillMaxWidth().height(46.dp), shape = RoundedCornerShape(13.dp), colors = ButtonDefaults.buttonColors(containerColor = if (selected) Panel2 else Cyan, contentColor = Ink)) {
+                Text(if (busy) "SELECTING…" else if (selected) "CURRENT STRATEGY" else "SELECT STRATEGY $number", fontWeight = FontWeight.Black)
+            }
+        }
+    }
+}
+
+'''
+          path.write_text(text[:start] + replacement + text[end:])
+
+      - name: Remove repair workflow after successful patch
+        run: |
+          rm .github/workflows/fix-strategy-selection.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add mobile/app/src/main/java/life/pips/strat1/MainActivity.kt .github/workflows/fix-strategy-selection.yml
+          git commit -m 'fix: make strategy selection control the active bot strategy'
+          git push
