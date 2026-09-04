@@ -18,8 +18,8 @@ services:
       - key: PIPSLIFE_SYMBOL
         value: XAUUSD
       - key: PIPSLIFE_LIVE_TRADING_ENABLED
-        value: "false"
+        value: "true"
       - key: PIPSLIFE_EXECUTION_VOLUME
         sync: false
       - key: PIPSLIFE_STRATEGY002_TRAIL_PIPS
-        value: "100"
+        value: "70"
