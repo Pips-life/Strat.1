@@ -7,9 +7,11 @@ const CONTROL_TOKEN = (process.env.PIPSLIFE_BOT_CONTROL_TOKEN || TOKEN).trim();
 const DEFAULT_SYMBOL = (process.env.PIPSLIFE_SYMBOL || 'XAUUSD').trim();
 const LIVE_TRADING = String(process.env.PIPSLIFE_LIVE_TRADING_ENABLED ?? 'true').toLowerCase() === 'true';
 const EXECUTION_VOLUME = Number(process.env.PIPSLIFE_EXECUTION_VOLUME || 0);
-const TRAIL_PIPS = Number(process.env.PIPSLIFE_STRATEGY002_TRAIL_PIPS || 100);
+const TRAIL_PIPS = Number(process.env.PIPSLIFE_STRATEGY002_TRAIL_PIPS || 70);
 const MAGIC = 100002;
 const CLIENT_ID = 'PIPS002';
+const TRAIL_COMMENT = 'PL2S';
+const ENTRY_COMMENT = 'PL2E';
 
 let metaApi;
 const runtimes = new Map();
@@ -93,7 +95,7 @@ class Runtime {
     await this.connection.subscribeToMarketData(this.symbol, [{ type: 'ticks' }], 30);
     this.state = 'RUNNING';
     this.activity = `Strategy 002 running on MetaApi tick stream (${this.symbol})`;
-    console.log(`STREAM_CONNECTED account=${this.accountId} symbol=${this.symbol}`);
+    console.log(`STREAM_CONNECTED account=${this.accountId} symbol=${this.symbol} trail_pips=${TRAIL_PIPS}`);
   }
 
   async onTick(tick) {
@@ -122,6 +124,8 @@ class Runtime {
       return;
     }
 
+    // Instant velocity expansion: the first non-zero tick-to-tick movement is
+    // actionable. No candle close, retracement confirmation, or warm-up gate.
     const velocity = (price - previous) / (time - previousTime);
     const direction = velocity > 0 ? 'BUY' : velocity < 0 ? 'SELL' : null;
     if (direction && direction !== this.lastEntrySide && !this.hasManagedPosition()) {
@@ -148,7 +152,9 @@ class Runtime {
     }
     const distance = TRAIL_PIPS * this.pipSize;
     const stop = direction === 'BUY' ? price - distance : price + distance;
-    const options = { comment: 'PipsLife002', clientId: CLIENT_ID, magic: MAGIC };
+    // Keep broker metadata deliberately short. MetaAPI rejects oversized
+    // clientId/comment combinations before the order can be executed.
+    const options = { comment: ENTRY_COMMENT, clientId: CLIENT_ID, magic: MAGIC };
     try {
       const started = performance.now();
       const result = direction === 'BUY'
@@ -156,8 +162,8 @@ class Runtime {
         : await this.connection.createMarketSellOrder(this.symbol, EXECUTION_VOLUME, stop, undefined, options);
       const ack = (performance.now() - started) * 1000;
       this.runningSide = direction;
-      this.activity = `002 ${direction} ${this.symbol} order acknowledged`;
-      console.log(`ORDER_ACK strategy=002 side=${direction} symbol=${this.symbol} volume=${EXECUTION_VOLUME} ack_us=${ack.toFixed(0)} result=${JSON.stringify(result)}`);
+      this.activity = `002 ${direction} ${this.symbol} order acknowledged — ${TRAIL_PIPS} pip trail`;
+      console.log(`ORDER_ACK strategy=002 side=${direction} symbol=${this.symbol} volume=${EXECUTION_VOLUME} trail_pips=${TRAIL_PIPS} ack_us=${ack.toFixed(0)} result=${JSON.stringify(result)}`);
     } catch (error) {
       this.lastEntrySide = null;
       this.activity = `002 order error: ${error instanceof Error ? error.message : String(error)}`;
@@ -198,17 +204,19 @@ class Runtime {
       const desired = positionSide === 'BUY' ? current - distance : current + distance;
       if (!(desired > 0)) return;
 
-      const existing = orders.find(o => side(field(o, 'type')) === wantedSide && String(field(o, 'clientId', '')) === CLIENT_ID);
+      const existing = orders.find(o => side(field(o, 'type')) === wantedSide && String(field(o, 'clientId', '')) === CLIENT_ID && String(field(o, 'comment', '')) === TRAIL_COMMENT);
       if (!existing) {
-        const options = { comment: `PipsLife002:${String(field(position, 'id', ''))}`, clientId: CLIENT_ID, magic: MAGIC };
         const result = wantedSide === 'SELL'
-          ? await this.connection.createStopSellOrder(this.symbol, volume, desired, undefined, undefined, options)
-          : await this.connection.createStopBuyOrder(this.symbol, volume, desired, undefined, undefined, options);
-        console.log(`STOP_ACK strategy=002 side=${wantedSide} symbol=${this.symbol} volume=${volume} price=${desired} result=${JSON.stringify(result)}`);
+          ? await this.connection.createStopSellOrder(this.symbol, volume, desired, undefined, undefined, { comment: TRAIL_COMMENT, clientId: CLIENT_ID, magic: MAGIC })
+          : await this.connection.createStopBuyOrder(this.symbol, volume, desired, undefined, undefined, { comment: TRAIL_COMMENT, clientId: CLIENT_ID, magic: MAGIC });
+        console.log(`STOP_ACK strategy=002 side=${wantedSide} symbol=${this.symbol} volume=${volume} price=${desired} trail_pips=${TRAIL_PIPS} result=${JSON.stringify(result)}`);
       } else {
         const old = Number(field(existing, 'openPrice', 0));
         const improves = positionSide === 'BUY' ? desired > old : desired < old;
-        if (improves && field(existing, 'id')) await this.connection.modifyOrder(String(field(existing, 'id')), desired, undefined, undefined);
+        if (improves && field(existing, 'id')) {
+          await this.connection.modifyOrder(String(field(existing, 'id')), desired, undefined, undefined);
+          console.log(`TRAIL_UPDATE strategy=002 position_side=${positionSide} stop_side=${wantedSide} price=${desired} trail_pips=${TRAIL_PIPS}`);
+        }
       }
     } catch (error) {
       console.log(`STOP_ERROR strategy=002 symbol=${this.symbol} error=${error instanceof Error ? error.message : String(error)}`);
@@ -236,7 +244,8 @@ class Runtime {
       configured: Boolean(TOKEN), state: this.state, strategy: this.strategy,
       activity: this.activity, accountId: this.accountId, symbol: this.symbol,
       ticks: this.tickCount, streamActive: this.streamActive, lastTick: this.lastTick,
-      liveTradingEnabled: LIVE_TRADING, executionVolumeConfigured: EXECUTION_VOLUME > 0
+      liveTradingEnabled: LIVE_TRADING, executionVolumeConfigured: EXECUTION_VOLUME > 0,
+      trailPips: TRAIL_PIPS, entryMode: 'instant-velocity-expansion'
     };
   }
 }
@@ -278,13 +287,14 @@ const server = http.createServer(async (req, res) => {
         ok: true, runner: 'online', transport: 'metaapi-javascript-sdk-streaming', execution: 'tick-event-driven',
         metaapiConfigured: Boolean(TOKEN), liveTradingEnabled: LIVE_TRADING,
         executionVolumeConfigured: EXECUTION_VOLUME > 0, accounts: runtimes.size,
+        trailPips: TRAIL_PIPS, entryMode: 'instant-velocity-expansion',
         state: first ? first.stateJson() : null
       });
     }
     if (req.method === 'GET' && url.pathname === '/state') {
       const id = url.searchParams.get('accountId');
       const runtime = id ? runtimes.get(id) : runtimes.values().next().value;
-      return json(res, 200, runtime ? runtime.stateJson() : { configured: Boolean(TOKEN), state: 'READY', strategy: '001', activity: 'Runner online' });
+      return json(res, 200, runtime ? runtime.stateJson() : { configured: Boolean(TOKEN), state: 'READY', strategy: '002', activity: 'Runner online', trailPips: TRAIL_PIPS, entryMode: 'instant-velocity-expansion' });
     }
     if (req.method === 'POST' && (url.pathname === '/' || url.pathname === '/control')) return json(res, 200, await control(await readBody(req)));
     return json(res, 404, { error: 'Not found' });
