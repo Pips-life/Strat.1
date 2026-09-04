@@ -1,9 +1,7 @@
-"""Strategy 002: Velocity Expansion.
+"""Strategy 002: Instant Velocity Expansion.
 
 Detects directional price movement from the live tick stream and enters
-immediately. The strategy does not own broker execution; it emits an entry
-plus the parameters needed by the execution controller to maintain the
-100-pip opposite stop loop.
+immediately. No candle-close, retracement, or warm-up gate is used.
 """
 from __future__ import annotations
 
@@ -17,9 +15,8 @@ from .base import Signal, Strategy
 @dataclass(frozen=True)
 class Strategy002Config:
     pip_size: float = 0.01
-    trail_pips: float = 100.0
-    # Strategy 002 is an execution-first velocity strategy. A live tick with
-    # any non-zero directional movement is enough to establish velocity.
+    trail_pips: float = 70.0
+    # Execution-first mode: one non-zero live tick-to-tick move is actionable.
     baseline_window: int = 1
     min_velocity_ratio: float = 1.0
     min_acceleration_ratio: float = 1.0
@@ -37,7 +34,7 @@ class Strategy002Config:
 class Strategy002(Strategy):
     id = "strategy_002"
     name = "Velocity Expansion"
-    version = "1.1.0"
+    version = "1.2.0"
 
     def __init__(self, config: Strategy002Config | None = None) -> None:
         self.config = config or Strategy002Config()
@@ -68,9 +65,9 @@ class Strategy002(Strategy):
         if len(samples) < 2:
             return {"velocity_expanding": False, "reason": "waiting for first price movement", "sample_count": len(samples)}
 
-        # Use the live tick-to-tick velocity. There is deliberately no 20-tick
-        # warm-up and no large expansion multiplier: the first non-zero move
-        # is actionable. This is what makes Strategy 002 execution-sensitive.
+        # Instant execution: use the latest live tick-to-tick velocity.
+        # Any non-zero directional movement is actionable. There is deliberately
+        # no candle-close, retracement confirmation, or multi-tick warm-up gate.
         t0, p0 = samples[-2]
         t1, p1 = samples[-1]
         dt = t1 - t0
@@ -85,11 +82,9 @@ class Strategy002(Strategy):
         previous_abs = abs(previous)
         baseline = max(previous_abs, 1e-12)
         expansion_ratio = current_abs / baseline if previous_abs > 0 else float("inf") if current_abs > 0 else 0.0
-        acceleration_ratio = current_abs / baseline if previous_abs > 0 else float("inf") if current_abs > 0 else 0.0
+        acceleration_ratio = expansion_ratio
         expanding = current_abs > self.config.min_velocity and current_abs > 0
         direction = "BUY" if current > 0 else "SELL" if current < 0 else "WAIT"
-        # A non-zero live directional tick is intentionally high-confidence;
-        # the global risk engine still enforces its position/exposure limits.
         confidence = 100.0 if direction in {"BUY", "SELL"} else 0.0
         return {
             "velocity_expanding": expanding,
@@ -124,6 +119,7 @@ class Strategy002(Strategy):
             metadata={
                 **analysis,
                 "strategy": self.id,
+                "entry_mode": "instant-velocity-expansion",
                 "trail_pips": self.config.trail_pips,
                 "trail_distance": distance,
                 "opposite_stop_side": "SELL" if side == "BUY" else "BUY",
@@ -132,7 +128,7 @@ class Strategy002(Strategy):
         )
 
     def calculate_quantity(self, *, balance: float, entry: float, tick_size: float, tick_value: float) -> float:
-        """Size from account balance using the configured 100-pip reversal distance."""
+        """Size from account balance using the configured 70-pip reversal distance."""
         if balance <= 0 or entry <= 0 or tick_size <= 0 or tick_value <= 0:
             return 0.0
         risk_budget = balance * self.config.risk_per_trade
@@ -150,5 +146,6 @@ class Strategy002(Strategy):
             "trail_pips": self.config.trail_pips,
             "pip_size": self.config.pip_size,
             "trail_distance": self.config.trail_distance,
+            "entry_mode": "instant-velocity-expansion",
             "sizing": "balance * risk_per_trade / (trail_distance / tick_size * tick_value)",
         }
