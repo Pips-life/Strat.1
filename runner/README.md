@@ -1,65 +1,43 @@
-# Pips-life live bot runner
+# Pips-life Direct MetaApi Runner
 
-This is the **single shared execution runner for the entire Pips-life strategy platform**. Strategy 001, Strategy 002, and future strategies use this same runner, the same Vercel control plane, the same MetaApi connection layer, and the same account credentials. A strategy is selected by ID; it never gets its own password or infrastructure.
+This runner is platform-neutral. It does **not** require Vercel or Render.
 
-## Shared environment
+## Required environment
 
-- `METAAPI_TOKEN` — one MetaApi token for the platform. Never commit it.
-- `PIPSLIFE_BOT_CONTROL_TOKEN` — one shared bearer token between the Vercel backend and this runner. It is not a strategy password.
-- `METAAPI_ACCOUNT_ID` — optional default MetaApi account id.
-- `PIPSLIFE_SYMBOL` — defaults to `XAUUSD`.
-- `PIPSLIFE_LIVE_TRADING_ENABLED` — defaults to `false`.
+- `METAAPI_TOKEN` — MetaApi API token; never commit it.
+- `METAAPI_ACCOUNT_ID` — optional default MetaTrader account id.
+- `PIPSLIFE_BOT_CONTROL_TOKEN` — optional bearer token for runner control.
+- `PIPSLIFE_WATCHLIST` — comma-separated broker symbols, default `XAUUSD`.
+- `PIPSLIFE_EXECUTION_VOLUME` — order volume.
+- `PIPSLIFE_LIVE_TRADING_ENABLED` — `true`/`false`.
+- `PIPSLIFE_STRATEGY002_TRAIL_PIPS` — Strategy 002 trail distance.
 
-The runner owns the canonical Python `BotEngine`; it does not duplicate strategy logic. The engine's strategy registry is the source of truth for available strategies.
+## Control API
 
-## Control contract
+- `GET /health` — runner and direct MetaApi status.
+- `GET /strategies` — independent strategies available to the user.
+- `GET /state?accountId=...` — per-account runtime state.
+- `GET /watchlist?accountId=...` — live broker quotes.
+- `POST /control` — `select`, `start`, `stop`, or `watchlist` actions.
 
-`POST /` accepts JSON such as:
+The watchlist is sourced from the connected MetaApi terminal and its live quote state; it is not a decorative hard-coded list. Strategy state is isolated per account runtime.
 
-```json
-{"action":"select","strategy":"002","accountId":"..."}
-```
+Strategy 001 remains the canonical Python QOF engine. Strategy 002 is the JavaScript tick-stream MetaApi execution adapter. The redesign deliberately does not fake a JavaScript port of QOF.
 
-or:
-
-```json
-{"action":"start","strategy":"002","accountId":"..."}
-```
-
-The same endpoint accepts any strategy ID registered by `BotEngine`; there is no separate endpoint, URL, token, password, or deployment per strategy.
-
-`GET /?accountId=...` returns the active strategy and runner state.
-
-## Security model
-
-There is only **one platform-level control secret** between Vercel and the runner. Strategy IDs are routing data, not credentials. MT5/MetaApi credentials remain server-side and are never stored in the Android app or per-strategy configuration.
-
-## Important execution gate
-
-The current service connects MetaApi and feeds live prices into `BotEngine`. It intentionally does **not** place live orders yet. Strategy 002 uses an opposite pending stop as a reversal mechanism, and MT5 behaves differently on netting versus hedging accounts. The execution adapter must verify the account mode before enabling live orders.
-
-This gate is intentional: setting `PIPSLIFE_LIVE_TRADING_ENABLED=true` alone does not arm an order adapter.
-
-## Deployment architecture
+## Architecture
 
 ```text
-Android app
-    |
-    v
-ONE Vercel backend /api/*
-    |
-    | one shared control URL + one shared control token
-    v
-ONE persistent Pips-life runner
-    |
-    +--> BotEngine --> Strategy 001
-    |
-    +--> BotEngine --> Strategy 002
-    |
-    +--> BotEngine --> future strategies
-    |
-    v
-ONE MetaApi / MT5 account connection
+Android / local UI
+        |
+        v
+Direct MetaApi runner (Node)
+        |
+        +--> Strategy 001 selection -> canonical Python QOF engine
+        +--> Strategy 002 selection -> tick-event MetaApi adapter
+        +--> User watchlist -> MetaApi terminal symbols + live prices
+        |
+        v
+MetaApi -> MT5
 ```
 
-Deploy the runner once as a persistent service. Configure the Vercel project once with `PIPSLIFE_BOT_CONTROL_URL` and the single shared `PIPSLIFE_BOT_CONTROL_TOKEN`. **Do not create strategy-specific passwords or infrastructure.**
+There is no Vercel control plane and no Render-specific configuration. The runner can be started locally, on a VPS, or under any generic Node/Docker process supervisor.
