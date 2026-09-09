@@ -1,10 +1,10 @@
 {
   "name": "pips-life-js-runner",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.v2.js"
   },
   "dependencies": {
     "metaapi.cloud-sdk": "^29.3.3"
