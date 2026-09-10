@@ -31,7 +31,8 @@ jobs:
           gradle-version: '8.10.2'
       - name: Patch OkHttp response type inference
         shell: bash
-        run: perl -0pi -e 's/\.use \{ r ->/.use { r: okhttp3.Response ->/g' mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt
+        run: |
+          perl -0pi -e 's/\.use \{ r ->/.use { r: okhttp3.Response ->/g' mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt
       - name: Build and verify debug APK
         working-directory: mobile
         env:
@@ -71,7 +72,8 @@ jobs:
           gradle-version: '8.10.2'
       - name: Patch OkHttp response type inference
         shell: bash
-        run: perl -0pi -e 's/\.use \{ r ->/.use { r: okhttp3.Response ->/g' mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt
+        run: |
+          perl -0pi -e 's/\.use \{ r ->/.use { r: okhttp3.Response ->/g' mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt
       - name: Resolve next release number
         id: version
         shell: bash
