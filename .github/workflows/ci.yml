@@ -29,10 +29,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Patch OkHttp response type inference
+      - name: Patch FlashAlpha parser return statements
         shell: bash
         run: |
-          perl -0pi -e 's/\.use \{ r ->/.use { r: okhttp3.Response ->/g' mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt')
+          s = p.read_text()
+          s = s.replace('                    JSONObject(text)\n                } finally {', '                    return JSONObject(text)\n                } finally {')
+          s = s.replace('                    JSONArray(text)\n                } finally {', '                    return JSONArray(text)\n                } finally {')
+          p.write_text(s)
+          PY
       - name: Build and verify debug APK
         working-directory: mobile
         env:
@@ -70,10 +78,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Patch OkHttp response type inference
+      - name: Patch FlashAlpha parser return statements
         shell: bash
         run: |
-          perl -0pi -e 's/\.use \{ r ->/.use { r: okhttp3.Response ->/g' mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt')
+          s = p.read_text()
+          s = s.replace('                    JSONObject(text)\n                } finally {', '                    return JSONObject(text)\n                } finally {')
+          s = s.replace('                    JSONArray(text)\n                } finally {', '                    return JSONArray(text)\n                } finally {')
+          p.write_text(s)
+          PY
       - name: Resolve next release number
         id: version
         shell: bash
