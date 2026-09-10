@@ -47,25 +47,52 @@ class TradingEngine(
         val positions = snapshot.positions.filter { it.symbol.equals(symbol, true) }
 
         when (selected) {
-            StrategyId.STRATEGY_001 -> execute001(account, saved, snapshot, flash, symbol, price, tick.bid, tick.ask, positions, onStatus)
+            StrategyId.STRATEGY_001 -> execute001(account, saved, flash, symbol, price, tick.bid, tick.ask, positions, onStatus)
             StrategyId.STRATEGY_002 -> execute002(account, saved, symbol, price, positions, onStatus)
         }
     }
 
-    private suspend fun execute001(account: MetaAccount, saved: SavedConnection, snapshot: MetaSnapshot, flash: FlashAlphaSnapshot?, symbol: String, price: Double, bid: Double, ask: Double, positions: List<MetaPosition>, onStatus: (String) -> Unit) {
+    private suspend fun execute001(account: MetaAccount, saved: SavedConnection, flash: FlashAlphaSnapshot?, symbol: String, price: Double, bid: Double, ask: Double, positions: List<MetaPosition>, onStatus: (String) -> Unit) {
         val plan = strategy001.evaluate(flash, price)
+
+        // Existing positions keep the QOF target that was assigned at entry.
+        // If a broker did not retain TP/SL, repair it from the current plan once,
+        // without replacing an already-valid broker target.
         for (p in positions) {
             val exit = strategy001.exitDecision(plan, p, price)
-            if (exit.close) meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { onStatus("Strategy 001 exit confirmed: ${p.id}") }.onFailure { onStatus(it.message ?: "Strategy 001 exit failed") }
+            if (exit.close) {
+                meta.closePosition(saved.metaApiToken, account, p.id)
+                    .onSuccess { onStatus("Strategy 001 exit confirmed: ${p.id} — ${exit.reason}") }
+                    .onFailure { onStatus(it.message ?: "Strategy 001 exit failed") }
+                continue
+            }
+
+            val side = strategy001.positionSide(p)
+            val target = p.takeProfit.takeIf { it.isFinite() && it > 0.0 } ?: plan.exitZone?.center
+            val stop = p.stopLoss.takeIf { it.isFinite() && it > 0.0 } ?: plan.invalidation
+            if (side != null && target != null && stop != null) {
+                val targetMissing = !p.takeProfit.isFinite() || p.takeProfit <= 0.0
+                val stopMissing = !p.stopLoss.isFinite() || p.stopLoss <= 0.0
+                if (targetMissing || stopMissing) {
+                    meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = stop, takeProfit = target)
+                        .onSuccess { onStatus("Strategy 001 QOF TP/SL enforced: ${p.id} TP=${target} SL=${stop}") }
+                        .onFailure { onStatus(it.message ?: "Strategy 001 TP/SL enforcement failed") }
+                }
+            }
         }
+
         if (positions.isNotEmpty() || plan.side == null || !strategy001.entryAllowed(plan, price)) return
         val target = plan.exitZone?.center ?: return
         val stop = plan.invalidation ?: return
         val entryPrice = if (plan.side == TradeSide.BUY) ask else bid
+        if (!target.isFinite() || !stop.isFinite() || !entryPrice.isFinite()) return
         if (plan.side == TradeSide.BUY && target <= entryPrice) return
         if (plan.side == TradeSide.SELL && target >= entryPrice) return
+        if (plan.side == TradeSide.BUY && stop >= entryPrice) return
+        if (plan.side == TradeSide.SELL && stop <= entryPrice) return
+
         meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, 0.01, stopLoss = stop, takeProfit = target)
-            .onSuccess { onStatus("Strategy 001 ${plan.side} confirmed: ${it.stringCode} ${it.orderId}") }
+            .onSuccess { onStatus("Strategy 001 QOF ${plan.side} confirmed: ${it.stringCode} ${it.orderId} TP=${target} SL=${stop}") }
             .onFailure { onStatus(it.message ?: "Strategy 001 entry failed") }
     }
 
