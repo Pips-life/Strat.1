@@ -54,6 +54,7 @@ private fun PipsLifeApp() {
     var armed by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready — direct MetaApi + FlashAlpha") }
     var busy by remember { mutableStateOf(false) }
+    var lastFlashPull by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(Unit) {
         saved = context.loadSavedConnection()
@@ -66,15 +67,34 @@ private fun PipsLifeApp() {
     LaunchedEffect(account, running, armed, selectedSymbol, flashSymbol, saved) {
         val a = account ?: return@LaunchedEffect
         while (true) {
+            val now = System.currentTimeMillis()
             val symbols = saved.watchlist.split(',').map { it.trim() }.filter { it.isNotBlank() }
-            meta.refresh(saved.metaApiToken, a, symbols).onSuccess { s -> snapshot = s; status = "MetaApi ${s.account.connectionStatus}" }.onFailure { status = it.message ?: "MetaApi refresh failed" }
-            if (saved.flashAlphaKey.isNotBlank()) flash.snapshot(saved.flashAlphaKey, flashSymbol).onSuccess { flashData = it }.onFailure { if (running) status = it.message ?: "FlashAlpha failed" }
-            if (running && armed && saved.metaApiToken.isNotBlank()) {
+            // Broker state/quotes are refreshed frequently. Account provisioning is configured
+            // for quoteStreamingIntervalInSeconds=0 so the MetaApi side keeps tick-level quotes.
+            meta.refresh(saved.metaApiToken, a, symbols)
+                .onSuccess { s ->
+                    snapshot = s
+                    if (!running) status = "MetaApi ${s.account.connectionStatus} • live quote monitor"
+                }
+                .onFailure { if (!running) status = it.message ?: "MetaApi refresh failed" }
+
+            // FlashAlpha is deliberately throttled separately to avoid 429s while MetaApi
+            // market monitoring remains responsive.
+            if (saved.flashAlphaKey.isNotBlank() && (now - lastFlashPull >= 10_000L || flashData == null)) {
+                lastFlashPull = now
+                flash.snapshot(saved.flashAlphaKey, flashSymbol)
+                    .onSuccess { flashData = it }
+                    .onFailure { if (running) status = it.message ?: "FlashAlpha failed" }
+            }
+
+            if (running && saved.metaApiToken.isNotBlank()) {
                 snapshot?.let { s ->
                     engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it }
                 }
             }
-            delay(5000)
+            // 1s control cadence keeps the broker price/zone/execution state visibly live
+            // without hammering FlashAlpha.
+            delay(1000)
         }
     }
 
@@ -95,7 +115,7 @@ private fun PipsLifeApp() {
                         scope.launch {
                             val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId)
                             else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server)
-                            result.onSuccess { a -> account = a; saved = value.copy(accountId = a.id); context.saveConnection(saved); status = "CONNECTED — ${a.login} / ${a.server}" }
+                            result.onSuccess { a2 -> account = a2; saved = value.copy(accountId = a2.id); context.saveConnection(saved); status = "CONNECTED — ${a2.login} / ${a2.server}" }
                                 .onFailure { status = it.message ?: "Connection failed" }
                             busy = false
                         }
@@ -111,7 +131,7 @@ private fun PipsLifeApp() {
                     saved = saved.copy(watchlist = value)
                     scope.launch { context.saveConnection(saved) }
                 }
-                Tab.ACTIVITY -> ActivityTab(Modifier.padding(pad), status, account, selectedStrategy, running, armed, flashData)
+                Tab.ACTIVITY -> ActivityTab(Modifier.padding(pad), status, account, selectedStrategy, running, armed, flashData, snapshot, selectedSymbol, engine)
             }
         }
     }
@@ -127,7 +147,7 @@ private fun PipsLifeApp() {
 
 @Composable private fun Home(modifier: Modifier, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, openStrategy: () -> Unit) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-        item { Header("Command Center", "One shared execution engine • independent strategy modules") }
+        item { Header("Command Center", "Live broker monitor • independent strategy modules") }
         item { CardBlock {
             Text("CONNECTION", color = Muted, fontSize = 10.sp)
             Text(if (account == null) "NOT CONNECTED" else "METAAPI • ${account.connectionStatus}", color = if (account == null) Red else Green, fontWeight = FontWeight.Bold)
@@ -135,7 +155,7 @@ private fun PipsLifeApp() {
         item { CardBlock {
             Text("SELECTED STRATEGY", color = Muted, fontSize = 10.sp)
             Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "001 — GEX / QOF DATA ZONES" else "002 — VELOCITY EXPANSION", color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
-            Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "GEX/flow data defines entry, opposing exit and invalidation. No 1m candle reversal." else "Live tick-to-tick velocity drives immediate direction and a 70-pip trailing stop.", color = Muted, fontSize = 11.sp)
+            Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "Live price → FlashAlpha zones → confluence → execution → management. London + New York only." else "Live tick-to-tick velocity drives direction and a 70-pip trailing stop.", color = Muted, fontSize = 11.sp)
             Button(onClick = openStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }
             Text(if (!running) "STOPPED" else if (armed) "LIVE TRADING ARMED" else "MONITORING", color = if (armed) Red else Cyan, fontWeight = FontWeight.Bold)
         } }
@@ -187,11 +207,11 @@ private fun PipsLifeApp() {
             item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = { onSave(saved.copy(flashAlphaKey = key)) }, modifier = Modifier.weight(1f)) { Text("SAVE KEY") }; Button(onClick = { onRun(!running) }, modifier = Modifier.weight(1f)) { Text(if (running) "STOP" else "START") } } }
             if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
             item { CardBlock { Text("GEX MARKET MAP", color = Muted, fontSize = 10.sp); if (p1 == null) Text("Waiting for live GEX + MetaApi price", color = Muted) else { Text("${p1.side?.name ?: "WAIT"} • confidence ${p1.confidence}%", color = if (p1.side == null) Muted else Green, fontSize = 20.sp, fontWeight = FontWeight.Black); Text(p1.reason, color = Muted, fontSize = 11.sp); p1.entryZone?.let { Text("ENTRY ${it.kind}: ${number(it.lower)} — ${number(it.upper)} (${it.source})", color = Cyan, fontSize = 11.sp) }; p1.exitZone?.let { Text("EXIT ${it.kind}: ${number(it.lower)} — ${number(it.upper)} (${it.source})", color = Purple, fontSize = 11.sp) }; p1.invalidation?.let { Text("INVALIDATION: ${number(it)}", color = Red, fontSize = 11.sp) } } } }
-            item { CardBlock { Text("STRATEGY 001 ISOLATION", color = Muted, fontSize = 10.sp); Text("001 uses GEX/flow data for entry, opposing GEX zones for exit and its own invalidation. It does not use minute-1 candle reversal logic. Selecting 002 does not change 001's rules.", color = TextMain, fontSize = 11.sp) } }
+            item { CardBlock { Text("STRATEGY 001 SESSION", color = Muted, fontSize = 10.sp); Text("London + New York only • 08:00–17:00 local session time with DST handled automatically. Outside these sessions the strategy will not enter trades.", color = TextMain, fontSize = 11.sp) } }
         } else {
             item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = { onRun(!running) }, modifier = Modifier.weight(1f)) { Text(if (running) "STOP" else "START") } } }
             if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
-            item { CardBlock { Text("STRATEGY 002", color = Muted, fontSize = 10.sp); Text("INSTANT VELOCITY EXPANSION", color = Cyan, fontSize = 19.sp, fontWeight = FontWeight.Black); Text("Independent tick engine. A non-zero live tick-to-tick move can signal immediately. Uses a 70-pip trailing stop and exits when tick direction reverses. No GEX rules are applied.", color = TextMain, fontSize = 11.sp); Text("Current status: $status", color = Muted, fontSize = 10.sp) } }
+            item { CardBlock { Text("STRATEGY 002", color = Muted, fontSize = 10.sp); Text("INSTANT VELOCITY EXPANSION", color = Cyan, fontSize = 19.sp, fontWeight = FontWeight.Black); Text("Independent tick-to-tick engine. Uses a 70-pip trailing stop and exits when tick direction reverses. No GEX rules are applied.", color = TextMain, fontSize = 11.sp); Text("Current status: $status", color = Muted, fontSize = 10.sp) } }
         }
     }
 }
@@ -203,16 +223,27 @@ private fun PipsLifeApp() {
         item { Field("Comma-separated MetaApi symbols", text, { text = it }) }
         item { Button(onClick = { onSave(text) }, modifier = Modifier.fillMaxWidth()) { Text("SAVE WATCHLIST") } }
         item { Text("Selected: $selected", color = Cyan, fontWeight = FontWeight.Bold) }
-        snapshot?.prices?.forEach { (symbol, tick) -> item { CardBlock { Text(symbol, color = TextMain, fontWeight = FontWeight.Bold); Text("Bid ${number(tick.bid)} • Ask ${number(tick.ask)}", color = Muted, fontSize = 11.sp) } } }
+        snapshot?.prices?.forEach { (symbol, tick) -> item { CardBlock { Text(symbol, color = TextMain, fontWeight = FontWeight.Bold); Text("Bid ${number(tick.bid)} • Ask ${number(tick.ask)} • tick ${tick.time}", color = Muted, fontSize = 11.sp) } } }
     }
 }
 
-@Composable private fun ActivityTab(modifier: Modifier, status: String, account: MetaAccount?, strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, flash: FlashAlphaSnapshot?) {
+@Composable private fun ActivityTab(modifier: Modifier, status: String, account: MetaAccount?, strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, flash: FlashAlphaSnapshot?, snapshot: MetaSnapshot?, symbol: String, engine: TradingEngine) {
+    val price = snapshot?.prices?.get(symbol)?.let { (it.bid + it.ask) / 2.0 }
+    val view = if (price != null) engine.view(strategy, flash, price, symbol) else null
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-        item { Header("Activity", "Live engine status") }
+        item { Header("Activity", "Live strategy state") }
         item { CardBlock { Text("ENGINE", color = Muted, fontSize = 10.sp); Text("${if (strategy == TradingEngine.StrategyId.STRATEGY_001) "STRATEGY 001" else "STRATEGY 002"} • ${if (running) "RUNNING" else "STOPPED"}", color = if (armed) Red else Cyan, fontWeight = FontWeight.Black); Text(if (armed) "LIVE EXECUTION ARMED" else "Monitoring only", color = Muted) } }
-        item { CardBlock { Text("STATUS", color = Muted, fontSize = 10.sp); Text(status, color = TextMain, fontSize = 12.sp) } }
-        item { CardBlock { Text("DATA", color = Muted, fontSize = 10.sp); Text("MetaApi: ${account?.connectionStatus ?: "not connected"}", color = TextMain); Text("FlashAlpha: ${flash?.symbol ?: "not configured"}", color = Muted); Text("Execution path: Android → MetaApi directly", color = Muted) } }
+        if (view != null) item { CardBlock {
+            Text("LIVE DECISION", color = Muted, fontSize = 10.sp)
+            Text("${view.phase} • ${view.session}", color = if (view.side == null) Cyan else Green, fontWeight = FontWeight.Black, fontSize = 17.sp)
+            Text("Symbol $symbol • Direction ${view.side?.name ?: "WAIT"} • Confluence ${view.confidence}%", color = TextMain, fontSize = 12.sp)
+            Text("Entry zone: ${view.entry?.let(::number) ?: "—"}", color = Cyan, fontSize = 11.sp)
+            Text("Exit level: ${view.exit?.let(::number) ?: "—"}", color = Purple, fontSize = 11.sp)
+            Text("Stop / invalidation: ${view.stop?.let(::number) ?: "—"}", color = Red, fontSize = 11.sp)
+            Text(view.confluence, color = Muted, fontSize = 10.sp)
+        } }
+        item { CardBlock { Text("LATEST EXECUTION EVENT", color = Muted, fontSize = 10.sp); Text(status, color = TextMain, fontSize = 12.sp) } }
+        item { CardBlock { Text("DATA PIPELINE", color = Muted, fontSize = 10.sp); Text("MetaApi: ${account?.connectionStatus ?: "not connected"}", color = TextMain); Text("Broker price: ${price?.let(::number) ?: "—"}", color = Muted); Text("FlashAlpha: ${flash?.symbol ?: "not configured"}", color = Muted); Text("Pipeline: live broker price → zones → confluence → execution → management → exit", color = Muted, fontSize = 10.sp) } }
     }
 }
 
