@@ -21,17 +21,14 @@ import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.floor
 
-/**
- * Shared execution shell. Strategy state and rules remain isolated; only the
- * broker/data plumbing is shared. Exactly one selected strategy may trade at a time.
- * Broker prices are also delivered directly from the MetaApi websocket stream.
- */
+/** Shared execution shell. Strategy rules remain isolated; broker/data plumbing is shared. */
 class TradingEngine(
     private val meta: DirectMetaApiClient,
     val strategy001: Strategy001Engine = Strategy001Engine(),
-    val strategy002: Strategy002Engine = Strategy002Engine()
+    val strategy002: Strategy002Engine = Strategy002Engine(),
+    val strategy003: Strategy003Engine = Strategy003Engine()
 ) {
-    enum class StrategyId { STRATEGY_001, STRATEGY_002 }
+    enum class StrategyId { STRATEGY_001, STRATEGY_002, STRATEGY_003 }
     data class View(
         val id: StrategyId,
         val side: TradeSide?,
@@ -44,17 +41,7 @@ class TradingEngine(
         val session: String = "",
         val confluence: String = ""
     )
-
-    private data class StreamState(
-        val selected: StrategyId,
-        val account: MetaAccount,
-        val saved: SavedConnection,
-        val snapshot: MetaSnapshot,
-        val flash: FlashAlphaSnapshot?,
-        val symbol: String,
-        val onStatus: (String) -> Unit
-    )
-
+    private data class StreamState(val selected: StrategyId, val account: MetaAccount, val saved: SavedConnection, val snapshot: MetaSnapshot, val flash: FlashAlphaSnapshot?, val symbol: String, val onStatus: (String) -> Unit)
     private val history = mutableMapOf<String, ArrayDeque<Strategy002Engine.Sample>>()
     private val strategy001RiskFraction = 0.01
     private val minimumRewardRisk = 1.20
@@ -75,18 +62,16 @@ class TradingEngine(
         StrategyId.STRATEGY_001 -> {
             val p = strategy001.evaluate(flash, price)
             val session = strategy001Session()
-            val inSession = session != "CLOSED"
-            val phase = when {
-                !inSession -> "SESSION CLOSED"
-                p.side == null -> "WAIT CONFLUENCE"
-                !strategy001.entryAllowed(p, price) -> "WAIT ZONE"
-                else -> "READY TO EXECUTE"
-            }
+            val phase = when { session == "CLOSED" -> "SESSION CLOSED"; p.side == null -> "WAIT CONFLUENCE"; !strategy001.entryAllowed(p, price) -> "WAIT ZONE"; else -> "READY TO EXECUTE" }
             View(id, p.side, p.confidence, p.entryZone?.center, p.exitZone?.center, p.invalidation, p.reason, phase, session, "QOF ${p.confidence}% • ${p.reason}")
         }
         StrategyId.STRATEGY_002 -> {
             val p = strategy002.evaluate(history[symbol]?.toList().orEmpty())
             View(id, p.side, p.confidence, p.entry, null, p.stop, p.reason, if (p.side == null) "WAIT TICK" else "READY", "ALL SESSIONS", "TICK VELOCITY")
+        }
+        StrategyId.STRATEGY_003 -> {
+            val p = strategy003.latest()
+            View(id, p.side, p.confidence, p.entry, null, p.stop, p.reason, if (p.side == null) "WAIT STRUCTURE" else if (p.newFiveMinuteBar) "5M EXECUTION WINDOW" else "5M STRUCTURE", "LONDON + NEW YORK", "1H ${p.h1Bias.name} • 15M ${p.m15Bias.name} • 5M ${p.m5Bias.name} • 1M ${p.m1Bias.name}")
         }
     }
 
@@ -94,18 +79,14 @@ class TradingEngine(
         val instant = java.time.Instant.ofEpochMilli(nowMillis)
         val londonTime = instant.atZone(ZoneId.of("Europe/London")).toLocalTime()
         val newYorkTime = instant.atZone(ZoneId.of("America/New_York")).toLocalTime()
-        val londonOpen = LocalTime.of(8, 0)
-        val londonClose = LocalTime.of(17, 0)
-        val nyOpen = LocalTime.of(8, 0)
-        val nyClose = LocalTime.of(17, 0)
+        val londonOpen = LocalTime.of(8, 0); val londonClose = LocalTime.of(17, 0)
+        val nyOpen = LocalTime.of(8, 0); val nyClose = LocalTime.of(17, 0)
         return when {
             !londonTime.isBefore(londonOpen) && londonTime.isBefore(londonClose) -> "LONDON"
             !newYorkTime.isBefore(nyOpen) && newYorkTime.isBefore(nyClose) -> "NEW YORK"
             else -> "CLOSED"
         }
     }
-
-    private fun strategy001InSession(nowMillis: Long = System.currentTimeMillis()): Boolean = strategy001Session(nowMillis) != "CLOSED"
 
     private fun ensureStreaming(saved: SavedConnection, account: MetaAccount, symbols: List<String>, onStatus: (String) -> Unit) {
         if (streamStarted) return
@@ -114,14 +95,9 @@ class TradingEngine(
             recordTick(symbol, tick.time, (tick.bid + tick.ask) / 2.0)
             val current = streamState ?: return@start
             if (!current.symbol.equals(symbol, true)) return@start
-            val updatedSnapshot = current.snapshot.copy(prices = current.snapshot.prices + (symbol to tick))
-            val updated = current.copy(snapshot = updatedSnapshot)
+            val updated = current.copy(snapshot = current.snapshot.copy(prices = current.snapshot.prices + (symbol to tick)))
             streamState = updated
-            streamScope.launch {
-                executionMutex.withLock {
-                    if (streamStarted) executeInternal(updated)
-                }
-            }
+            streamScope.launch { executionMutex.withLock { if (streamStarted) executeInternal(updated) } }
         }, onStatus)
     }
 
@@ -142,14 +118,34 @@ class TradingEngine(
         when (state.selected) {
             StrategyId.STRATEGY_001 -> execute001(state.account, state.saved, state.flash, state.symbol, price, tick, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, snapshot, state.onStatus)
             StrategyId.STRATEGY_002 -> execute002(state.account, state.saved, state.symbol, price, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, state.onStatus)
+            StrategyId.STRATEGY_003 -> execute003(state.account, state.saved, state.symbol, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, state.onStatus)
         }
     }
 
-    fun stopStreaming() {
-        streamStarted = false
-        streamState = null
-        stream.stop()
+    private suspend fun execute003(account: MetaAccount, saved: SavedConnection, symbol: String, positions: List<MetaPosition>, onStatus: (String) -> Unit) {
+        val plan = strategy003.refresh(account, saved.metaApiToken, symbol)
+        for (p in positions) {
+            if (strategy003.exitDecision(plan, p)) {
+                meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { onStatus("S003 | 5M STRUCTURE REVERSAL | EXIT CONFIRMED | ${p.id}") }.onFailure { onStatus("S003 | EXIT FAILED | ${it.message ?: "unknown"}") }
+                continue
+            }
+            strategy003.trailStop(plan, p)?.let { newStop ->
+                if (!p.stopLoss.isFinite() || ((strategy003.positionSide(p) == TradeSide.BUY && newStop > p.stopLoss) || (strategy003.positionSide(p) == TradeSide.SELL && newStop < p.stopLoss))) {
+                    meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = newStop).onSuccess { onStatus("S003 | 5M TRAIL UPDATED | ${p.id} | SL=${"%.5f".format(newStop)}") }.onFailure { onStatus("S003 | TRAIL FAILED | ${it.message ?: "unknown"}") }
+                }
+            }
+        }
+        if (positions.isNotEmpty() || !strategy003.shouldExecute(plan) || plan.side == null || plan.stop == null) return
+        val tick = meta.refresh(saved.metaApiToken, account, listOf(symbol)).getOrNull()?.prices?.get(symbol) ?: return
+        val entry = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
+        if (!entry.isFinite() || !plan.stop.isFinite()) return
+        if (plan.side == TradeSide.BUY && plan.stop >= entry) return
+        if (plan.side == TradeSide.SELL && plan.stop <= entry) return
+        onStatus("S003 | SMC | ${plan.side.name} | ${plan.confidence}% | 5M EXECUTING | ${plan.reason}")
+        meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, 0.01, stopLoss = plan.stop).onSuccess { onStatus("S003 | ${plan.side.name} | EXECUTION CONFIRMED | order=${it.orderId.ifBlank { it.positionId }} | 5M") }.onFailure { onStatus("S003 | EXECUTION FAILED | ${it.message ?: "unknown"}") }
     }
+
+    fun stopStreaming() { streamStarted = false; streamState = null; stream.stop() }
 
     private suspend fun execute001(account: MetaAccount, saved: SavedConnection, flash: FlashAlphaSnapshot?, symbol: String, price: Double, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
         val plan = strategy001.evaluate(flash, price)
@@ -157,54 +153,35 @@ class TradingEngine(
         val entryText = plan.entryZone?.let { "${it.kind} ${fmt(it.lower)}-${fmt(it.upper)}" } ?: "NONE"
         val exitText = plan.exitZone?.let { "${it.kind} ${fmt(it.lower)}-${fmt(it.upper)}" } ?: "NONE"
         val stopText = plan.invalidation?.let(::fmt) ?: "NONE"
-
         if (session == "CLOSED") { onStatus("S001 | $symbol | SESSION CLOSED | London/New York only | zone=$entryText | exit=$exitText"); return }
         if (flash == null) { onStatus("S001 | $session | $symbol | WAIT DATA | FlashAlpha not available | zone=$entryText"); return }
-
         for (p in positions) {
             val exit = strategy001.exitDecision(plan, p, price)
-            if (exit.close) {
-                val started = System.nanoTime()
-                meta.closePosition(saved.metaApiToken, account, p.id).onSuccess {
-                    val ms = (System.nanoTime() - started) / 1_000_000.0
-                    onStatus("S001 | $session | EXIT CONFIRMED | ${p.id} | ${exit.reason} | latency=${"%.1f".format(ms)}ms")
-                }.onFailure { onStatus("S001 | $session | EXIT FAILED | ${it.message ?: "unknown"}") }
-                continue
-            }
+            if (exit.close) { meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { onStatus("S001 | $session | EXIT CONFIRMED | ${p.id} | ${exit.reason}") }.onFailure { onStatus("S001 | $session | EXIT FAILED | ${it.message ?: "unknown"}") }; continue }
             val side = strategy001.positionSide(p)
             val target = p.takeProfit.takeIf { it.isFinite() && it > 0.0 } ?: plan.exitZone?.center
             val stop = p.stopLoss.takeIf { it.isFinite() && it > 0.0 } ?: plan.invalidation
             if (side != null && target != null && stop != null) {
                 val targetMissing = !p.takeProfit.isFinite() || p.takeProfit <= 0.0
                 val stopMissing = !p.stopLoss.isFinite() || p.stopLoss <= 0.0
-                if (targetMissing || stopMissing) {
-                    meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = stop, takeProfit = target).onSuccess { onStatus("S001 | $session | MANAGEMENT | ${p.id} | SL=${fmt(stop)} TP=${fmt(target)}") }.onFailure { onStatus("S001 | $session | MANAGEMENT FAILED | ${it.message ?: "unknown"}") }
-                } else onStatus("S001 | $session | MANAGEMENT | ${p.id} | side=${side.name} | SL=${fmt(stop)} TP=${fmt(target)} | P/L=${fmt(p.profit)}")
+                if (targetMissing || stopMissing) meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = stop, takeProfit = target).onSuccess { onStatus("S001 | $session | MANAGEMENT | ${p.id} | SL=${fmt(stop)} TP=${fmt(target)}") }
             }
         }
         if (positions.isNotEmpty()) return
         if (plan.side == null) { onStatus("S001 | $session | $symbol | WAIT CONFLUENCE | ${plan.reason} | zone=$entryText | exit=$exitText | SL=$stopText"); return }
         if (!strategy001.entryAllowed(plan, price)) { onStatus("S001 | $session | ${plan.side.name} | WAIT ZONE | price=${fmt(price)} | entry=$entryText | exit=$exitText | conf=${plan.confidence}%"); return }
-
-        val target = plan.exitZone?.center ?: return
-        val stop = plan.invalidation ?: return
+        val target = plan.exitZone?.center ?: return; val stop = plan.invalidation ?: return
         val entryPrice = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         if (!target.isFinite() || !stop.isFinite() || !entryPrice.isFinite()) return
         if (plan.side == TradeSide.BUY && (target <= entryPrice || stop >= entryPrice)) return
         if (plan.side == TradeSide.SELL && (target >= entryPrice || stop <= entryPrice)) return
-        val reward = abs(target - entryPrice)
-        val risk = abs(entryPrice - stop)
-        if (risk <= 0.0 || reward / risk < minimumRewardRisk) { onStatus("S001 | $session | ${plan.side.name} | CONFLUENCE OK BUT RR BLOCKED | RR=${"%.2f".format(if (risk > 0.0) reward / risk else 0.0)} | entry=$entryText | exit=$exitText"); return }
+        val reward = abs(target - entryPrice); val risk = abs(entryPrice - stop)
+        if (risk <= 0.0 || reward / risk < minimumRewardRisk) { onStatus("S001 | $session | ${plan.side.name} | RR BLOCKED"); return }
         val spec = snapshot.specifications[symbol] ?: return
         val volume = riskSizedVolume(snapshot.equity, strategy001RiskFraction, entryPrice, stop, tick.lossTickValue, spec)
         if (volume <= 0.0) { onStatus("S001 | $session | ${plan.side.name} | EXECUTION BLOCKED | risk volume below broker minimum"); return }
-
         onStatus("S001 | $session | ${plan.side.name} | CONFLUENCE ${plan.confidence}% | EXECUTING | entry=${fmt(entryPrice)} | zone=$entryText | exit=$exitText | SL=${fmt(stop)}")
-        val started = System.nanoTime()
-        meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, volume, stopLoss = stop, takeProfit = target).onSuccess {
-            val ms = (System.nanoTime() - started) / 1_000_000.0
-            onStatus("S001 | $session | ${plan.side.name} | EXECUTION CONFIRMED | order=${it.orderId.ifBlank { it.positionId }} | ${"%.1f".format(ms)}ms | SL=${fmt(stop)} TP=${fmt(target)}")
-        }.onFailure { onStatus("S001 | $session | ${plan.side.name} | EXECUTION FAILED | ${it.message ?: "unknown"}") }
+        meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, volume, stopLoss = stop, takeProfit = target).onSuccess { onStatus("S001 | $session | ${plan.side.name} | EXECUTION CONFIRMED | order=${it.orderId.ifBlank { it.positionId }} | SL=${fmt(stop)} TP=${fmt(target)}") }.onFailure { onStatus("S001 | $session | ${plan.side.name} | EXECUTION FAILED | ${it.message ?: "unknown"}") }
     }
 
     private fun riskSizedVolume(equity: Double, riskFraction: Double, entry: Double, stop: Double, lossTickValue: Double, spec: SymbolSpecification): Double {
@@ -216,8 +193,7 @@ class TradingEngine(
         val raw = riskCash / riskPerLot
         if (!raw.isFinite() || raw < spec.minVolume) return 0.0
         val step = spec.volumeStep.takeIf { it.isFinite() && it > 0.0 } ?: 0.01
-        val rounded = floor(raw / step + 1e-9) * step
-        return rounded.coerceIn(spec.minVolume, spec.maxVolume)
+        return (floor(raw / step + 1e-9) * step).coerceIn(spec.minVolume, spec.maxVolume)
     }
 
     private suspend fun execute002(account: MetaAccount, saved: SavedConnection, symbol: String, price: Double, positions: List<MetaPosition>, onStatus: (String) -> Unit) {
