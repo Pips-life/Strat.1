@@ -7,6 +7,7 @@ plugins {
 }
 
 val releaseProps = Properties().apply { file("../release.properties").inputStream().use(::load) }
+val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "life.pips.strat1"
@@ -17,11 +18,9 @@ android {
         targetSdk = 35
         versionCode = releaseProps.getProperty("versionCode").toInt()
         versionName = releaseProps.getProperty("versionName")
+        buildConfigField("String", "FLASHALPHA_API_KEY", "\"$flashAlphaKey\"")
     }
-    buildFeatures {
-        compose = true
-        buildConfig = true
-    }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 
@@ -32,10 +31,7 @@ android {
     if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
         signingConfigs {
             create("release") {
-                this.storeFile = file(storeFile)
-                this.storePassword = storePassword
-                this.keyAlias = keyAlias
-                this.keyPassword = keyPassword
+                this.storeFile = file(storeFile); this.storePassword = storePassword; this.keyAlias = keyAlias; this.keyPassword = keyPassword
             }
         }
         buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
