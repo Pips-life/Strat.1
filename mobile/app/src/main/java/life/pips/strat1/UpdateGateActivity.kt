@@ -2,25 +2,32 @@ package life.pips.strat1
 
 import android.app.AlertDialog
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
-/** Opens the latest GitHub release directly; no Render/Vercel/backend dependency. */
+/** Automatic release checker. Updates come directly from official GitHub releases. */
 class UpdateGateActivity : android.app.Activity() {
+    private val updates = ReleaseUpdateManager(this)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        AlertDialog.Builder(this)
-            .setTitle("Pips-life")
-            .setMessage("Updates are distributed through the official GitHub releases.")
-            .setPositiveButton("Open Releases") { _, _ -> openReleases() }
-            .setNegativeButton("Continue") { _, _ -> openApp() }
-            .setCancelable(false)
-            .show()
-    }
-
-    private fun openReleases() {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Pips-life/Strat.1/releases/latest")))
-        openApp()
+        CoroutineScope(Dispatchers.Main).launch {
+            updates.check().onSuccess { release ->
+                if (release != null) {
+                    AlertDialog.Builder(this@UpdateGateActivity)
+                        .setTitle("Update available")
+                        .setMessage("Pips-life ${release.versionName} is available. Install it now?")
+                        .setPositiveButton("UPDATE") { _, _ ->
+                            CoroutineScope(Dispatchers.Main).launch { updates.downloadAndInstall(release) }
+                        }
+                        .setNegativeButton("LATER") { _, _ -> openApp() }
+                        .setCancelable(false)
+                        .show()
+                } else openApp()
+            }.onFailure { openApp() }
+        }
     }
 
     private fun openApp() {
