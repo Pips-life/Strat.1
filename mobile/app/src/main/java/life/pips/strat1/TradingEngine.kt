@@ -6,7 +6,11 @@ import life.pips.strat1.data.MetaAccount
 import life.pips.strat1.data.MetaPosition
 import life.pips.strat1.data.MetaSnapshot
 import life.pips.strat1.data.SavedConnection
+import life.pips.strat1.data.SymbolSpecification
+import life.pips.strat1.data.TickPrice
 import life.pips.strat1.data.TradeSide
+import kotlin.math.floor
+import kotlin.math.max
 
 /**
  * Shared execution shell. Strategy state and rules remain isolated; only the
@@ -21,6 +25,8 @@ class TradingEngine(
     data class View(val id: StrategyId, val side: TradeSide?, val confidence: Int, val entry: Double?, val exit: Double?, val stop: Double?, val reason: String)
 
     private val history = mutableMapOf<String, ArrayDeque<Strategy002Engine.Sample>>()
+    private val strategy001RiskFraction = 0.01 // 1% account-equity risk per new QOF trade.
+    private val minimumRewardRisk = 1.20
 
     fun recordTick(symbol: String, tickTime: Long, price: Double) {
         if (!price.isFinite()) return
@@ -44,20 +50,28 @@ class TradingEngine(
         val tick = snapshot.prices[symbol] ?: return
         val price = (tick.bid + tick.ask) / 2.0
         recordTick(symbol, tick.time, price)
-        val positions = snapshot.positions.filter { it.symbol.equals(symbol, true) }
 
+        val positions = snapshot.positions.filter { it.symbol.equals(symbol, true) }
         when (selected) {
-            StrategyId.STRATEGY_001 -> execute001(account, saved, flash, symbol, price, tick.bid, tick.ask, positions, onStatus)
+            StrategyId.STRATEGY_001 -> execute001(account, saved, flash, symbol, price, tick, positions, snapshot, onStatus)
             StrategyId.STRATEGY_002 -> execute002(account, saved, symbol, price, positions, onStatus)
         }
     }
 
-    private suspend fun execute001(account: MetaAccount, saved: SavedConnection, flash: FlashAlphaSnapshot?, symbol: String, price: Double, bid: Double, ask: Double, positions: List<MetaPosition>, onStatus: (String) -> Unit) {
+    private suspend fun execute001(
+        account: MetaAccount,
+        saved: SavedConnection,
+        flash: FlashAlphaSnapshot?,
+        symbol: String,
+        price: Double,
+        tick: TickPrice,
+        positions: List<MetaPosition>,
+        snapshot: MetaSnapshot,
+        onStatus: (String) -> Unit
+    ) {
         val plan = strategy001.evaluate(flash, price)
 
-        // Existing positions keep the QOF target that was assigned at entry.
-        // If a broker did not retain TP/SL, repair it from the current plan once,
-        // without replacing an already-valid broker target.
+        // Loop stage 1: manage existing QOF positions first. Broker TP/SL stays authoritative.
         for (p in positions) {
             val exit = strategy001.exitDecision(plan, p, price)
             if (exit.close) {
@@ -75,25 +89,57 @@ class TradingEngine(
                 val stopMissing = !p.stopLoss.isFinite() || p.stopLoss <= 0.0
                 if (targetMissing || stopMissing) {
                     meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = stop, takeProfit = target)
-                        .onSuccess { onStatus("Strategy 001 QOF TP/SL enforced: ${p.id} TP=${target} SL=${stop}") }
-                        .onFailure { onStatus(it.message ?: "Strategy 001 TP/SL enforcement failed") }
+                        .onSuccess { onStatus("Strategy 001 QOF TP/SL repaired: ${p.id} TP=${target} SL=${stop}") }
+                        .onFailure { onStatus(it.message ?: "Strategy 001 TP/SL repair failed") }
                 }
             }
         }
 
+        // Loop stage 2: never stack a second position for the same symbol.
         if (positions.isNotEmpty() || plan.side == null || !strategy001.entryAllowed(plan, price)) return
+
         val target = plan.exitZone?.center ?: return
         val stop = plan.invalidation ?: return
-        val entryPrice = if (plan.side == TradeSide.BUY) ask else bid
+        val entryPrice = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         if (!target.isFinite() || !stop.isFinite() || !entryPrice.isFinite()) return
-        if (plan.side == TradeSide.BUY && target <= entryPrice) return
-        if (plan.side == TradeSide.SELL && target >= entryPrice) return
-        if (plan.side == TradeSide.BUY && stop >= entryPrice) return
-        if (plan.side == TradeSide.SELL && stop <= entryPrice) return
+        if (plan.side == TradeSide.BUY && (target <= entryPrice || stop >= entryPrice)) return
+        if (plan.side == TradeSide.SELL && (target >= entryPrice || stop <= entryPrice)) return
 
-        meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, 0.01, stopLoss = stop, takeProfit = target)
-            .onSuccess { onStatus("Strategy 001 QOF ${plan.side} confirmed: ${it.stringCode} ${it.orderId} TP=${target} SL=${stop}") }
+        val reward = abs(target - entryPrice)
+        val risk = abs(entryPrice - stop)
+        if (risk <= 0.0 || reward / risk < minimumRewardRisk) {
+            onStatus("Strategy 001 skipped: QOF reward/risk ${"%.2f".format(if (risk > 0.0) reward / risk else 0.0)} < ${minimumRewardRisk}")
+            return
+        }
+
+        // Loop stage 3: broker-native risk sizing. MetaApi supplies tick size and
+        // loss tick value for the exact account/symbol, so 1% means 1% of equity at SL.
+        val spec = snapshot.specifications[symbol] ?: return
+        val volume = riskSizedVolume(snapshot.equity, strategy001RiskFraction, entryPrice, stop, tick.lossTickValue, spec)
+        if (volume <= 0.0) {
+            onStatus("Strategy 001 skipped: risk-sized volume is below broker minimum or tick value is unavailable.")
+            return
+        }
+
+        // Loop stage 4: send the complete order with broker TP + SL, then require a receipt.
+        meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, volume, stopLoss = stop, takeProfit = target)
+            .onSuccess {
+                onStatus("Strategy 001 ${plan.side} CONFIRMED: ${it.stringCode} ${it.orderId} vol=${volume} risk=${strategy001RiskFraction * 100}% TP=${target} SL=${stop}")
+            }
             .onFailure { onStatus(it.message ?: "Strategy 001 entry failed") }
+    }
+
+    private fun riskSizedVolume(equity: Double, riskFraction: Double, entry: Double, stop: Double, lossTickValue: Double, spec: SymbolSpecification): Double {
+        if (!equity.isFinite() || equity <= 0.0 || !lossTickValue.isFinite() || lossTickValue <= 0.0 || !spec.tickSize.isFinite() || spec.tickSize <= 0.0) return 0.0
+        val riskCash = equity * riskFraction.coerceIn(0.001, 0.02)
+        val ticksToStop = abs(entry - stop) / spec.tickSize
+        val riskPerLot = ticksToStop * lossTickValue
+        if (!riskPerLot.isFinite() || riskPerLot <= 0.0) return 0.0
+        val raw = riskCash / riskPerLot
+        if (!raw.isFinite() || raw < spec.minVolume) return 0.0
+        val step = spec.volumeStep.takeIf { it.isFinite() && it > 0.0 } ?: 0.01
+        val rounded = floor(raw / step + 1e-9) * step
+        return rounded.coerceIn(spec.minVolume, spec.maxVolume)
     }
 
     private suspend fun execute002(account: MetaAccount, saved: SavedConnection, symbol: String, price: Double, positions: List<MetaPosition>, onStatus: (String) -> Unit) {
