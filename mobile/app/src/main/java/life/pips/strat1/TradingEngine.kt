@@ -9,6 +9,7 @@ import life.pips.strat1.data.SavedConnection
 import life.pips.strat1.data.SymbolSpecification
 import life.pips.strat1.data.TickPrice
 import life.pips.strat1.data.TradeSide
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 
@@ -25,7 +26,7 @@ class TradingEngine(
     data class View(val id: StrategyId, val side: TradeSide?, val confidence: Int, val entry: Double?, val exit: Double?, val stop: Double?, val reason: String)
 
     private val history = mutableMapOf<String, ArrayDeque<Strategy002Engine.Sample>>()
-    private val strategy001RiskFraction = 0.01 // 1% account-equity risk per new QOF trade.
+    private val strategy001RiskFraction = 0.01
     private val minimumRewardRisk = 1.20
 
     fun recordTick(symbol: String, tickTime: Long, price: Double) {
@@ -71,7 +72,6 @@ class TradingEngine(
     ) {
         val plan = strategy001.evaluate(flash, price)
 
-        // Loop stage 1: manage existing QOF positions first. Broker TP/SL stays authoritative.
         for (p in positions) {
             val exit = strategy001.exitDecision(plan, p, price)
             if (exit.close) {
@@ -95,7 +95,6 @@ class TradingEngine(
             }
         }
 
-        // Loop stage 2: never stack a second position for the same symbol.
         if (positions.isNotEmpty() || plan.side == null || !strategy001.entryAllowed(plan, price)) return
 
         val target = plan.exitZone?.center ?: return
@@ -112,8 +111,6 @@ class TradingEngine(
             return
         }
 
-        // Loop stage 3: broker-native risk sizing. MetaApi supplies tick size and
-        // loss tick value for the exact account/symbol, so 1% means 1% of equity at SL.
         val spec = snapshot.specifications[symbol] ?: return
         val volume = riskSizedVolume(snapshot.equity, strategy001RiskFraction, entryPrice, stop, tick.lossTickValue, spec)
         if (volume <= 0.0) {
@@ -121,7 +118,6 @@ class TradingEngine(
             return
         }
 
-        // Loop stage 4: send the complete order with broker TP + SL, then require a receipt.
         meta.marketOrder(saved.metaApiToken, account, plan.side, symbol, volume, stopLoss = stop, takeProfit = target)
             .onSuccess {
                 onStatus("Strategy 001 ${plan.side} CONFIRMED: ${it.stringCode} ${it.orderId} vol=${volume} risk=${strategy001RiskFraction * 100}% TP=${target} SL=${stop}")
