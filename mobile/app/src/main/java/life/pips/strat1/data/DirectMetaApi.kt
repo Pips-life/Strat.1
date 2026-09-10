@@ -94,20 +94,26 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
         val b = Request.Builder().url(url).addHeader("Accept", "application/json").addHeader("auth-token", token)
         extra.forEach { (k, v) -> b.addHeader(k, v) }
         if (body == null) b.method(method, null) else b.method(method, body.toRequestBody("application/json".toMediaType()))
-        http.newCall(b.build()).execute().use { r ->
-            val text = r.body?.string().orEmpty()
-            if (!r.isSuccessful && r.code != 204) throw IllegalStateException(error(text, "MetaApi request failed (${r.code})"))
+        val response = http.newCall(b.build()).execute()
+        try {
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful && response.code != 204) throw IllegalStateException(error(text, "MetaApi request failed (${response.code})"))
             if (text.isBlank()) JSONObject() else JSONObject(text)
+        } finally {
+            response.close()
         }
     }
 
     private suspend fun requestArray(method: String, url: String, body: String?, token: String): JSONArray = withContext(Dispatchers.IO) {
         val b = Request.Builder().url(url).addHeader("Accept", "application/json").addHeader("auth-token", token)
         if (body == null) b.method(method, null) else b.method(method, body.toRequestBody("application/json".toMediaType()))
-        http.newCall(b.build()).use { r ->
-            val text = r.body?.string().orEmpty()
-            if (!r.isSuccessful) throw IllegalStateException(error(text, "MetaApi request failed (${r.code})"))
+        val response = http.newCall(b.build()).execute()
+        try {
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException(error(text, "MetaApi request failed (${response.code})"))
             JSONArray(text)
+        } finally {
+            response.close()
         }
     }
 
@@ -130,18 +136,24 @@ class FlashAlphaClient(private val http: OkHttpClient = OkHttpClient()) {
         withContext(Dispatchers.IO) {
             fun get(path: String): JSONObject {
                 val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()
-                return http.newCall(q).execute().use { r ->
-                    val text = r.body?.string().orEmpty()
-                    if (!r.isSuccessful) throw IllegalStateException("FlashAlpha ${r.code}: ${r.message}")
+                val response = http.newCall(q).execute()
+                try {
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw IllegalStateException("FlashAlpha ${response.code}: ${response.message}")
                     JSONObject(text)
+                } finally {
+                    response.close()
                 }
             }
             fun getArray(path: String): JSONArray {
                 val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()
-                return http.newCall(q).execute().use { r ->
-                    val text = r.body?.string().orEmpty()
-                    if (!r.isSuccessful) throw IllegalStateException("FlashAlpha ${r.code}: ${r.message}")
+                val response = http.newCall(q).execute()
+                try {
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw IllegalStateException("FlashAlpha ${response.code}: ${response.message}")
                     JSONArray(text)
+                } finally {
+                    response.close()
                 }
             }
             val encoded = URLEncoder.encode(symbol, "UTF-8")
