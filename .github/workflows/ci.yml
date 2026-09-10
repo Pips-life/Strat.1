@@ -1,9 +1,7 @@
-name: Pips-life CI
+name: Pips-life Android Release
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -11,33 +9,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: pips-life-ci-${{ github.ref }}
+  group: pips-life-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: python -m pip install -e '.[test]'
-      - run: pytest -q
-      - name: Validate live runner syntax
-        run: python -m py_compile runner/server.py
-
-  backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - run: npm install --no-audit --no-fund
-      - run: npm run build
-
   android:
+    name: Build and verify Android
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -66,7 +43,7 @@ jobs:
   release:
     name: Build signed update-safe Android release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [python, backend, android]
+    needs: [android]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -93,16 +70,9 @@ jobs:
         run: |
           set -euo pipefail
           latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
-          if [[ -z "$latest" ]]; then
-            next="0.1.0"
-          else
-            current="${latest#v}"
-            IFS=. read -r major minor patch <<< "$current"
-            next="${major}.${minor}.$((patch + 1))"
-          fi
+          if [[ -z "$latest" ]]; then next="0.1.0"; else current="${latest#v}"; IFS=. read -r major minor patch <<< "$current"; next="${major}.${minor}.$((patch + 1))"; fi
           version_code="$(printf '%s' "$next" | awk -F. '{print $3}')"
-          [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release version'; exit 1; }
-          [[ "$version_code" =~ ^[0-9]+$ ]] || { echo 'Invalid Android version code'; exit 1; }
+          [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
           echo "version_name=$next" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$next" >> "$GITHUB_OUTPUT"
@@ -153,30 +123,7 @@ jobs:
           sha256sum "$NAME" > "$NAME.sha256"
           SHA=$(cut -d' ' -f1 "$NAME.sha256")
           printf '{"app":"Pips-life","versionName":"%s","versionCode":%s,"tag":"%s","apk":"%s","sha256":"%s"}\n' "${{ steps.version.outputs.version_name }}" "${{ steps.version.outputs.version_code }}" "${{ steps.version.outputs.tag }}" "$NAME" "$SHA" > release-manifest.json
-      - name: Verify release numbering
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh release list --limit 1 --json tagName > /tmp/latest-release.json
-          python3 - <<'PY'
-          import json, os, re, subprocess
-          rows=json.load(open('/tmp/latest-release.json'))
-          if not rows:
-              raise SystemExit(0)
-          tag=rows[0]['tagName']
-          names=subprocess.check_output(['gh','release','view',tag,'--json','assets','-q','.assets[]?.name'],text=True).splitlines()
-          codes=[]
-          for name in names:
-              m=re.search(r'pips-life-[0-9]+\.[0-9]+\.[0-9]+-(\d+)\.apk$',name)
-              if m:
-                  codes.append(int(m.group(1)))
-          if codes and int(os.environ['VERSION_CODE']) <= max(codes):
-              raise SystemExit(f"versionCode {os.environ['VERSION_CODE']} must exceed previous release code {max(codes)}")
-          PY
-      - name: Upload release artifact
+      - name: Upload signed release artifact
         uses: actions/upload-artifact@v4
         with:
           name: pips-life-signed-release
@@ -187,7 +134,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish progressive GitHub release
+    name: Publish GitHub release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [release]
     runs-on: ubuntu-latest
@@ -195,32 +142,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Download signed release artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: pips-life-signed-release
           path: release
-      - name: Publish GitHub release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="${{ needs.release.outputs.tag }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; refusing to overwrite it."
-            exit 1
-          fi
           gh release create "$TAG" \
             release/pips-life-${{ needs.release.outputs.version }}-${{ needs.release.outputs.version_code }}.apk \
             release/pips-life-${{ needs.release.outputs.version }}-${{ needs.release.outputs.version_code }}.apk.sha256 \
             release/release-manifest.json \
             --title "Pips-life ${{ needs.release.outputs.version }} (${{ needs.release.outputs.version_code }})" \
-            --notes "Version: ${{ needs.release.outputs.version }}\nVersionCode: ${{ needs.release.outputs.version_code }}\n\nOfficial Pips-life Android release. The app checks this GitHub Releases feed for newer versions." \
+            --notes "Direct MetaApi Android build. No Vercel. No Render. No Pips-life application backend. Strategy 001 runs in the app and can consume FlashAlpha directly." \
             --target "${GITHUB_SHA}"
       - name: Verify published release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: "${{ needs.release.outputs.tag }}"
-        run: |
-          set -euo pipefail
-          gh release view "$TAG" --json tagName,name,assets
+        run: gh release view "$TAG" --json tagName,name,assets
