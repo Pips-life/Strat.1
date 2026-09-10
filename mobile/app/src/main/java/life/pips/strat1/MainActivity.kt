@@ -69,8 +69,6 @@ private fun PipsLifeApp() {
         while (true) {
             val now = System.currentTimeMillis()
             val symbols = saved.watchlist.split(',').map { it.trim() }.filter { it.isNotBlank() }
-            // Broker state/quotes are refreshed frequently. Account provisioning is configured
-            // for quoteStreamingIntervalInSeconds=0 so the MetaApi side keeps tick-level quotes.
             meta.refresh(saved.metaApiToken, a, symbols)
                 .onSuccess { s ->
                     snapshot = s
@@ -78,8 +76,6 @@ private fun PipsLifeApp() {
                 }
                 .onFailure { if (!running) status = it.message ?: "MetaApi refresh failed" }
 
-            // FlashAlpha is deliberately throttled separately to avoid 429s while MetaApi
-            // market monitoring remains responsive.
             if (saved.flashAlphaKey.isNotBlank() && (now - lastFlashPull >= 10_000L || flashData == null)) {
                 lastFlashPull = now
                 flash.snapshot(saved.flashAlphaKey, flashSymbol)
@@ -87,13 +83,11 @@ private fun PipsLifeApp() {
                     .onFailure { if (running) status = it.message ?: "FlashAlpha failed" }
             }
 
-            if (running && saved.metaApiToken.isNotBlank()) {
+            if (running && armed && saved.metaApiToken.isNotBlank()) {
                 snapshot?.let { s ->
                     engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it }
                 }
             }
-            // 1s control cadence keeps the broker price/zone/execution state visibly live
-            // without hammering FlashAlpha.
             delay(1000)
         }
     }
@@ -148,10 +142,7 @@ private fun PipsLifeApp() {
 @Composable private fun Home(modifier: Modifier, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, openStrategy: () -> Unit) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { Header("Command Center", "Live broker monitor • independent strategy modules") }
-        item { CardBlock {
-            Text("CONNECTION", color = Muted, fontSize = 10.sp)
-            Text(if (account == null) "NOT CONNECTED" else "METAAPI • ${account.connectionStatus}", color = if (account == null) Red else Green, fontWeight = FontWeight.Bold)
-        } }
+        item { CardBlock { Text("CONNECTION", color = Muted, fontSize = 10.sp); Text(if (account == null) "NOT CONNECTED" else "METAAPI • ${account.connectionStatus}", color = if (account == null) Red else Green, fontWeight = FontWeight.Bold) } }
         item { CardBlock {
             Text("SELECTED STRATEGY", color = Muted, fontSize = 10.sp)
             Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "001 — GEX / QOF DATA ZONES" else "002 — VELOCITY EXPANSION", color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
