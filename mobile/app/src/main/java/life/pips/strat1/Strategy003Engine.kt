@@ -1,0 +1,253 @@
+package life.pips.strat1
+
+import android.os.SystemClock
+import life.pips.strat1.data.MetaAccount
+import life.pips.strat1.data.MetaPosition
+import life.pips.strat1.data.SavedConnection
+import life.pips.strat1.data.DirectMetaApiClient
+import life.pips.strat1.data.TickPrice
+import life.pips.strat1.data.TradeSide
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import java.net.URLEncoder
+import kotlin.math.abs
+
+/**
+ * Strategy 003 — Smart Money Concepts.
+ *
+ * Data is read from MetaApi on multiple timeframes (1m, 5m, 15m and 1h), while
+ * execution decisions are made only on a newly closed 5m candle. The strategy
+ * is intentionally isolated from S001/S002 and keeps its own market-structure
+ * state and position-management rules.
+ */
+class Strategy003Engine(private val http: OkHttpClient = OkHttpClient()) {
+    enum class Bias { BULLISH, BEARISH, NEUTRAL }
+
+    data class Candle(
+        val time: Long,
+        val open: Double,
+        val high: Double,
+        val low: Double,
+        val close: Double
+    )
+
+    data class Plan(
+        val side: TradeSide?,
+        val confidence: Int,
+        val entry: Double?,
+        val stop: Double?,
+        val reason: String,
+        val h1Bias: Bias,
+        val m15Bias: Bias,
+        val m5Bias: Bias,
+        val m1Bias: Bias,
+        val bos: String,
+        val liquidity: String,
+        val fvg: String,
+        val orderBlock: String,
+        val premiumDiscount: String,
+        val newFiveMinuteBar: Boolean
+    )
+
+    @Volatile private var lastRefreshMs = 0L
+    @Volatile private var lastFiveMinuteTime = 0L
+    @Volatile private var lastEvaluatedFiveMinuteTime = 0L
+    @Volatile private var cached: Map<String, List<Candle>> = emptyMap()
+    @Volatile private var cachedPlan: Plan = emptyPlan("Waiting for MetaApi multi-timeframe candles")
+
+    suspend fun refresh(account: MetaAccount, token: String, symbol: String, force: Boolean = false): Plan {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastRefreshMs < 30_000L && cached.isNotEmpty()) return evaluateCached()
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val frames = listOf("1m", "5m", "15m", "1h")
+                val loaded = frames.associateWith { timeframe -> fetch(account.region, account.id, token, symbol, timeframe, 80) }
+                cached = loaded
+                lastRefreshMs = SystemClock.elapsedRealtime()
+                evaluateCached()
+            }.getOrElse {
+                cachedPlan.copy(reason = "SMC data unavailable: ${it.message ?: "MetaApi candle request failed"}")
+            }
+        }
+    }
+
+    fun latest(): Plan = cachedPlan
+
+    private fun evaluateCached(): Plan {
+        val m1 = cached["1m"].orEmpty()
+        val m5 = cached["5m"].orEmpty()
+        val m15 = cached["15m"].orEmpty()
+        val h1 = cached["1h"].orEmpty()
+        if (m5.size < 20 || m15.size < 20 || h1.size < 20) {
+            return emptyPlan("Waiting for enough multi-timeframe candles (1h/15m/5m)")
+        }
+        val h1Bias = structureBias(h1)
+        val m15Bias = structureBias(m15)
+        val m5Bias = structureBias(m5)
+        val m1Bias = if (m1.size >= 12) structureBias(m1) else Bias.NEUTRAL
+        val recent = m5.takeLast(20)
+        val last = recent.last()
+        val previous = recent.dropLast(1)
+        val rangeHigh = previous.maxOf { it.high }
+        val rangeLow = previous.minOf { it.low }
+        val bullishBos = last.close > rangeHigh
+        val bearishBos = last.close < rangeLow
+        val bos = when { bullishBos -> "BULLISH BOS"; bearishBos -> "BEARISH BOS"; else -> "NO BOS" }
+
+        val priorSwingHigh = pivotHigh(m5, m5.size - 4) ?: rangeHigh
+        val priorSwingLow = pivotLow(m5, m5.size - 4) ?: rangeLow
+        val sweptHigh = last.high > priorSwingHigh && last.close < priorSwingHigh
+        val sweptLow = last.low < priorSwingLow && last.close > priorSwingLow
+        val liquidity = when { sweptLow -> "SELL-SIDE SWEEP"; sweptHigh -> "BUY-SIDE SWEEP"; else -> "NO SWEEP" }
+
+        val fvgBull = m5.size >= 3 && last.low > m5[m5.size - 3].high
+        val fvgBear = m5.size >= 3 && last.high < m5[m5.size - 3].low
+        val fvg = when { fvgBull -> "BULLISH FVG"; fvgBear -> "BEARISH FVG"; else -> "NO FVG" }
+
+        val ob = orderBlock(m5, bullishBos, bearishBos)
+        val obText = when (ob) { null -> "NO ORDER BLOCK"; TradeSide.BUY -> "BULLISH ORDER BLOCK"; TradeSide.SELL -> "BEARISH ORDER BLOCK" }
+
+        val dealingHigh = h1.takeLast(20).maxOf { it.high }
+        val dealingLow = h1.takeLast(20).minOf { it.low }
+        val midpoint = (dealingHigh + dealingLow) / 2.0
+        val premiumDiscount = if (last.close >= midpoint) "PREMIUM" else "DISCOUNT"
+
+        var longScore = 0
+        var shortScore = 0
+        if (h1Bias == Bias.BULLISH) longScore += 2
+        if (h1Bias == Bias.BEARISH) shortScore += 2
+        if (m15Bias == Bias.BULLISH) longScore += 2
+        if (m15Bias == Bias.BEARISH) shortScore += 2
+        if (m5Bias == Bias.BULLISH) longScore++
+        if (m5Bias == Bias.BEARISH) shortScore++
+        if (m1Bias == Bias.BULLISH) longScore++
+        if (m1Bias == Bias.BEARISH) shortScore++
+        if (bullishBos) longScore += 2
+        if (bearishBos) shortScore += 2
+        if (sweptLow) longScore += 2
+        if (sweptHigh) shortScore += 2
+        if (fvgBull) longScore++
+        if (fvgBear) shortScore++
+        if (ob == TradeSide.BUY) longScore++
+        if (ob == TradeSide.SELL) shortScore++
+        if (premiumDiscount == "DISCOUNT") longScore++
+        if (premiumDiscount == "PREMIUM") shortScore++
+
+        val side = when {
+            longScore >= 6 && longScore > shortScore + 1 -> TradeSide.BUY
+            shortScore >= 6 && shortScore > longScore + 1 -> TradeSide.SELL
+            else -> null
+        }
+        val confidence = (maxOf(longScore, shortScore) * 7).coerceIn(0, 99)
+        val stop = when (side) {
+            TradeSide.BUY -> (m5.takeLast(8).minOf { it.low } - averageRange(m5.takeLast(8)) * 0.15)
+            TradeSide.SELL -> (m5.takeLast(8).maxOf { it.high } + averageRange(m5.takeLast(8)) * 0.15)
+            null -> null
+        }
+        val entry = last.close
+        val newBar = last.time != lastFiveMinuteTime
+        if (newBar) lastFiveMinuteTime = last.time
+        val reason = if (side == null) {
+            "WAIT — HTF structure=${h1Bias.name}/${m15Bias.name}; 5m=$m5Bias; ${bos.lowercase()}; ${liquidity.lowercase()}; score L$longScore/S$shortScore"
+        } else {
+            "${side.name} — HTF ${h1Bias.name}/${m15Bias.name}; 5m ${m5Bias.name}; $bos; $liquidity; $fvg; $obText; $premiumDiscount; score L$longScore/S$shortScore"
+        }
+        return Plan(side, confidence, entry, stop, reason, h1Bias, m15Bias, m5Bias, m1Bias, bos, liquidity, fvg, obText, premiumDiscount, newBar).also { cachedPlan = it }
+    }
+
+    fun shouldExecute(plan: Plan): Boolean {
+        if (plan.side == null || plan.stop == null || !plan.newFiveMinuteBar) return false
+        if (lastEvaluatedFiveMinuteTime == cached["5m"].orEmpty().lastOrNull()?.time) return false
+        lastEvaluatedFiveMinuteTime = cached["5m"].orEmpty().lastOrNull()?.time ?: return false
+        return plan.confidence >= 42
+    }
+
+    fun positionSide(position: MetaPosition): TradeSide? = when {
+        position.type.contains("BUY", true) -> TradeSide.BUY
+        position.type.contains("SELL", true) -> TradeSide.SELL
+        else -> null
+    }
+
+    fun exitDecision(plan: Plan, position: MetaPosition): Boolean {
+        val side = positionSide(position) ?: return false
+        return (side == TradeSide.BUY && plan.m5Bias == Bias.BEARISH) ||
+            (side == TradeSide.SELL && plan.m5Bias == Bias.BULLISH)
+    }
+
+    fun trailStop(plan: Plan, position: MetaPosition): Double? {
+        val side = positionSide(position) ?: return null
+        val m5 = cached["5m"].orEmpty()
+        if (m5.size < 5) return null
+        return when (side) {
+            TradeSide.BUY -> m5.takeLast(6).minOf { it.low }
+            TradeSide.SELL -> m5.takeLast(6).maxOf { it.high }
+        }.let { candidate ->
+            when (side) {
+                TradeSide.BUY -> candidate.takeIf { !position.stopLoss.isFinite() || it > position.stopLoss }
+                TradeSide.SELL -> candidate.takeIf { !position.stopLoss.isFinite() || it < position.stopLoss }
+            }
+        }
+    }
+
+    private fun fetch(region: String, accountId: String, token: String, symbol: String, timeframe: String, limit: Int): List<Candle> {
+        val base = "https://mt-market-data-client-api-v1.${region.ifBlank { "london" }}.agiliumtrade.ai"
+        val encoded = URLEncoder.encode(symbol, "UTF-8")
+        val url = "$base/users/current/accounts/$accountId/historical-market-data/symbols/$encoded/timeframes/$timeframe/candles?limit=$limit"
+        val request = Request.Builder().url(url).addHeader("Accept", "application/json").addHeader("auth-token", token).get().build()
+        val response = http.newCall(request).execute()
+        val text = try {
+            if (!response.isSuccessful) throw IllegalStateException("MetaApi $timeframe candles: HTTP ${response.code}")
+            response.body?.string().orEmpty()
+        } finally { response.close() }
+        val array = JSONArray(text)
+        return buildList {
+            for (i in 0 until array.length()) {
+                val c = array.optJSONObject(i) ?: continue
+                val time = runCatching { java.time.Instant.parse(c.optString("time")).toEpochMilli() }.getOrNull() ?: continue
+                add(Candle(time, c.optDouble("open"), c.optDouble("high"), c.optDouble("low"), c.optDouble("close")))
+            }
+        }.sortedBy { it.time }
+    }
+
+    private fun structureBias(candles: List<Candle>): Bias {
+        if (candles.size < 8) return Bias.NEUTRAL
+        val highs = (candles.size - 7 until candles.size - 1).mapNotNull { pivotHigh(candles, it) }
+        val lows = (candles.size - 7 until candles.size - 1).mapNotNull { pivotLow(candles, it) }
+        val last = candles.last().close
+        val high = highs.lastOrNull() ?: candles.takeLast(10).maxOf { it.high }
+        val low = lows.lastOrNull() ?: candles.takeLast(10).minOf { it.low }
+        return when {
+            last > high -> Bias.BULLISH
+            last < low -> Bias.BEARISH
+            else -> {
+                val first = candles.takeLast(8).first().close
+                when { last > first * 1.001 -> Bias.BULLISH; last < first * 0.999 -> Bias.BEARISH; else -> Bias.NEUTRAL }
+            }
+        }
+    }
+
+    private fun pivotHigh(candles: List<Candle>, index: Int): Double? {
+        if (index < 2 || index > candles.size - 3) return null
+        val c = candles[index].high
+        return if ((index - 2..index + 2).all { j -> j == index || candles[j].high <= c }) c else null
+    }
+
+    private fun pivotLow(candles: List<Candle>, index: Int): Double? {
+        if (index < 2 || index > candles.size - 3) return null
+        val c = candles[index].low
+        return if ((index - 2..index + 2).all { j -> j == index || candles[j].low >= c }) c else null
+    }
+
+    private fun orderBlock(candles: List<Candle>, bullishBos: Boolean, bearishBos: Boolean): TradeSide? {
+        if (candles.size < 4) return null
+        val c = candles[candles.lastIndex - 1]
+        return when { bullishBos && c.close < c.open -> TradeSide.BUY; bearishBos && c.close > c.open -> TradeSide.SELL; else -> null }
+    }
+
+    private fun averageRange(candles: List<Candle>): Double = candles.map { abs(it.high - it.low) }.average().takeIf { it.isFinite() && it > 0 } ?: 0.0
+
+    private fun emptyPlan(reason: String) = Plan(null, 0, null, null, reason, Bias.NEUTRAL, Bias.NEUTRAL, Bias.NEUTRAL, Bias.NEUTRAL, "NO BOS", "NO SWEEP", "NO FVG", "NO ORDER BLOCK", "NEUTRAL", false)
+}
