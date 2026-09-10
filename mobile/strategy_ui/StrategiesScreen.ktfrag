@@ -10,13 +10,11 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
 
     LaunchedEffect(session) {
         if (session == null) {
-            bot = null
-            selected = null
-            pendingSelection = null
+            bot = null; selected = null; pendingSelection = null
             message = "Connect MT5 before selecting a live trading strategy."
         } else {
             val saved = context.pipsDataStore.data.first()[SELECTED_STRATEGY]
-            selected = saved?.takeIf { it == "001" || it == "002" }
+            selected = saved?.takeIf { it == "001" || it == "002" || it == "003" }
             while (true) {
                 api.botStatus(session).onSuccess {
                     bot = it
@@ -25,8 +23,7 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
                         selected = serverStrategy
                         context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
                     } else if (serverStrategy == pendingSelection) {
-                        selected = serverStrategy
-                        pendingSelection = null
+                        selected = serverStrategy; pendingSelection = null
                         message = "Strategy $serverStrategy active in engine."
                         context.pipsDataStore.edit { prefs -> prefs[SELECTED_STRATEGY] = serverStrategy }
                     }
@@ -37,14 +34,8 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
     }
 
     fun choose(strategy: String) {
-        if (session == null) {
-            message = "Connect MT5 before selecting a live trading strategy."
-            return
-        }
-        selected = strategy
-        pendingSelection = strategy
-        message = "Activating Strategy $strategy…"
-        busy = true
+        if (session == null) { message = "Connect MT5 before selecting a live trading strategy."; return }
+        selected = strategy; pendingSelection = strategy; message = "Activating Strategy $strategy…"; busy = true
         scope.launch {
             api.botCommand(session, "select", strategy)
                 .onSuccess { selection ->
@@ -55,17 +46,11 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
                         api.botCommand(session, "start", strategy)
                             .onSuccess { started ->
                                 bot = started
-                                if (started.strategy == strategy) {
-                                    pendingSelection = null
-                                    message = "Strategy $strategy active and trading."
-                                } else {
-                                    message = "Strategy $strategy selected; waiting for engine confirmation."
-                                }
+                                if (started.strategy == strategy) { pendingSelection = null; message = "Strategy $strategy active and trading." }
+                                else message = "Strategy $strategy selected; waiting for engine confirmation."
                             }
                             .onFailure { message = it.message ?: "Strategy selected, but trading could not be started." }
-                    } else {
-                        message = "Strategy $strategy requested; waiting for engine confirmation."
-                    }
+                    } else message = "Strategy $strategy requested; waiting for engine confirmation."
                 }
                 .onFailure { message = it.message ?: "Strategy selection failed; the engine will retry through status sync." }
             busy = false
@@ -82,6 +67,6 @@ private fun StrategiesScreen(modifier: Modifier, api: BackendApiClient, session:
         }
         item { StrategyDetail("001", "QOF", if (selected == "001") bot?.state ?: "READY" else "READY", true, "Primary QOF strategy. Uses the reusable confluence engine and QOF decision path.", "PRIMARY", selected == "001", busy) { choose("001") } }
         item { StrategyDetail("002", "Velocity Expansion", if (selected == "002") bot?.state ?: "READY" else "READY", true, "Detects expanding price velocity, enters immediately in the detected direction, then maintains a 100-pip trailing opposite stop and reverses continuously when triggered.", "SECONDARY", selected == "002", busy) { choose("002") } }
-        item { StrategyDetail("003", "Reserved", "LOCKED", false, "Future strategy slot.", "RESERVED", false, busy) {} }
+        item { StrategyDetail("003", "Smart Money Concepts", if (selected == "003") bot?.state ?: "READY" else "READY", true, "Trades structured SMC confluence: liquidity sweeps, BOS, displacement, fair value gaps, order blocks and premium/discount location. Uses recent swing structure for protection.", "NEW", selected == "003", busy) { choose("003") } }
     }
 }
