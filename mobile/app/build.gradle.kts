@@ -32,7 +32,8 @@ android {
                 "META-INF/NOTICE.txt",
                 "META-INF/LICENSE",
                 "META-INF/LICENSE.txt",
-                "META-INF/ASL2.0"
+                "META-INF/ASL2.0",
+                "log4j2.xml"
             )
         }
     }
