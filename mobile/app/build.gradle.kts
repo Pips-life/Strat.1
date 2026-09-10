@@ -17,9 +17,8 @@ android {
         targetSdk = 35
         versionCode = releaseProps.getProperty("versionCode").toInt()
         versionName = releaseProps.getProperty("versionName")
-        buildConfigField("String", "BACKEND_BASE_URL", "\"https://strat-1.vercel.app\"")
     }
-    buildFeatures { compose = true; buildConfig = true }
+    buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 
@@ -40,72 +39,6 @@ android {
     }
 }
 
-val patchStrategyUi by tasks.registering {
-    doLast {
-        val source = file("src/main/java/life/pips/strat1/MainActivity.kt")
-        val template = file("../strategy_ui/StrategiesScreen.ktfrag").readText()
-        var text = source.readText()
-        val start = text.indexOf("@Composable private fun StrategiesScreen")
-        val end = text.indexOf("@Composable private fun StrategyDetail", start)
-        check(start >= 0 && end > start) { "Could not locate StrategiesScreen in MainActivity.kt" }
-        text = text.substring(0, start) + template + "\n" + text.substring(end)
-
-        text = text.replace(
-            "Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session) { screen = Screen.MT5 }",
-            "Screen.HOME -> HomeScreen(Modifier.padding(pad), api, session, context) { screen = Screen.MT5 }"
-        )
-        text = text.replace(
-            "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, openMt5: () -> Unit) {",
-            "private fun HomeScreen(modifier: Modifier, api: BackendApiClient, session: BackendSession?, context: Context, openMt5: () -> Unit) {"
-        )
-        if (!text.contains("private val SELECTED_STRATEGY")) {
-            text = text.replace(
-                "private val SERVER = stringPreferencesKey(\"server\")",
-                "private val SERVER = stringPreferencesKey(\"server\")\nprivate val SELECTED_STRATEGY = stringPreferencesKey(\"selected_strategy\")"
-            )
-        }
-        text = text.replaceFirst(
-            "var bot by remember { mutableStateOf<BotState?>(null) }\n    var busy by remember { mutableStateOf(false) }",
-            "var bot by remember { mutableStateOf<BotState?>(null) }\n    var selectedStrategy by remember { mutableStateOf<String?>(null) }\n    var busy by remember { mutableStateOf(false) }"
-        )
-        text = text.replaceFirst(
-            "LaunchedEffect(session) {\n        if (session == null) { state = null; bot = null }",
-            "LaunchedEffect(session) {\n        selectedStrategy = context.pipsDataStore.data.first()[SELECTED_STRATEGY]?.takeIf { it == \"001\" || it == \"002\" }\n        if (session == null) { state = null; bot = null }"
-        )
-        text = text.replaceFirst(
-            "api.botStatus(session).onSuccess { bot = it }",
-            "api.botStatus(session).onSuccess { it -> bot = it; if (it.configured && it.strategy in setOf(\"001\", \"002\")) selectedStrategy = it.strategy }"
-        )
-        text = text.replace(
-            "EngineActivityCard(bot, running, session != null, busy) { action -> busy = true; scope.launch { api.botCommand(session!!, action).onSuccess { bot = it }; busy = false } }",
-            "EngineActivityCard(bot, selectedStrategy ?: \"\", running, session != null && selectedStrategy != null, busy) { action -> busy = true; scope.launch { api.botCommand(session!!, action, selectedStrategy).onSuccess { bot = it }; busy = false } }"
-        )
-        text = text.replace(
-            "private fun EngineActivityCard(bot: BotState?, running: Boolean, enabled: Boolean, busy: Boolean, command: (String) -> Unit) {",
-            "private fun EngineActivityCard(bot: BotState?, strategy: String, running: Boolean, enabled: Boolean, busy: Boolean, command: (String) -> Unit) {"
-        )
-        text = text.replace(
-            "val selectedStrategy = strategyLabel(bot?.strategy)",
-            "val selectedStrategy = strategyLabel(strategy)"
-        )
-        text = text.replace(
-            "else -> \"001 · QOF\"",
-            "else -> \"No strategy selected\""
-        )
-        text = text.replace(
-            "private fun normalizeStrategy(strategy: String?): String = if (strategy?.trim() == \"002\" || strategy.equals(\"STRATEGY_002\", true)) \"002\" else \"001\"",
-            "private fun normalizeStrategy(strategy: String?): String? = strategy?.trim()?.takeIf { it == \"001\" || it == \"002\" }"
-        )
-        text = text.replace(
-            "val selected = saved?.takeIf { it == \"001\" || it == \"002\" }",
-            "val selected = saved?.takeIf { it == \"001\" || it == \"002\" }"
-        )
-        source.writeText(text)
-    }
-}
-
-tasks.named("preBuild").configure { dependsOn(patchStrategyUi) }
-
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.02.00"))
     implementation("androidx.activity:activity-compose:1.10.1")
@@ -113,11 +46,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3:1.3.1")
-    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.datastore:datastore-preferences:1.1.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.core:core:1.15.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
