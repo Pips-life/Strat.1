@@ -84,8 +84,6 @@ class Strategy001Engine {
         val bullishFlow = flow.contains("LONG") || flow.contains("CALL") || flow.contains("BULL")
         val bearishFlow = flow.contains("SHORT") || flow.contains("PUT") || flow.contains("BEAR")
 
-        // QOF is deliberately multi-factor. IV skew is defined by FlashAlpha as
-        // 25D put IV minus 25D call IV: positive skew = stronger downside-vol demand.
         val skew = f.skew25d
         val bearishSkew = skew.isFinite() && skew >= 1.0
         val bullishSkew = skew.isFinite() && skew <= -1.0
@@ -97,32 +95,8 @@ class Strategy001Engine {
         val localBearishSkew = localSkew != null && localSkew >= 1.0
         val localBullishSkew = localSkew != null && localSkew <= -1.0
 
-        val longScore = score(
-            long = true,
-            bullish = bullishFlow,
-            bearish = bearishFlow,
-            negativeGamma = negativeGamma,
-            flipAligned = aboveFlip,
-            skewAligned = bullishSkew || localBullishSkew,
-            volumeAligned = putCallVolumeBullish,
-            oiAligned = putCallOiBullish,
-            support = support,
-            resistance = resistance,
-            price = price
-        )
-        val shortScore = score(
-            long = false,
-            bullish = bullishFlow,
-            bearish = bearishFlow,
-            negativeGamma = negativeGamma,
-            flipAligned = belowFlip,
-            skewAligned = bearishSkew || localBearishSkew,
-            volumeAligned = putCallVolumeBearish,
-            oiAligned = putCallOiBearish,
-            support = support,
-            resistance = resistance,
-            price = price
-        )
+        val longScore = score(true, bullishFlow, bearishFlow, negativeGamma, aboveFlip, bullishSkew || localBullishSkew, putCallVolumeBullish, putCallOiBullish, support, resistance, price)
+        val shortScore = score(false, bullishFlow, bearishFlow, negativeGamma, belowFlip, bearishSkew || localBearishSkew, putCallVolumeBearish, putCallOiBearish, support, resistance, price)
 
         val side = when {
             longScore >= 70 && longScore >= shortScore + 8 -> TradeSide.BUY
@@ -147,28 +121,16 @@ class Strategy001Engine {
         return Plan(side, score, entry, target, invalidation, reason, zones)
     }
 
-    fun entryAllowed(plan: Plan, price: Double): Boolean =
-        plan.side != null && plan.entryZone != null && plan.exitZone != null && plan.entryZone.contains(price)
+    fun entryAllowed(plan: Plan, price: Double): Boolean = plan.side != null && plan.entryZone != null && plan.exitZone != null && plan.entryZone.contains(price)
 
     fun exitDecision(plan: Plan, position: MetaPosition, price: Double): ExitDecision {
         val side = positionSide(position) ?: return ExitDecision(false, "Unknown position side")
         if (!price.isFinite()) return ExitDecision(false, "Waiting for valid live price")
-
-        // Once a trade exists, its broker TP/SL is authoritative. The QOF map is
-        // allowed to generate a high-confidence opposite close, but cannot silently
-        // move an already-open position's target.
         val target = position.takeProfit.takeIf { it.isFinite() && it > 0.0 } ?: plan.exitZone?.center
         val stop = position.stopLoss.takeIf { it.isFinite() && it > 0.0 } ?: plan.invalidation
-
-        if (target != null && ((side == TradeSide.BUY && price >= target) || (side == TradeSide.SELL && price <= target))) {
-            return ExitDecision(true, "QOF take-profit reached at ${format(target)}.")
-        }
-        if (stop != null && ((side == TradeSide.BUY && price <= stop) || (side == TradeSide.SELL && price >= stop))) {
-            return ExitDecision(true, "QOF invalidation/stop reached at ${format(stop)}.")
-        }
-        if (plan.side != null && plan.side != side && plan.confidence >= 80) {
-            return ExitDecision(true, "QOF rotated to a high-confidence opposite setup.")
-        }
+        if (target != null && ((side == TradeSide.BUY && price >= target) || (side == TradeSide.SELL && price <= target))) return ExitDecision(true, "QOF take-profit reached at ${format(target)}.")
+        if (stop != null && ((side == TradeSide.BUY && price <= stop) || (side == TradeSide.SELL && price >= stop))) return ExitDecision(true, "QOF invalidation/stop reached at ${format(stop)}.")
+        if (plan.side != null && plan.side != side && plan.confidence >= 80) return ExitDecision(true, "QOF rotated to a high-confidence opposite setup.")
         return ExitDecision(false, "Position remains active toward its fixed QOF target.")
     }
 
@@ -178,23 +140,11 @@ class Strategy001Engine {
         else -> null
     }
 
-    private fun score(
-        long: Boolean,
-        bullish: Boolean,
-        bearish: Boolean,
-        negativeGamma: Boolean,
-        flipAligned: Boolean,
-        skewAligned: Boolean,
-        volumeAligned: Boolean,
-        oiAligned: Boolean,
-        support: Zone?,
-        resistance: Zone?,
-        price: Double
-    ): Int {
+    private fun score(long: Boolean, bullish: Boolean, bearish: Boolean, negativeGamma: Boolean, flipAligned: Boolean, skewAligned: Boolean, volumeAligned: Boolean, oiAligned: Boolean, support: Zone?, resistance: Zone?, price: Double): Int {
         var s = 50
         if (if (long) bullish else bearish) s += 20
         if (if (long) bearish else bullish) s -= 20
-        if (negativeGamma) s += 10 // regime confirms movement potential, not direction
+        if (negativeGamma) s += 10
         if (flipAligned) s += 15
         if (skewAligned) s += 15
         if (volumeAligned) s += 10
@@ -205,8 +155,8 @@ class Strategy001Engine {
             val width = max(abs(zone.upper - zone.lower), price.coerceAtLeast(1.0) * 0.0001)
             if (distance <= width * 2.0) s += 5
         }
-        // Opposing-zone existence is required for a real TP rather than a naked signal.
-        if (if (long) resistance else support != null) s += 5
+        val opposingZone = if (long) resistance else support
+        if (opposingZone != null) s += 5
         return s.coerceIn(0, 100)
     }
 
@@ -220,8 +170,7 @@ class Strategy001Engine {
 }
 
 private fun FlashAlphaSnapshot.optionsAroundPriceSkew(price: Double): Double? {
-    val byStrike = options.filter { it.strike.isFinite() && it.iv.isFinite() && abs(it.strike - price) <= price.coerceAtLeast(1.0) * 0.08 }
-        .groupBy { it.strike }
+    val byStrike = options.filter { it.strike.isFinite() && it.iv.isFinite() && abs(it.strike - price) <= price.coerceAtLeast(1.0) * 0.08 }.groupBy { it.strike }
     val values = byStrike.mapNotNull { (_, contracts) ->
         val call = contracts.firstOrNull { it.type == "C" || it.type.equals("CALL", true) }
         val put = contracts.firstOrNull { it.type == "P" || it.type.equals("PUT", true) }
