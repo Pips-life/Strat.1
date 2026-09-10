@@ -13,70 +13,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  android:
+  build:
     name: Build and verify Android
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
+
       - uses: android-actions/setup-android@v3
-      - run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - name: Patch FlashAlpha parser return statements
+
+      - name: Validate requested release version
+        working-directory: mobile
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt')
-          s = p.read_text()
-          s = s.replace('                    JSONObject(text)\n                } finally {', '                    return JSONObject(text)\n                } finally {')
-          s = s.replace('                    JSONArray(text)\n                } finally {', '                    return JSONArray(text)\n                } finally {')
-          p.write_text(s)
-          PY
-      - name: Harden FlashAlpha rate limiting and build-time key
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt')
-          s = p.read_text()
-          old = '''            fun get(path: String): JSONObject {\n                val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()\n                val response = http.newCall(q).execute()\n                try {\n                    val text = response.body?.string().orEmpty()\n                    if (!response.isSuccessful) throw IllegalStateException("FlashAlpha ${response.code}: ${response.message}")\n                    return JSONObject(text)\n                } finally {\n                    response.close()\n                }\n            }'''
-          new = '''            fun get(path: String): JSONObject {\n                var lastCode = 0\n                var lastMessage = ""\n                repeat(3) { attempt ->\n                    val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()\n                    val response = http.newCall(q).execute()\n                    try {\n                        val text = response.body?.string().orEmpty()\n                        if (response.isSuccessful) return JSONObject(text)\n                        lastCode = response.code\n                        lastMessage = response.message\n                        if (response.code != 429) throw IllegalStateException("FlashAlpha ${response.code}: ${response.message}")\n                        if (attempt < 2) Thread.sleep(1500L * (attempt + 1))\n                    } finally {\n                        response.close()\n                    }\n                }\n                throw IllegalStateException("FlashAlpha $lastCode: $lastMessage — rate limited")\n            }'''
-          if old in s: s = s.replace(old, new)
-          p.write_text(s)
-          PY
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/build.gradle.kts')
-          s = p.read_text()
-          s = s.replace('val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\\"")', 'val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().trim().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\\"")')
-          p.write_text(s)
-          PY
-      - name: Patch home trading controls and dynamic activity UI
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/src/main/java/life/pips/strat1/MainActivity.kt')
-          s = p.read_text()
-          s = s.replace('Tab.HOME -> Home(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed) { tab = Tab.STRATEGY }', 'Tab.HOME -> Home(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, onOpenStrategy = { tab = Tab.STRATEGY }, onToggleTrading = { running = it; if (!it) armed = false })')
-          s = s.replace('var busy by remember { mutableStateOf(false) }', 'var busy by remember { mutableStateOf(false) }\n    var flashPoll by remember { mutableStateOf(0) }')
-          s = s.replace('if (saved.flashAlphaKey.isNotBlank()) flash.snapshot(saved.flashAlphaKey, flashSymbol)', 'if (saved.flashAlphaKey.isNotBlank() && flashPoll++ % 6 == 0) flash.snapshot(saved.flashAlphaKey, flashSymbol)')
-          s = s.replace('strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, openStrategy: () -> Unit)', 'strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, onOpenStrategy: () -> Unit, onToggleTrading: (Boolean) -> Unit)')
-          s = s.replace('Button(onClick = openStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }\n            Text(if (!running) "STOPPED" else if (armed) "LIVE TRADING ARMED" else "MONITORING", color = if (armed) Red else Cyan, fontWeight = FontWeight.Bold)', 'Button(onClick = onOpenStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }\n            Button(onClick = { onToggleTrading(!running) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (running) Red else Green)) { Text(if (running) "STOP BOT" else "START BOT") }\n            if (running) {\n                CardBlock {\n                    Text("BOT ACTIVITY", color = Muted, fontSize = 10.sp)\n                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 3.dp)\n                    Text(if (armed) "LIVE EXECUTION • scanning → evaluating → executing" else "MARKET MONITOR • scanning live prices and strategy zones", color = if (armed) Green else Cyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)\n                }\n            }\n            Text(if (!running) "STOPPED" else if (armed) "LIVE TRADING ARMED" else "MONITORING", color = if (armed) Red else Cyan, fontWeight = FontWeight.Bold)')
-          p.write_text(s)
-          PY
-      - name: Build and verify debug APK
+          test "$(grep '^versionName=' release.properties | cut -d= -f2)" = "0.2.72"
+          test "$(grep '^versionCode=' release.properties | cut -d= -f2)" = "72"
+
+      - name: Build debug APK and compile-check UI
         working-directory: mobile
         env:
           FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
@@ -85,181 +54,92 @@ jobs:
           gradle --no-daemon clean assembleDebug
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
-          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
-          grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-debug-badging.txt
+          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-debug-badging.txt
+          grep -q "application-label:'Pips-life'" /tmp/pips-debug-badging.txt
 
-  release:
-    name: Build signed update-safe Android release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [android]
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    outputs:
-      version: ${{ steps.version.outputs.version_name }}
-      version_code: ${{ steps.version.outputs.version_code }}
-      tag: ${{ steps.version.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
-      - name: Patch FlashAlpha parser return statements
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt')
-          s = p.read_text()
-          s = s.replace('                    JSONObject(text)\n                } finally {', '                    return JSONObject(text)\n                } finally {')
-          s = s.replace('                    JSONArray(text)\n                } finally {', '                    return JSONArray(text)\n                } finally {')
-          p.write_text(s)
-          PY
-      - name: Harden FlashAlpha rate limiting and build-time key
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/src/main/java/life/pips/strat1/data/DirectMetaApi.kt')
-          s = p.read_text()
-          old = '''            fun get(path: String): JSONObject {\n                val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()\n                val response = http.newCall(q).execute()\n                try {\n                    val text = response.body?.string().orEmpty()\n                    if (!response.isSuccessful) throw IllegalStateException("FlashAlpha ${response.code}: ${response.message}")\n                    return JSONObject(text)\n                } finally {\n                    response.close()\n                }\n            }'''
-          new = '''            fun get(path: String): JSONObject {\n                var lastCode = 0\n                var lastMessage = ""\n                repeat(3) { attempt ->\n                    val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()\n                    val response = http.newCall(q).execute()\n                    try {\n                        val text = response.body?.string().orEmpty()\n                        if (response.isSuccessful) return JSONObject(text)\n                        lastCode = response.code\n                        lastMessage = response.message\n                        if (response.code != 429) throw IllegalStateException("FlashAlpha ${response.code}: ${response.message}")\n                        if (attempt < 2) Thread.sleep(1500L * (attempt + 1))\n                    } finally {\n                        response.close()\n                    }\n                }\n                throw IllegalStateException("FlashAlpha $lastCode: $lastMessage — rate limited")\n            }'''
-          if old in s: s = s.replace(old, new)
-          p.write_text(s)
-          PY
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/build.gradle.kts')
-          s = p.read_text()
-          s = s.replace('val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\\"")', 'val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().trim().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\\"")')
-          p.write_text(s)
-          PY
-      - name: Patch home trading controls and dynamic activity UI
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('mobile/app/src/main/java/life/pips/strat1/MainActivity.kt')
-          s = p.read_text()
-          s = s.replace('Tab.HOME -> Home(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed) { tab = Tab.STRATEGY }', 'Tab.HOME -> Home(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, onOpenStrategy = { tab = Tab.STRATEGY }, onToggleTrading = { running = it; if (!it) armed = false })')
-          s = s.replace('var busy by remember { mutableStateOf(false) }', 'var busy by remember { mutableStateOf(false) }\n    var flashPoll by remember { mutableStateOf(0) }')
-          s = s.replace('if (saved.flashAlphaKey.isNotBlank()) flash.snapshot(saved.flashAlphaKey, flashSymbol)', 'if (saved.flashAlphaKey.isNotBlank() && flashPoll++ % 6 == 0) flash.snapshot(saved.flashAlphaKey, flashSymbol)')
-          s = s.replace('strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, openStrategy: () -> Unit)', 'strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, onOpenStrategy: () -> Unit, onToggleTrading: (Boolean) -> Unit)')
-          s = s.replace('Button(onClick = openStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }\n            Text(if (!running) "STOPPED" else if (armed) "LIVE TRADING ARMED" else "MONITORING", color = if (armed) Red else Cyan, fontWeight = FontWeight.Bold)', 'Button(onClick = onOpenStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }\n            Button(onClick = { onToggleTrading(!running) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (running) Red else Green)) { Text(if (running) "STOP BOT" else "START BOT") }\n            if (running) {\n                CardBlock {\n                    Text("BOT ACTIVITY", color = Muted, fontSize = 10.sp)\n                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 3.dp)\n                    Text(if (armed) "LIVE EXECUTION • scanning → evaluating → executing" else "MARKET MONITOR • scanning live prices and strategy zones", color = if (armed) Green else Cyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)\n                }\n            }\n            Text(if (!running) "STOPPED" else if (armed) "LIVE TRADING ARMED" else "MONITORING", color = if (armed) Red else Cyan, fontWeight = FontWeight.Bold)')
-          p.write_text(s)
-          PY
-      - name: Resolve next release number
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
-          if [[ -z "$latest" ]]; then next="0.1.0"; else current="${latest#v}"; IFS=. read -r major minor patch <<< "$current"; next="${major}.${minor}.$((patch + 1))"; fi
-          version_code="$(printf '%s' "$next" | awk -F. '{print $3}')"
-          [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-          echo "version_name=$next" >> "$GITHUB_OUTPUT"
-          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
-          echo "tag=v$next" >> "$GITHUB_OUTPUT"
-      - name: Stamp release.properties
-        working-directory: mobile
+      - name: Prepare release signing keystore
         env:
-          VERSION_NAME: ${{ steps.version.outputs.version_name }}
-          VERSION_CODE: ${{ steps.version.outputs.version_code }}
-        run: printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
-      - name: Require FlashAlpha and signing secrets
-        shell: bash
-        env:
-          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
           KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "$FLASHALPHA_API_KEY" || { echo 'Missing FLASHALPHA_API_KEY'; exit 1; }
-          test -n "$KEYSTORE_B64" || { echo 'Missing PIPS_LIFE_KEYSTORE_BASE64'; exit 1; }
-          test -n "$KEYSTORE_PASSWORD" || { echo 'Missing PIPS_LIFE_KEYSTORE_PASSWORD'; exit 1; }
-          test -n "$KEY_ALIAS" || { echo 'Missing PIPS_LIFE_KEY_ALIAS'; exit 1; }
-          test -n "$KEY_PASSWORD" || { echo 'Missing PIPS_LIFE_KEY_PASSWORD'; exit 1; }
-          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.keystore"
+          test -n "$KEYSTORE_B64"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.keystore"
           test -s "$RUNNER_TEMP/pips-life-release.keystore"
-          echo "PIPS_LIFE_KEYSTORE_PATH=$RUNNER_TEMP/pips-life-release.keystore" >> "$GITHUB_ENV"
+
       - name: Build signed release APK
         working-directory: mobile
         env:
           FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
-          PIPS_LIFE_KEYSTORE_PATH: ${{ env.PIPS_LIFE_KEYSTORE_PATH }}
+          PIPS_LIFE_KEYSTORE_PATH: ${{ runner.temp }}/pips-life-release.keystore
           PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
-        run: gradle --no-daemon clean assembleRelease --stacktrace
-      - name: Verify signed release artifact
-        shell: bash
         run: |
           set -euo pipefail
-          APK="mobile/app/build/outputs/apk/release/app-release.apk"
+          test -n "$FLASHALPHA_API_KEY"
+          test -n "$PIPS_LIFE_KEYSTORE_PASSWORD"
+          test -n "$PIPS_LIFE_KEY_ALIAS"
+          test -n "$PIPS_LIFE_KEY_PASSWORD"
+          gradle --no-daemon assembleRelease
+          APK=app/build/outputs/apk/release/app-release.apk
           test -s "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-badging.txt
-          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-badging.txt
-          grep -q "application-label:'Pips-life'" /tmp/pips-badging.txt
-          grep -q "versionCode='${{ steps.version.outputs.version_code }}'" /tmp/pips-badging.txt
-          grep -q "versionName='${{ steps.version.outputs.version_name }}'" /tmp/pips-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-release-badging.txt
+          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
+          grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
+          grep -q "versionCode='72'" /tmp/pips-release-badging.txt
+          grep -q "versionName='0.2.72'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          NAME="pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk"
-          cp "$APK" "$NAME"
-          sha256sum "$NAME" > "$NAME.sha256"
-          SHA=$(cut -d' ' -f1 "$NAME.sha256")
-          printf '{"app":"Pips-life","versionName":"%s","versionCode":%s,"tag":"%s","apk":"%s","sha256":"%s"}\n' "${{ steps.version.outputs.version_name }}" "${{ steps.version.outputs.version_code }}" "${{ steps.version.outputs.tag }}" "$NAME" "$SHA" > release-manifest.json
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.72-72.apk"
+
       - name: Upload signed release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-signed-release
-          path: |
-            pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk
-            pips-life-${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.version_code }}.apk.sha256
-            release-manifest.json
+          name: pips-life-v0.2.72-build72
+          path: ${{ runner.temp }}/pips-life-0.2.72-72.apk
           if-no-files-found: error
 
-  publish:
-    name: Publish GitHub release
+  release:
+    name: Publish v2.72 release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [release]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
-        with:
-          name: pips-life-signed-release
-          path: release
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+      - name: Read release version
+        id: version
+        shell: bash
         run: |
           set -euo pipefail
-          TAG="${{ needs.release.outputs.tag }}"
-          gh release create "$TAG" \
-            release/pips-life-${{ needs.release.outputs.version }}-${{ needs.release.outputs.version_code }}.apk \
-            release/pips-life-${{ needs.release.outputs.version }}-${{ needs.release.outputs.version_code }}.apk.sha256 \
-            release/release-manifest.json \
-            --title "Pips-life ${{ needs.release.outputs.version }} (${{ needs.release.outputs.version_code }})" \
-            --notes "Direct MetaApi Android build. No Vercel. No Render. No Pips-life application backend. Strategy 001 runs in the app and can consume FlashAlpha directly. MetaApi token/account ID are stored locally on-device. FlashAlpha polling is rate-limit protected." \
-            --target "${GITHUB_SHA}"
-      - name: Verify published release
+          version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
+          version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
+          test "$version_name" = "0.2.72"
+          test "$version_code" = "72"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Download signed APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pips-life-v0.2.72-build72
+          path: release
+
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: "${{ needs.release.outputs.tag }}"
-        run: gh release view "$TAG" --json tagName,name,assets
+          VERSION: ${{ steps.version.outputs.version_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="release/pips-life-0.2.72-72.apk"
+          test -s "$APK"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" --title "Pips-life v$VERSION" --generate-notes
+          fi
