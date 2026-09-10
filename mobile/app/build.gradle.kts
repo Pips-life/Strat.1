@@ -33,7 +33,8 @@ android {
                 "META-INF/LICENSE",
                 "META-INF/LICENSE.txt",
                 "META-INF/ASL2.0",
-                "log4j2.xml"
+                "log4j2.xml",
+                "log4j.properties"
             )
         }
     }
