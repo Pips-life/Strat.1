@@ -10,10 +10,10 @@ import kotlin.math.max
 /**
  * Strategy 001 only.
  *
- * QOF/GEX chain:
- * FlashAlpha flow + GEX data -> market map -> directional confluence ->
- * entry zone -> opposing data-derived target -> broker TP/SL -> local
- * position monitoring. No 1-minute candle reversal logic is used here.
+ * Full QOF chain:
+ * live GEX + options flow + IV/skew + Greeks/OI -> market map -> directional
+ * confluence -> entry zone -> opposing data-derived target -> broker TP/SL -> loop.
+ * No 1-minute candle reversal logic is used here.
  */
 class Strategy001Engine {
     data class Zone(val kind: Kind, val lower: Double, val upper: Double, val center: Double, val strength: Double, val source: String) {
@@ -71,7 +71,7 @@ class Strategy001Engine {
     }
 
     fun evaluate(f: FlashAlphaSnapshot?, price: Double): Plan {
-        if (f == null || !price.isFinite()) return Plan(null, 0, null, null, null, "Waiting for GEX data and live price.", emptyList())
+        if (f == null || !price.isFinite()) return Plan(null, 0, null, null, null, "Waiting for live GEX, IV skew and options data.", emptyList())
         val zones = buildMarketMap(f, price)
         val support = zones.filter { it.kind == Zone.Kind.SUPPORT && it.center <= price }.maxByOrNull { it.center }
         val resistance = zones.filter { it.kind == Zone.Kind.RESISTANCE && it.center >= price }.minByOrNull { it.center }
@@ -84,25 +84,65 @@ class Strategy001Engine {
         val bullishFlow = flow.contains("LONG") || flow.contains("CALL") || flow.contains("BULL")
         val bearishFlow = flow.contains("SHORT") || flow.contains("PUT") || flow.contains("BEAR")
 
-        val longScore = score(true, bullishFlow, bearishFlow, negativeGamma, aboveFlip, support, resistance, price)
-        val shortScore = score(false, bullishFlow, bearishFlow, negativeGamma, belowFlip, support, resistance, price)
+        // QOF is deliberately multi-factor. IV skew is defined by FlashAlpha as
+        // 25D put IV minus 25D call IV: positive skew = stronger downside-vol demand.
+        val skew = f.skew25d
+        val bearishSkew = skew.isFinite() && skew >= 1.0
+        val bullishSkew = skew.isFinite() && skew <= -1.0
+        val putCallVolumeBearish = f.putCallVolumeRatio.isFinite() && f.putCallVolumeRatio >= 1.15
+        val putCallVolumeBullish = f.putCallVolumeRatio.isFinite() && f.putCallVolumeRatio <= 0.85
+        val putCallOiBearish = f.putCallOiRatio.isFinite() && f.putCallOiRatio >= 1.15
+        val putCallOiBullish = f.putCallOiRatio.isFinite() && f.putCallOiRatio <= 0.85
+        val localSkew = f.optionsAroundPriceSkew(price)
+        val localBearishSkew = localSkew != null && localSkew >= 1.0
+        val localBullishSkew = localSkew != null && localSkew <= -1.0
+
+        val longScore = score(
+            long = true,
+            bullish = bullishFlow,
+            bearish = bearishFlow,
+            negativeGamma = negativeGamma,
+            flipAligned = aboveFlip,
+            skewAligned = bullishSkew || localBullishSkew,
+            volumeAligned = putCallVolumeBullish,
+            oiAligned = putCallOiBullish,
+            support = support,
+            resistance = resistance,
+            price = price
+        )
+        val shortScore = score(
+            long = false,
+            bullish = bullishFlow,
+            bearish = bearishFlow,
+            negativeGamma = negativeGamma,
+            flipAligned = belowFlip,
+            skewAligned = bearishSkew || localBearishSkew,
+            volumeAligned = putCallVolumeBearish,
+            oiAligned = putCallOiBearish,
+            support = support,
+            resistance = resistance,
+            price = price
+        )
+
         val side = when {
             longScore >= 70 && longScore >= shortScore + 8 -> TradeSide.BUY
             shortScore >= 70 && shortScore >= longScore + 8 -> TradeSide.SELL
             else -> null
         }
-        if (side == null) return Plan(null, max(longScore, shortScore), null, null, null, "GEX/QOF zones exist, but directional confluence is not strong enough.", zones)
+        if (side == null) return Plan(null, max(longScore, shortScore), null, null, null, "QOF confluence not strong enough: GEX + flow + IV skew + OI/volume are not aligned.", zones)
 
         val entry = if (side == TradeSide.BUY) support else resistance
         val target = if (side == TradeSide.BUY) resistance else support
-        if (entry == null || target == null) return Plan(null, max(longScore, shortScore), entry, target, null, "Strategy 001 requires both a data-derived entry zone and opposing exit zone.", zones)
+        if (entry == null || target == null) return Plan(null, max(longScore, shortScore), entry, target, null, "QOF requires both a data-derived entry zone and opposing exit zone.", zones)
 
         val invalidation = if (side == TradeSide.BUY) entry.lower else entry.upper
         val score = if (side == TradeSide.BUY) longScore else shortScore
+        val skewText = if (skew.isFinite()) "25D skew=${"%.2f".format(skew)}" else "25D skew unavailable"
+        val localText = localSkew?.let { ", local strike skew=${"%.2f".format(it)}" } ?: ""
         val reason = if (side == TradeSide.BUY) {
-            "QOF/GEX support entry -> opposing resistance target."
+            "QOF BUY: flow/flip/skew/OI-volume confluence; $skewText$localText. Support entry -> opposing resistance target."
         } else {
-            "QOF/GEX resistance entry -> opposing support target."
+            "QOF SELL: flow/flip/skew/OI-volume confluence; $skewText$localText. Resistance entry -> opposing support target."
         }
         return Plan(side, score, entry, target, invalidation, reason, zones)
     }
@@ -114,22 +154,22 @@ class Strategy001Engine {
         val side = positionSide(position) ?: return ExitDecision(false, "Unknown position side")
         if (!price.isFinite()) return ExitDecision(false, "Waiting for valid live price")
 
-        // Once a trade exists, its broker TP/SL is the authoritative trade plan.
-        // This prevents a moving GEX map from silently moving the target underneath
-        // an already-open position.
+        // Once a trade exists, its broker TP/SL is authoritative. The QOF map is
+        // allowed to generate a high-confidence opposite close, but cannot silently
+        // move an already-open position's target.
         val target = position.takeProfit.takeIf { it.isFinite() && it > 0.0 } ?: plan.exitZone?.center
         val stop = position.stopLoss.takeIf { it.isFinite() && it > 0.0 } ?: plan.invalidation
 
         if (target != null && ((side == TradeSide.BUY && price >= target) || (side == TradeSide.SELL && price <= target))) {
-            return ExitDecision(true, "QOF/GEX take-profit reached at ${format(target)}.")
+            return ExitDecision(true, "QOF take-profit reached at ${format(target)}.")
         }
         if (stop != null && ((side == TradeSide.BUY && price <= stop) || (side == TradeSide.SELL && price >= stop))) {
-            return ExitDecision(true, "QOF/GEX invalidation/stop reached at ${format(stop)}.")
+            return ExitDecision(true, "QOF invalidation/stop reached at ${format(stop)}.")
         }
-        if (plan.side != null && plan.side != side && plan.confidence >= 70) {
-            return ExitDecision(true, "QOF/GEX map changed to a high-confidence opposite setup.")
+        if (plan.side != null && plan.side != side && plan.confidence >= 80) {
+            return ExitDecision(true, "QOF rotated to a high-confidence opposite setup.")
         }
-        return ExitDecision(false, "Position remains active toward its fixed QOF/GEX target.")
+        return ExitDecision(false, "Position remains active toward its fixed QOF target.")
     }
 
     fun positionSide(p: MetaPosition): TradeSide? = when {
@@ -138,18 +178,35 @@ class Strategy001Engine {
         else -> null
     }
 
-    private fun score(long: Boolean, bullish: Boolean, bearish: Boolean, negativeGamma: Boolean, flipAligned: Boolean, support: Zone?, resistance: Zone?, price: Double): Int {
+    private fun score(
+        long: Boolean,
+        bullish: Boolean,
+        bearish: Boolean,
+        negativeGamma: Boolean,
+        flipAligned: Boolean,
+        skewAligned: Boolean,
+        volumeAligned: Boolean,
+        oiAligned: Boolean,
+        support: Zone?,
+        resistance: Zone?,
+        price: Double
+    ): Int {
         var s = 50
         if (if (long) bullish else bearish) s += 20
         if (if (long) bearish else bullish) s -= 20
-        if (negativeGamma) s += 10
-        if (flipAligned) s += 10
+        if (negativeGamma) s += 10 // regime confirms movement potential, not direction
+        if (flipAligned) s += 15
+        if (skewAligned) s += 15
+        if (volumeAligned) s += 10
+        if (oiAligned) s += 5
         val zone = if (long) support else resistance
         if (zone != null) {
             val distance = abs(price - zone.center)
             val width = max(abs(zone.upper - zone.lower), price.coerceAtLeast(1.0) * 0.0001)
-            if (distance <= width * 2.0) s += 10
+            if (distance <= width * 2.0) s += 5
         }
+        // Opposing-zone existence is required for a real TP rather than a naked signal.
+        if (if (long) resistance else support != null) s += 5
         return s.coerceIn(0, 100)
     }
 
@@ -160,4 +217,15 @@ class Strategy001Engine {
     }
 
     private fun format(value: Double): String = "%.5f".format(value)
+}
+
+private fun FlashAlphaSnapshot.optionsAroundPriceSkew(price: Double): Double? {
+    val byStrike = options.filter { it.strike.isFinite() && it.iv.isFinite() && abs(it.strike - price) <= price.coerceAtLeast(1.0) * 0.08 }
+        .groupBy { it.strike }
+    val values = byStrike.mapNotNull { (_, contracts) ->
+        val call = contracts.firstOrNull { it.type == "C" || it.type.equals("CALL", true) }
+        val put = contracts.firstOrNull { it.type == "P" || it.type.equals("PUT", true) }
+        if (call != null && put != null) (put.iv - call.iv) * 100.0 else null
+    }
+    return values.takeIf { it.isNotEmpty() }?.average()
 }
