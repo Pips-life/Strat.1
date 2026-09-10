@@ -12,6 +12,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import java.security.KeyStore
+import life.pips.strat1.BuildConfig
 
 private val Context.secretStore by preferencesDataStore("pips_life_secure_keys")
 private const val KEYSTORE = "AndroidKeyStore"
@@ -37,5 +38,13 @@ private fun decrypt(value: String?): String = if (value.isNullOrBlank()) "" else
 
 data class SavedConnection(val metaApiToken: String, val accountId: String, val login: String, val password: String, val server: String, val flashAlphaKey: String, val watchlist: String = "XAUUSD,NAS100,EURUSD,GBPUSD,US30")
 
-suspend fun Context.loadSavedConnection(): SavedConnection { val p = secretStore.data.first(); return SavedConnection(decrypt(p[META_TOKEN]), decrypt(p[ACCOUNT_ID]), decrypt(p[LOGIN]), decrypt(p[PASSWORD]), decrypt(p[SERVER]), decrypt(p[FLASH_KEY]), decrypt(p[WATCHLIST]).ifBlank { "XAUUSD,NAS100,EURUSD,GBPUSD,US30" }) }
+suspend fun Context.loadSavedConnection(): SavedConnection {
+    val p = secretStore.data.first()
+    return SavedConnection(
+        decrypt(p[META_TOKEN]), decrypt(p[ACCOUNT_ID]), decrypt(p[LOGIN]), decrypt(p[PASSWORD]), decrypt(p[SERVER]),
+        decrypt(p[FLASH_KEY]).ifBlank { BuildConfig.FLASHALPHA_API_KEY },
+        decrypt(p[WATCHLIST]).ifBlank { "XAUUSD,NAS100,EURUSD,GBPUSD,US30" }
+    )
+}
+
 suspend fun Context.saveConnection(value: SavedConnection) { secretStore.edit { it[META_TOKEN] = encrypt(value.metaApiToken); it[ACCOUNT_ID] = encrypt(value.accountId); it[LOGIN] = encrypt(value.login); it[PASSWORD] = encrypt(value.password); it[SERVER] = encrypt(value.server); it[FLASH_KEY] = encrypt(value.flashAlphaKey); it[WATCHLIST] = encrypt(value.watchlist) } }
