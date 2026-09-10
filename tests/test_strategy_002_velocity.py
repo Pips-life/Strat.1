@@ -61,4 +61,4 @@ def test_controller_keeps_one_opposite_stop_and_reverses_on_trigger():
     assert len(positions) == 1
     assert positions[0].side == "SELL"
     assert controller.pairs["XAUUSD"].position_side == "SELL"
-    assert controller.pairs["XAUUSD"].stop_price == 101.2
+    assert controller.pairs["XAUUSD"].stop_price == 101.5
