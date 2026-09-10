@@ -40,11 +40,12 @@ data class SavedConnection(val metaApiToken: String, val accountId: String, val 
 
 suspend fun Context.loadSavedConnection(): SavedConnection {
     val p = secretStore.data.first()
+    val buildKey = BuildConfig.FLASHALPHA_API_KEY.trim()
     return SavedConnection(
         decrypt(p[META_TOKEN]), decrypt(p[ACCOUNT_ID]), decrypt(p[LOGIN]), decrypt(p[PASSWORD]), decrypt(p[SERVER]),
-        decrypt(p[FLASH_KEY]).ifBlank { BuildConfig.FLASHALPHA_API_KEY },
+        decrypt(p[FLASH_KEY]).trim().ifBlank { buildKey },
         decrypt(p[WATCHLIST]).ifBlank { "XAUUSD,NAS100,EURUSD,GBPUSD,US30" }
     )
 }
 
-suspend fun Context.saveConnection(value: SavedConnection) { secretStore.edit { it[META_TOKEN] = encrypt(value.metaApiToken); it[ACCOUNT_ID] = encrypt(value.accountId); it[LOGIN] = encrypt(value.login); it[PASSWORD] = encrypt(value.password); it[SERVER] = encrypt(value.server); it[FLASH_KEY] = encrypt(value.flashAlphaKey); it[WATCHLIST] = encrypt(value.watchlist) } }
+suspend fun Context.saveConnection(value: SavedConnection) { secretStore.edit { it[META_TOKEN] = encrypt(value.metaApiToken); it[ACCOUNT_ID] = encrypt(value.accountId); it[LOGIN] = encrypt(value.login); it[PASSWORD] = encrypt(value.password); it[SERVER] = encrypt(value.server); it[FLASH_KEY] = encrypt(value.flashAlphaKey.trim()); it[WATCHLIST] = encrypt(value.watchlist) } }
