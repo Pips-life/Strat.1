@@ -31,6 +31,8 @@ jobs:
           gradle-version: '8.10.2'
       - name: Build and verify debug APK
         working-directory: mobile
+        env:
+          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
         run: |
           set -euo pipefail
           gradle --no-daemon clean assembleDebug
@@ -82,15 +84,17 @@ jobs:
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
         run: printf 'versionName=%s\nversionCode=%s\n' "$VERSION_NAME" "$VERSION_CODE" > release.properties
-      - name: Require stable release signing secrets
+      - name: Require FlashAlpha and signing secrets
         shell: bash
         env:
+          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
           KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          test -n "$FLASHALPHA_API_KEY" || { echo 'Missing FLASHALPHA_API_KEY'; exit 1; }
           test -n "$KEYSTORE_B64" || { echo 'Missing PIPS_LIFE_KEYSTORE_BASE64'; exit 1; }
           test -n "$KEYSTORE_PASSWORD" || { echo 'Missing PIPS_LIFE_KEYSTORE_PASSWORD'; exit 1; }
           test -n "$KEY_ALIAS" || { echo 'Missing PIPS_LIFE_KEY_ALIAS'; exit 1; }
@@ -101,6 +105,7 @@ jobs:
       - name: Build signed release APK
         working-directory: mobile
         env:
+          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
           PIPS_LIFE_KEYSTORE_PATH: ${{ env.PIPS_LIFE_KEYSTORE_PATH }}
           PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
@@ -157,7 +162,7 @@ jobs:
             release/pips-life-${{ needs.release.outputs.version }}-${{ needs.release.outputs.version_code }}.apk.sha256 \
             release/release-manifest.json \
             --title "Pips-life ${{ needs.release.outputs.version }} (${{ needs.release.outputs.version_code }})" \
-            --notes "Direct MetaApi Android build. No Vercel. No Render. No Pips-life application backend. Strategy 001 runs in the app and can consume FlashAlpha directly." \
+            --notes "Direct MetaApi Android build. No Vercel. No Render. No Pips-life application backend. Strategy 001 runs in the app and can consume FlashAlpha directly. MetaApi token/account ID are stored locally on-device." \
             --target "${GITHUB_SHA}"
       - name: Verify published release
         env:
