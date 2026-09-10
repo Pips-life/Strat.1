@@ -10,7 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.UUID
-import kotlin.math.floor
+import kotlin.math.abs
 
 private const val PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai"
 private const val FLASHALPHA_BASE = "https://lab.flashalpha.com"
@@ -49,39 +49,24 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
             if (symbol.isNotBlank()) runCatching {
                 val encoded = URLEncoder.encode(symbol, "UTF-8")
                 val p = request("GET", "$root/symbols/$encoded/current-price?keepSubscription=true", null, token)
-                prices[symbol] = TickPrice(
-                    p.optDouble("bid", Double.NaN), p.optDouble("ask", Double.NaN),
-                    p.optLong("time", System.currentTimeMillis()),
-                    p.optDouble("profitTickValue", Double.NaN), p.optDouble("lossTickValue", Double.NaN)
-                )
+                prices[symbol] = TickPrice(p.optDouble("bid", Double.NaN), p.optDouble("ask", Double.NaN), p.optLong("time", System.currentTimeMillis()), p.optDouble("profitTickValue", Double.NaN), p.optDouble("lossTickValue", Double.NaN))
                 val cacheKey = "${current.id}:$symbol"
                 val spec = specificationCache[cacheKey] ?: request("GET", "$root/symbols/$encoded/specification", null, token).let { s ->
-                    SymbolSpecification(
-                        s.optDouble("tickSize", Double.NaN), s.optDouble("minVolume", 0.01),
-                        s.optDouble("maxVolume", 100.0), s.optDouble("volumeStep", 0.01), s.optDouble("contractSize", Double.NaN)
-                    ).also { specificationCache[cacheKey] = it }
+                    SymbolSpecification(s.optDouble("tickSize", Double.NaN), s.optDouble("minVolume", 0.01), s.optDouble("maxVolume", 100.0), s.optDouble("volumeStep", 0.01), s.optDouble("contractSize", Double.NaN)).also { specificationCache[cacheKey] = it }
                 }
                 specs[symbol] = spec
             }
         }
-        MetaSnapshot(
-            current, info.optDouble("balance", Double.NaN), info.optDouble("equity", Double.NaN), info.optDouble("freeMargin", Double.NaN),
-            buildList {
-                for (i in 0 until positions.length()) {
-                    val p = positions.optJSONObject(i) ?: continue
-                    add(MetaPosition(
-                        p.optString("id").ifBlank { p.optString("positionId") }, p.optString("symbol"), p.optString("type"),
-                        p.optDouble("volume", 0.0), p.optDouble("openPrice", Double.NaN), p.optDouble("currentPrice", Double.NaN),
-                        p.optDouble("profit", Double.NaN), p.optDouble("stopLoss", Double.NaN), p.optDouble("takeProfit", Double.NaN)
-                    ))
-                }
-            }, prices, specs
-        )
+        MetaSnapshot(current, info.optDouble("balance", Double.NaN), info.optDouble("equity", Double.NaN), info.optDouble("freeMargin", Double.NaN), buildList {
+            for (i in 0 until positions.length()) {
+                val p = positions.optJSONObject(i) ?: continue
+                add(MetaPosition(p.optString("id").ifBlank { p.optString("positionId") }, p.optString("symbol"), p.optString("type"), p.optDouble("volume", 0.0), p.optDouble("openPrice", Double.NaN), p.optDouble("currentPrice", Double.NaN), p.optDouble("profit", Double.NaN), p.optDouble("stopLoss", Double.NaN), p.optDouble("takeProfit", Double.NaN)))
+            }
+        }, prices, specs)
     }
 
     suspend fun marketOrder(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, stopLoss: Double? = null, takeProfit: Double? = null): Result<TradeReceipt> = trade(token, account, JSONObject().apply {
-        put("actionType", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL")
-        put("symbol", symbol); put("volume", volume); put("clientId", clientId()); put("comment", "P1")
+        put("actionType", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL"); put("symbol", symbol); put("volume", volume); put("clientId", clientId()); put("comment", "P1")
         stopLoss?.let { put("stopLoss", it) }; takeProfit?.let { put("takeProfit", it) }
     })
 
@@ -138,18 +123,7 @@ data class SymbolSpecification(val tickSize: Double, val minVolume: Double, val 
 data class MetaSnapshot(val account: MetaAccount, val balance: Double, val equity: Double, val freeMargin: Double, val positions: List<MetaPosition>, val prices: Map<String, TickPrice>, val specifications: Map<String, SymbolSpecification> = emptyMap())
 data class GexStrike(val strike: Double, val callGex: Double, val putGex: Double, val netGex: Double, val callOi: Double, val putOi: Double, val callVolume: Double, val putVolume: Double)
 data class OptionContract(val type: String, val expiry: String, val strike: Double, val iv: Double, val delta: Double, val gamma: Double, val theta: Double, val vega: Double, val openInterest: Double, val volume: Double, val sviVol: Double = Double.NaN)
-data class FlashAlphaSnapshot(
-    val symbol: String, val netGex: Double, val liveGex: Double, val gammaFlip: Double, val regime: String,
-    val callWall: Double, val putWall: Double, val zeroDteMagnet: Double, val flowDirection: String,
-    val intradayOiDelta: Double, val flowGexPctShift: Double, val underlyingPrice: Double, val strikes: List<GexStrike>,
-    val atmIv: Double = Double.NaN, val put25dIv: Double = Double.NaN, val call25dIv: Double = Double.NaN,
-    val skew25d: Double = Double.NaN, val skew25dPut: Double = Double.NaN, val skew25dCall: Double = Double.NaN,
-    val putCallVolumeRatio: Double = Double.NaN, val putCallOiRatio: Double = Double.NaN,
-    val totalCallVolume: Double = Double.NaN, val totalPutVolume: Double = Double.NaN,
-    val totalCallOi: Double = Double.NaN, val totalPutOi: Double = Double.NaN,
-    val termState: String = "unknown", val ivDispersionCrossStrike: Double = Double.NaN,
-    val options: List<OptionContract> = emptyList()
-)
+data class FlashAlphaSnapshot(val symbol: String, val netGex: Double, val liveGex: Double, val gammaFlip: Double, val regime: String, val callWall: Double, val putWall: Double, val zeroDteMagnet: Double, val flowDirection: String, val intradayOiDelta: Double, val flowGexPctShift: Double, val underlyingPrice: Double, val strikes: List<GexStrike>, val atmIv: Double = Double.NaN, val put25dIv: Double = Double.NaN, val call25dIv: Double = Double.NaN, val skew25d: Double = Double.NaN, val skew25dPut: Double = Double.NaN, val skew25dCall: Double = Double.NaN, val putCallVolumeRatio: Double = Double.NaN, val putCallOiRatio: Double = Double.NaN, val totalCallVolume: Double = Double.NaN, val totalPutVolume: Double = Double.NaN, val totalCallOi: Double = Double.NaN, val totalPutOi: Double = Double.NaN, val termState: String = "unknown", val ivDispersionCrossStrike: Double = Double.NaN, val options: List<OptionContract> = emptyList())
 
 class FlashAlphaClient(private val http: OkHttpClient = OkHttpClient()) {
     suspend fun snapshot(apiKey: String, symbol: String): Result<FlashAlphaSnapshot> = runCatching {
@@ -176,7 +150,6 @@ class FlashAlphaClient(private val http: OkHttpClient = OkHttpClient()) {
             val f = get("/v1/flow/summary/$encoded")
             val summary = get("/v1/stock/$encoded/summary")
             val optionArray = runCatching { getArray("/optionquote/$encoded") }.getOrElse { JSONArray() }
-
             val strikes = buildList {
                 val a = g.optJSONArray("strikes") ?: JSONArray()
                 for (i in 0 until a.length()) {
@@ -184,57 +157,19 @@ class FlashAlphaClient(private val http: OkHttpClient = OkHttpClient()) {
                     add(GexStrike(s.optDouble("strike", Double.NaN), s.optDouble("call_gex", 0.0), s.optDouble("put_gex", 0.0), s.optDouble("net_gex", 0.0), s.optDouble("call_oi", 0.0), s.optDouble("put_oi", 0.0), s.optDouble("call_volume", 0.0), s.optDouble("put_volume", 0.0)))
                 }
             }
-
             val volatility = summary.optJSONObject("volatility") ?: JSONObject()
             val skew = volatility.optJSONObject("skew_25d") ?: JSONObject()
             val flow = summary.optJSONObject("options_flow") ?: JSONObject()
+            val spot = summary.optJSONObject("price")?.optDouble("mid", g.optDouble("underlying_price", Double.NaN)) ?: g.optDouble("underlying_price", Double.NaN)
             val options = buildList {
                 for (i in 0 until optionArray.length()) {
                     val o = optionArray.optJSONObject(i) ?: continue
                     val strike = o.optDouble("strike", Double.NaN)
                     if (!strike.isFinite()) continue
-                    add(OptionContract(
-                        o.optString("type", ""), o.optString("expiry", ""), strike,
-                        o.optDouble("implied_vol", Double.NaN), o.optDouble("delta", Double.NaN),
-                        o.optDouble("gamma", Double.NaN), o.optDouble("theta", Double.NaN), o.optDouble("vega", Double.NaN),
-                        o.optDouble("open_interest", 0.0), o.optDouble("volume", 0.0),
-                        o.optDouble("svi_vol", Double.NaN)
-                    ))
+                    add(OptionContract(o.optString("type", ""), o.optString("expiry", ""), strike, o.optDouble("implied_vol", Double.NaN), o.optDouble("delta", Double.NaN), o.optDouble("gamma", Double.NaN), o.optDouble("theta", Double.NaN), o.optDouble("vega", Double.NaN), o.optDouble("open_interest", 0.0), o.optDouble("volume", 0.0), o.optDouble("svi_vol", Double.NaN)))
                 }
-            }.sortedBy { abs(it.strike - summary.optJSONObject("price")?.optDouble("mid", g.optDouble("underlying_price", Double.NaN)).orNaN()) }.take(160)
-
-            FlashAlphaSnapshot(
-                symbol = symbol,
-                netGex = g.optDouble("net_gex", Double.NaN),
-                liveGex = g.optDouble("live_net_gex", Double.NaN),
-                gammaFlip = l.optDouble("live_gamma_flip", Double.NaN),
-                regime = g.optString("live_net_gex_label", g.optString("regime", "unknown")),
-                callWall = l.optDouble("live_call_wall", Double.NaN),
-                putWall = l.optDouble("live_put_wall", Double.NaN),
-                zeroDteMagnet = l.optDouble("live_max_pain", Double.NaN),
-                flowDirection = f.optString("flow_direction", f.optString("direction", "")),
-                intradayOiDelta = f.optDouble("intraday_oi_delta", Double.NaN),
-                flowGexPctShift = f.optDouble("flow_gex_pct_shift", Double.NaN),
-                underlyingPrice = summary.optJSONObject("price")?.optDouble("mid", g.optDouble("underlying_price", Double.NaN)) ?: g.optDouble("underlying_price", Double.NaN),
-                strikes = strikes,
-                atmIv = volatility.optDouble("atm_iv", Double.NaN),
-                put25dIv = skew.optDouble("put_25d_iv", Double.NaN),
-                call25dIv = skew.optDouble("call_25d_iv", Double.NaN),
-                skew25d = skew.optDouble("skew_25d", Double.NaN),
-                skew25dPut = skew.optDouble("put_25d_iv", Double.NaN),
-                skew25dCall = skew.optDouble("call_25d_iv", Double.NaN),
-                putCallVolumeRatio = flow.optDouble("pc_ratio_volume", Double.NaN),
-                putCallOiRatio = flow.optDouble("pc_ratio_oi", Double.NaN),
-                totalCallVolume = flow.optDouble("total_call_volume", Double.NaN),
-                totalPutVolume = flow.optDouble("total_put_volume", Double.NaN),
-                totalCallOi = flow.optDouble("total_call_oi", Double.NaN),
-                totalPutOi = flow.optDouble("total_put_oi", Double.NaN),
-                termState = volatility.optJSONObject("iv_term_structure")?.optString("state", "unknown") ?: "unknown",
-                ivDispersionCrossStrike = volatility.optDouble("iv_dispersion_cross_strike", Double.NaN),
-                options = options
-            )
+            }.sortedBy { abs(it.strike - spot) }.take(160)
+            FlashAlphaSnapshot(symbol, g.optDouble("net_gex", Double.NaN), g.optDouble("live_net_gex", Double.NaN), l.optDouble("live_gamma_flip", Double.NaN), g.optString("live_net_gex_label", g.optString("regime", "unknown")), l.optDouble("live_call_wall", Double.NaN), l.optDouble("live_put_wall", Double.NaN), l.optDouble("live_max_pain", Double.NaN), f.optString("flow_direction", f.optString("direction", "")), f.optDouble("intraday_oi_delta", Double.NaN), f.optDouble("flow_gex_pct_shift", Double.NaN), spot, strikes, volatility.optDouble("atm_iv", Double.NaN), skew.optDouble("put_25d_iv", Double.NaN), skew.optDouble("call_25d_iv", Double.NaN), skew.optDouble("skew_25d", Double.NaN), skew.optDouble("put_25d_iv", Double.NaN), skew.optDouble("call_25d_iv", Double.NaN), flow.optDouble("pc_ratio_volume", Double.NaN), flow.optDouble("pc_ratio_oi", Double.NaN), flow.optDouble("total_call_volume", Double.NaN), flow.optDouble("total_put_volume", Double.NaN), flow.optDouble("total_call_oi", Double.NaN), flow.optDouble("total_put_oi", Double.NaN), volatility.optJSONObject("iv_term_structure")?.optString("state", "unknown") ?: "unknown", volatility.optDouble("iv_dispersion_cross_strike", Double.NaN), options)
         }
     }
 }
-
-private fun Double?.orNaN(): Double = this ?: Double.NaN
