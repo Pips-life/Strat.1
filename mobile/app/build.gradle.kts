@@ -18,7 +18,10 @@ android {
         versionCode = releaseProps.getProperty("versionCode").toInt()
         versionName = releaseProps.getProperty("versionName")
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 
