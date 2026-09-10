@@ -104,7 +104,7 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
     private suspend fun requestArray(method: String, url: String, body: String?, token: String): JSONArray = withContext(Dispatchers.IO) {
         val b = Request.Builder().url(url).addHeader("Accept", "application/json").addHeader("auth-token", token)
         if (body == null) b.method(method, null) else b.method(method, body.toRequestBody("application/json".toMediaType()))
-        http.newCall(b.build()).execute().use { r ->
+        http.newCall(b.build()).use { r ->
             val text = r.body?.string().orEmpty()
             if (!r.isSuccessful) throw IllegalStateException(error(text, "MetaApi request failed (${r.code})"))
             JSONArray(text)
@@ -166,10 +166,48 @@ class FlashAlphaClient(private val http: OkHttpClient = OkHttpClient()) {
                     val o = optionArray.optJSONObject(i) ?: continue
                     val strike = o.optDouble("strike", Double.NaN)
                     if (!strike.isFinite()) continue
-                    add(OptionContract(o.optString("type", ""), o.optString("expiry", ""), strike, o.optDouble("implied_vol", Double.NaN), o.optDouble("delta", Double.NaN), o.optDouble("gamma", Double.NaN), o.optDouble("theta", Double.NaN), o.optDouble("vega", Double.NaN), o.optDouble("open_interest", 0.0), o.optDouble("volume", 0.0), o.optDouble("svi_vol", Double.NaN)))
+                    val type = o.optString("type", o.optString("option_type", ""))
+                    val iv = o.optDouble("iv", o.optDouble("implied_vol", Double.NaN))
+                    val oi = o.optDouble("oi", o.optDouble("open_interest", 0.0))
+                    add(OptionContract(type, o.optString("expiry", ""), strike, iv, o.optDouble("delta", Double.NaN), o.optDouble("gamma", Double.NaN), o.optDouble("theta", Double.NaN), o.optDouble("vega", Double.NaN), oi, o.optDouble("volume", 0.0), o.optDouble("svi_vol", Double.NaN)))
                 }
             }.sortedBy { abs(it.strike - spot) }.take(160)
-            FlashAlphaSnapshot(symbol, g.optDouble("net_gex", Double.NaN), g.optDouble("live_net_gex", Double.NaN), l.optDouble("live_gamma_flip", Double.NaN), g.optString("live_net_gex_label", g.optString("regime", "unknown")), l.optDouble("live_call_wall", Double.NaN), l.optDouble("live_put_wall", Double.NaN), l.optDouble("live_max_pain", Double.NaN), f.optString("flow_direction", f.optString("direction", "")), f.optDouble("intraday_oi_delta", Double.NaN), f.optDouble("flow_gex_pct_shift", Double.NaN), spot, strikes, volatility.optDouble("atm_iv", Double.NaN), skew.optDouble("put_25d_iv", Double.NaN), skew.optDouble("call_25d_iv", Double.NaN), skew.optDouble("skew_25d", Double.NaN), skew.optDouble("put_25d_iv", Double.NaN), skew.optDouble("call_25d_iv", Double.NaN), flow.optDouble("pc_ratio_volume", Double.NaN), flow.optDouble("pc_ratio_oi", Double.NaN), flow.optDouble("total_call_volume", Double.NaN), flow.optDouble("total_put_volume", Double.NaN), flow.optDouble("total_call_oi", Double.NaN), flow.optDouble("total_put_oi", Double.NaN), volatility.optJSONObject("iv_term_structure")?.optString("state", "unknown") ?: "unknown", volatility.optDouble("iv_dispersion_cross_strike", Double.NaN), options)
+
+            // FlashAlpha's documented convention: skew_25d = put_25d_iv - call_25d_iv.
+            val put25 = skew.optDouble("put_25d_iv", Double.NaN)
+            val call25 = skew.optDouble("call_25d_iv", Double.NaN)
+            val skew25 = skew.optDouble("skew_25d", if (put25.isFinite() && call25.isFinite()) put25 - call25 else Double.NaN)
+            val term = volatility.optJSONArray("iv_term_structure")?.optJSONObject(0)?.optString("state", "unknown") ?: "unknown"
+            FlashAlphaSnapshot(
+                symbol,
+                g.optDouble("net_gex", Double.NaN),
+                g.optDouble("live_net_gex", Double.NaN),
+                l.optDouble("live_gamma_flip", Double.NaN),
+                g.optString("live_net_gex_label", g.optString("regime", "unknown")),
+                l.optDouble("live_call_wall", Double.NaN),
+                l.optDouble("live_put_wall", Double.NaN),
+                l.optDouble("live_max_pain", Double.NaN),
+                f.optString("flow_direction", f.optString("direction", "")),
+                f.optDouble("intraday_oi_delta", Double.NaN),
+                f.optDouble("flow_gex_pct_shift", Double.NaN),
+                spot,
+                strikes,
+                volatility.optDouble("atm_iv", Double.NaN),
+                put25,
+                call25,
+                skew25,
+                skew.optDouble("skew_25d_put", Double.NaN),
+                skew.optDouble("skew_25d_call", Double.NaN),
+                flow.optDouble("pc_ratio_volume", Double.NaN),
+                flow.optDouble("pc_ratio_oi", Double.NaN),
+                flow.optDouble("total_call_volume", Double.NaN),
+                flow.optDouble("total_put_volume", Double.NaN),
+                flow.optDouble("total_call_oi", Double.NaN),
+                flow.optDouble("total_put_oi", Double.NaN),
+                term,
+                volatility.optDouble("iv_dispersion_cross_strike", Double.NaN),
+                options
+            )
         }
     }
 }
