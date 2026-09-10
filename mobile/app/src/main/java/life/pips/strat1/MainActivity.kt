@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { PipsLifeApp() } }
 }
 
-private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST }
+private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
 @Composable
 private fun PipsLifeApp() {
@@ -46,7 +46,7 @@ private fun PipsLifeApp() {
     var flashData by remember { mutableStateOf<FlashAlphaSnapshot?>(null) }
     var selectedStrategy by remember { mutableStateOf(TradingEngine.StrategyId.STRATEGY_001) }
     var selectedSymbol by remember { mutableStateOf("XAUUSD") }
-    var flashSymbol by remember { mutableStateOf("XAUUSD") }
+    var flashSymbol by remember { mutableStateOf("GC=F") }
     var running by remember { mutableStateOf(false) }
     var armed by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Ready — direct MetaApi + FlashAlpha") }
@@ -61,7 +61,7 @@ private fun PipsLifeApp() {
         }
     }
 
-    LaunchedEffect(account, running, armed, selectedSymbol, flashSymbol, saved) {
+    LaunchedEffect(account, running, armed, selectedSymbol, flashSymbol, saved.flashAlphaKey) {
         val a = account ?: return@LaunchedEffect
         while (true) {
             val now = System.currentTimeMillis()
@@ -69,9 +69,10 @@ private fun PipsLifeApp() {
             meta.refresh(saved.metaApiToken, a, symbols)
                 .onSuccess { s -> snapshot = s; if (!running) status = "MetaApi ${s.account.connectionStatus} • live quote monitor" }
                 .onFailure { if (!running) status = it.message ?: "MetaApi refresh failed" }
-            if (saved.flashAlphaKey.isNotBlank() && (now - lastFlashPull >= 10_000L || flashData == null)) {
+            // Free FlashAlpha is quota constrained. Do not poll every second; keep the adapter ready for the later Growth upgrade.
+            if (saved.flashAlphaKey.isNotBlank() && (flashData == null || now - lastFlashPull >= 2 * 60 * 60 * 1000L)) {
                 lastFlashPull = now
-                flash.snapshot(saved.flashAlphaKey, flashSymbol).onSuccess { flashData = it }.onFailure { if (running) status = it.message ?: "FlashAlpha failed" }
+                flash.snapshot(saved.flashAlphaKey, flashSymbol).onSuccess { flashData = it; status = "FlashAlpha GC=F snapshot received" }.onFailure { if (running) status = it.message ?: "FlashAlpha unavailable" }
             }
             if (running && armed && saved.metaApiToken.isNotBlank()) snapshot?.let { s -> engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it } }
             delay(1000)
@@ -80,15 +81,17 @@ private fun PipsLifeApp() {
 
     MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Panel, primary = Cyan, secondary = Green, error = Red)) {
         Scaffold(containerColor = Bg, bottomBar = {
-            NavigationBar(containerColor = Color(0xFF08111D)) {
-                listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH").forEach { (t, label) ->
-                    NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 8.sp) })
+            NavigationBar(containerColor = Color(0xFF08111D), tonalElevation = 0.dp) {
+                listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH", Tab.UPDATE to "UPDATE").forEach { (t, label) ->
+                    NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 7.sp) })
                 }
             }
         }) { pad ->
             when (tab) {
                 Tab.HOME -> HomeDashboard(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, status, engine, selectedSymbol,
-                    onOpenStrategy = { tab = Tab.STRATEGY }, onStartStop = { running = it; if (!it) armed = false })
+                    onOpenStrategy = { tab = Tab.STRATEGY },
+                    onStartStop = { running = it; if (!it) armed = false },
+                    onMetaApi = { tab = Tab.METAAPI }, onMarkets = { tab = Tab.WATCHLIST }, onAccount = { tab = Tab.METAAPI })
                 Tab.METAAPI -> MetaApiTab(Modifier.padding(pad), saved, account, busy, status,
                     onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } },
                     onConnect = { value ->
@@ -107,16 +110,21 @@ private fun PipsLifeApp() {
                     saved = saved.copy(watchlist = value)
                     scope.launch { context.saveConnection(saved) }
                 }
+                Tab.UPDATE -> LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { Header("App Update", "Release updater — download only when a newer signed release exists") }
+                    item { AppUpdateCard() }
+                    item { CardBlock { Text("CURRENT RELEASE", color = Muted, fontSize = 9.sp); Text("v${BuildConfig.VERSION_NAME} • build ${BuildConfig.VERSION_CODE}", color = TextMain, fontWeight = FontWeight.Bold); Text("Updates install over the existing Pips-life app when the package is signed with the same release key.", color = Muted, fontSize = 9.sp) } }
+                }
             }
         }
     }
 }
 
 @Composable private fun Header(title: String, subtitle: String) {
-    Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 8.dp)) {
-        Text("Pips-life", color = Cyan, fontSize = 25.sp, fontWeight = FontWeight.Black)
-        Text(title, color = TextMain, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        Text(subtitle, color = Muted, fontSize = 11.sp)
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp)) {
+        Text("Pips-life", color = Cyan, fontSize = 23.sp, fontWeight = FontWeight.Black)
+        Text(title, color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(subtitle, color = Muted, fontSize = 9.sp)
     }
 }
 
@@ -126,15 +134,15 @@ private fun PipsLifeApp() {
     var login by remember(saved.login) { mutableStateOf(saved.login) }
     var password by remember(saved.password) { mutableStateOf(saved.password) }
     var server by remember(saved.server) { mutableStateOf(saved.server) }
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
         item { Header("MetaApi Connection", "Direct account provisioning + direct trade API") }
         item { Field("MetaApi auth token", token, { token = it }, true) }
         item { Field("Existing MetaApi account ID (optional)", accountId, { accountId = it }) }
         item { Field("MT5 login", login, { login = it }) }
         item { Field("MT5 password", password, { password = it }, true) }
         item { Field("MT5 server", server, { server = it }) }
-        item { Text("Credentials are encrypted locally with Android Keystore. No Pips-life trading backend is used.", color = Muted, fontSize = 10.sp) }
-        item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { Text("Credentials are encrypted locally with Android Keystore. No Pips-life trading backend is used.", color = Muted, fontSize = 9.sp) }
+        item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { onSave(SavedConnection(token, accountId, login, password, server, saved.flashAlphaKey, saved.watchlist)) }, modifier = Modifier.weight(1f)) { Text("SAVE") }
             Button(enabled = !busy && token.isNotBlank(), onClick = { onConnect(SavedConnection(token, accountId, login, password, server, saved.flashAlphaKey, saved.watchlist)) }, modifier = Modifier.weight(1f)) { Text(if (busy) "CONNECTING…" else "CONNECT") }
         } }
@@ -148,8 +156,8 @@ private fun PipsLifeApp() {
     var menu by remember { mutableStateOf(false) }
     val price = snapshot?.prices?.get(tradeSymbol)?.let { (it.bid + it.ask) / 2.0 }
     val p1 = remember(flash, price) { if (price != null) Strategy001Engine().evaluate(flash, price) else null }
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-        item { Header("Strategy Control", "Shared execution engine • rules remain independent") }
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
+        item { Header("Strategy Control", "Shared execution engine • Strategy 001 and 002 remain independent") }
         item { Box {
             Button(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text(if (selected == TradingEngine.StrategyId.STRATEGY_001) "001 — GEX / QOF DATA ZONES" else "002 — VELOCITY EXPANSION") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -157,39 +165,39 @@ private fun PipsLifeApp() {
                 DropdownMenuItem(text = { Text("002 — VELOCITY EXPANSION") }, onClick = { menu = false; onSelect(TradingEngine.StrategyId.STRATEGY_002) })
             }
         } }
-        item { Text("MetaApi trading symbol: $tradeSymbol", color = Muted, fontSize = 11.sp) }
+        item { Text("MetaApi trading symbol: $tradeSymbol", color = Muted, fontSize = 10.sp) }
         if (selected == TradingEngine.StrategyId.STRATEGY_001) {
             item { Field("FlashAlpha API key", key, { key = it }, true) }
             item { Field("FlashAlpha symbol", symbol, { symbol = it; onFlashSymbol(it) }) }
-            item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { onSave(saved.copy(flashAlphaKey = key)) }, modifier = Modifier.weight(1f)) { Text("SAVE KEY") }
                 Button(onClick = { onRun(!running) }, modifier = Modifier.weight(1f)) { Text(if (running) "STOP" else "START") }
             } }
             if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
-            item { CardBlock { Text("GEX / GREEKS MARKET MAP", color = Muted, fontSize = 10.sp); if (p1 == null) Text("Waiting for live FlashAlpha + MetaApi price", color = Muted) else {
-                Text("${p1.side?.name ?: "WAIT"} • confidence ${p1.confidence}%", color = if (p1.side == null) Muted else Green, fontSize = 20.sp, fontWeight = FontWeight.Black)
-                Text(p1.reason, color = Muted, fontSize = 11.sp)
-                p1.entryZone?.let { Text("ENTRY ${it.kind}: ${number(it.lower)} — ${number(it.upper)} (${it.source})", color = Cyan, fontSize = 11.sp) }
-                p1.exitZone?.let { Text("EXIT ${it.kind}: ${number(it.lower)} — ${number(it.upper)} (${it.source})", color = Purple, fontSize = 11.sp) }
-                p1.invalidation?.let { Text("INVALIDATION: ${number(it)}", color = Red, fontSize = 11.sp) }
+            item { CardBlock { Text("GEX / GREEKS MARKET MAP", color = Muted, fontSize = 9.sp); if (p1 == null) Text("Waiting for live FlashAlpha GC=F + MetaApi XAUUSD price", color = Muted) else {
+                Text("${p1.side?.name ?: "WAIT"} • confidence ${p1.confidence}%", color = if (p1.side == null) Muted else Green, fontSize = 19.sp, fontWeight = FontWeight.Black)
+                Text(p1.reason, color = Muted, fontSize = 10.sp)
+                p1.entryZone?.let { Text("ENTRY ${it.kind}: ${number(it.lower)} — ${number(it.upper)} (${it.source})", color = Cyan, fontSize = 10.sp) }
+                p1.exitZone?.let { Text("EXIT ${it.kind}: ${number(it.lower)} — ${number(it.upper)} (${it.source})", color = Purple, fontSize = 10.sp) }
+                p1.invalidation?.let { Text("INVALIDATION: ${number(it)}", color = Red, fontSize = 10.sp) }
             } } }
-            item { CardBlock { Text("STRATEGY 001 SESSION", color = Muted, fontSize = 10.sp); Text("London + New York only • 08:00–17:00 local session time with DST handled automatically. Outside these sessions the strategy will not enter trades.", color = TextMain, fontSize = 11.sp) } }
+            item { CardBlock { Text("STRATEGY 001 SESSION", color = Muted, fontSize = 9.sp); Text("London + New York sessions only. GEX-derived zones determine entry/exit; no minute-1 candle reversal rule is used.", color = TextMain, fontSize = 10.sp) } }
         } else {
             item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START") } }
             if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
-            item { CardBlock { Text("STRATEGY 002", color = Muted, fontSize = 10.sp); Text("INSTANT VELOCITY EXPANSION", color = Cyan, fontSize = 19.sp, fontWeight = FontWeight.Black); Text("Independent tick-to-tick engine. Uses a 70-pip trailing stop and exits when tick direction reverses. No GEX rules are applied.", color = TextMain, fontSize = 11.sp); Text("Current status: $status", color = Muted, fontSize = 10.sp) } }
+            item { CardBlock { Text("STRATEGY 002", color = Muted, fontSize = 9.sp); Text("INSTANT VELOCITY EXPANSION", color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black); Text("Independent tick-to-tick engine. Uses a 70-pip trailing stop and exits on tick direction reversal. No GEX rules are applied.", color = TextMain, fontSize = 10.sp); Text("Current status: $status", color = Muted, fontSize = 9.sp) } }
         }
     }
 }
 
 @Composable private fun WatchlistTab(modifier: Modifier, saved: SavedConnection, snapshot: MetaSnapshot?, selected: String, onSave: (String) -> Unit) {
     var text by remember(saved.watchlist) { mutableStateOf(saved.watchlist) }
-    LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+    LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
         item { Header("Market Watchlist", "Actual MetaApi symbols — stored locally") }
         item { Field("Comma-separated MetaApi symbols", text, { text = it }) }
         item { Button(onClick = { onSave(text) }, modifier = Modifier.fillMaxWidth()) { Text("SAVE WATCHLIST") } }
-        item { Text("Selected: $selected", color = Cyan, fontWeight = FontWeight.Bold) }
-        snapshot?.prices?.forEach { (symbol, tick) -> item { CardBlock { Text(symbol, color = TextMain, fontWeight = FontWeight.Bold); Text("Bid ${number(tick.bid)} • Ask ${number(tick.ask)} • tick ${tick.time}", color = Muted, fontSize = 11.sp) } } }
+        item { Text("Selected: $selected", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 10.sp) }
+        snapshot?.prices?.forEach { (symbol, tick) -> item { CardBlock { Text(symbol, color = TextMain, fontWeight = FontWeight.Bold); Text("Bid ${number(tick.bid)} • Ask ${number(tick.ask)} • tick ${tick.time}", color = Muted, fontSize = 10.sp) } } }
     }
 }
 
@@ -198,7 +206,7 @@ private fun PipsLifeApp() {
 }
 
 @Composable private fun CardBlock(content: @Composable ColumnScope.() -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp), content = content) }
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth(), shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp), content = content) }
 }
 
 private fun number(value: Double): String = if (value.isFinite()) String.format("%.4f", value) else "—"
