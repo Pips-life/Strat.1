@@ -6,17 +6,21 @@ import cloud.metaapi.sdk.clients.meta_api.models.MetatraderSymbolPrice
 import cloud.metaapi.sdk.meta_api.MetaApi
 import cloud.metaapi.sdk.meta_api.MetaApiConnection
 import cloud.metaapi.sdk.meta_api.MetatraderAccount
-import io.vertx.core.Future
-import io.vertx.core.Vertx
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Direct MetaApi websocket/streaming bridge. */
+/**
+ * Direct MetaApi websocket/streaming bridge.
+ *
+ * The MetaApi Java SDK exposes its asynchronous operations as Java
+ * CompletableFuture instances. Keep this bridge on a dedicated worker so
+ * account connection/synchronization never blocks the Android main thread.
+ */
 class MetaApiStreamingBridge {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
-    private var vertx: Vertx? = null
     private var api: MetaApi? = null
     private var connection: MetaApiConnection? = null
     private var listener: SynchronizationListener? = null
@@ -29,11 +33,18 @@ class MetaApiStreamingBridge {
         onStatus: (String) -> Unit
     ) {
         stop()
+
         if (token.isBlank() || accountId.isBlank()) {
             onStatus("STREAM OFF | MetaApi credentials missing")
             return
         }
-        val requested = symbols.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(20)
+
+        val requested = symbols
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(20)
+
         if (requested.isEmpty()) {
             onStatus("STREAM OFF | watchlist empty")
             return
@@ -43,54 +54,65 @@ class MetaApiStreamingBridge {
         executor.execute {
             try {
                 onStatus("STREAM CONNECTING | MetaApi websocket")
-                val v = Vertx.vertx()
-                vertx = v
-                val metaApi = MetaApi(token, v)
+
+                // SDK 14.x uses the default MetaApi runtime/Vert.x instance.
+                // Passing Vertx directly is not a supported constructor in 14.0.9.
+                val metaApi = MetaApi(token)
                 api = metaApi
 
-                val account: MetatraderAccount = metaApi.getMetatraderAccountApi()
+                val account: MetatraderAccount = metaApi
+                    .getMetatraderAccountApi()
                     .getAccount(accountId)
-                    .toCompletionStage().toCompletableFuture().get()
+                    .join()
 
                 if (!running.get()) return@execute
+
                 onStatus("STREAM WAITING | broker connection")
-                account.waitConnected().toCompletionStage().toCompletableFuture().get()
+                account.waitConnected().join()
                 if (!running.get()) return@execute
 
-                val metaConnection = account.connect()
-                    .toCompletionStage().toCompletableFuture().get()
+                val metaConnection = account.connect().join()
                 connection = metaConnection
 
                 val quoteListener = object : SynchronizationListener() {
                     override fun onSymbolPriceUpdated(
                         instanceIndex: String,
                         price: MetatraderSymbolPrice
-                    ): Future<Void> {
-                        if (running.get() && price.symbol in requested && price.bid.isFinite() && price.ask.isFinite()) {
-                            onTick(
-                                price.symbol,
-                                TickPrice(price.bid, price.ask, System.currentTimeMillis())
-                            )
+                    ): CompletableFuture<Void> {
+                        if (running.get() && requested.contains(price.symbol)) {
+                            val bid = price.bid
+                            val ask = price.ask
+                            if (bid.isFinite() && ask.isFinite()) {
+                                onTick(
+                                    price.symbol,
+                                    TickPrice(bid, ask, System.currentTimeMillis())
+                                )
+                            }
                         }
-                        return Future.succeededFuture()
+                        return CompletableFuture.completedFuture(null)
                     }
                 }
+
                 listener = quoteListener
                 metaConnection.addSynchronizationListener(quoteListener)
 
                 onStatus("STREAM SYNCING | terminal state")
-                metaConnection.waitSynchronized().toCompletionStage().toCompletableFuture().get()
+                metaConnection.waitSynchronized().join()
                 if (!running.get()) return@execute
 
                 requested.forEach { symbol ->
                     metaConnection.subscribeToMarketData(
                         symbol,
                         listOf(MarketDataSubscription().apply { type = "ticks" })
-                    ).toCompletionStage().toCompletableFuture().get()
+                    ).join()
                 }
+
                 onStatus("STREAM LIVE | ${requested.joinToString(", ")}")
             } catch (t: Throwable) {
-                if (running.get()) onStatus("STREAM ERROR | ${t.message ?: t.javaClass.simpleName}")
+                if (running.get()) {
+                    val cause = t.cause ?: t
+                    onStatus("STREAM ERROR | ${cause.message ?: cause.javaClass.simpleName}")
+                }
             }
         }
     }
@@ -104,7 +126,10 @@ class MetaApiStreamingBridge {
         listener = null
         connection = null
         api = null
-        try { vertx?.close() } catch (_: Throwable) { }
-        vertx = null
+    }
+
+    fun close() {
+        stop()
+        executor.shutdownNow()
     }
 }
