@@ -40,7 +40,7 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
         symbols.distinct().take(20).forEach { symbol ->
             if (symbol.isNotBlank()) runCatching {
                 val p = request("GET", "$root/symbols/${URLEncoder.encode(symbol, "UTF-8")}/current-price", null, token)
-                prices[symbol] = TickPrice(p.optDouble("bid", Double.NaN), p.optDouble("ask", Double.NaN), p.optLong("time", 0L))
+                prices[symbol] = TickPrice(p.optDouble("bid", Double.NaN), p.optDouble("ask", Double.NaN), p.optLong("time", System.currentTimeMillis()))
             }
         }
         MetaSnapshot(current, info.optDouble("balance", Double.NaN), info.optDouble("equity", Double.NaN), info.optDouble("freeMargin", Double.NaN), buildList {
@@ -65,7 +65,8 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
 
     private suspend fun trade(token: String, account: MetaAccount, body: JSONObject): Result<TradeReceipt> = runCatching {
         val r = request("POST", "${clientBase(account.region)}/users/current/accounts/${account.id}/trade", body.toString(), token)
-        val code = r.optInt("numericCode", -1); val codeText = r.optString("stringCode")
+        val code = r.optInt("numericCode", -1)
+        val codeText = r.optString("stringCode")
         if (code >= 0 && code != 10009) throw IllegalStateException("MetaApi trade rejected: $codeText ${r.optString("message")}".trim())
         TradeReceipt(code, codeText, r.optString("message"), r.optString("orderId"), r.optString("positionId"))
     }
@@ -88,7 +89,9 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
         val b = Request.Builder().url(url).addHeader("Accept", "application/json").addHeader("auth-token", token)
         if (body == null) b.method(method, null) else b.method(method, body.toRequestBody("application/json".toMediaType()))
         http.newCall(b.build()).execute().use { r ->
-            val text = r.body?.string().orEmpty(); if (!r.isSuccessful) throw IllegalStateException(error(text, "MetaApi request failed (${r.code})")); JSONArray(text)
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) throw IllegalStateException(error(text, "MetaApi request failed (${r.code})"))
+            JSONArray(text)
         }
     }
 
@@ -102,52 +105,31 @@ data class MetaAccount(val id: String, val login: String, val server: String, va
 data class MetaPosition(val id: String, val symbol: String, val type: String, val volume: Double, val openPrice: Double, val currentPrice: Double, val profit: Double, val stopLoss: Double, val takeProfit: Double)
 data class MetaSnapshot(val account: MetaAccount, val balance: Double, val equity: Double, val freeMargin: Double, val positions: List<MetaPosition>, val prices: Map<String, TickPrice>)
 data class GexStrike(val strike: Double, val callGex: Double, val putGex: Double, val netGex: Double, val callOi: Double, val putOi: Double, val callVolume: Double, val putVolume: Double)
-data class FlashAlphaSnapshot(
-    val symbol: String,
-    val netGex: Double,
-    val liveGex: Double,
-    val gammaFlip: Double,
-    val regime: String,
-    val callWall: Double,
-    val putWall: Double,
-    val zeroDteMagnet: Double,
-    val flowDirection: String,
-    val intradayOiDelta: Double,
-    val flowGexPctShift: Double,
-    val underlyingPrice: Double,
-    val strikes: List<GexStrike>
-)
+data class FlashAlphaSnapshot(val symbol: String, val netGex: Double, val liveGex: Double, val gammaFlip: Double, val regime: String, val callWall: Double, val putWall: Double, val zeroDteMagnet: Double, val flowDirection: String, val intradayOiDelta: Double, val flowGexPctShift: Double, val underlyingPrice: Double, val strikes: List<GexStrike>)
 
 class FlashAlphaClient(private val http: OkHttpClient = OkHttpClient()) {
-    suspend fun snapshot(apiKey: String, symbol: String): Result<FlashAlphaSnapshot> = runCatching { withContext(Dispatchers.IO) {
-        fun get(path: String): JSONObject {
-            val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()
-            http.newCall(q).execute().use { r -> val text = r.body?.string().orEmpty(); if (!r.isSuccessful) throw IllegalStateException("FlashAlpha ${r.code}: ${r.message}"); return@use JSONObject(text) }
-        }
-        val g = get("/v1/flow/gex/${URLEncoder.encode(symbol, "UTF-8")}")
-        val l = get("/v1/flow/levels/${URLEncoder.encode(symbol, "UTF-8")}")
-        val f = get("/v1/flow/summary/${URLEncoder.encode(symbol, "UTF-8")}")
-        val strikes = buildList {
-            val a = g.optJSONArray("strikes") ?: JSONArray()
-            for (i in 0 until a.length()) {
-                val s = a.optJSONObject(i) ?: continue
-                add(GexStrike(s.optDouble("strike", Double.NaN), s.optDouble("call_gex", 0.0), s.optDouble("put_gex", 0.0), s.optDouble("net_gex", 0.0), s.optDouble("call_oi", 0.0), s.optDouble("put_oi", 0.0), s.optDouble("call_volume", 0.0), s.optDouble("put_volume", 0.0)))
+    suspend fun snapshot(apiKey: String, symbol: String): Result<FlashAlphaSnapshot> = runCatching {
+        withContext(Dispatchers.IO) {
+            fun get(path: String): JSONObject {
+                val q = Request.Builder().url("$FLASHALPHA_BASE$path").addHeader("X-Api-Key", apiKey).addHeader("Accept", "application/json").get().build()
+                return http.newCall(q).execute().use { r ->
+                    val text = r.body?.string().orEmpty()
+                    if (!r.isSuccessful) throw IllegalStateException("FlashAlpha ${r.code}: ${r.message}")
+                    JSONObject(text)
+                }
             }
+            val encoded = URLEncoder.encode(symbol, "UTF-8")
+            val g = get("/v1/flow/gex/$encoded")
+            val l = get("/v1/flow/levels/$encoded")
+            val f = get("/v1/flow/summary/$encoded")
+            val strikes = buildList {
+                val a = g.optJSONArray("strikes") ?: JSONArray()
+                for (i in 0 until a.length()) {
+                    val s = a.optJSONObject(i) ?: continue
+                    add(GexStrike(s.optDouble("strike", Double.NaN), s.optDouble("call_gex", 0.0), s.optDouble("put_gex", 0.0), s.optDouble("net_gex", 0.0), s.optDouble("call_oi", 0.0), s.optDouble("put_oi", 0.0), s.optDouble("call_volume", 0.0), s.optDouble("put_volume", 0.0)))
+                }
+            }
+            FlashAlphaSnapshot(symbol, g.optDouble("net_gex", Double.NaN), g.optDouble("live_net_gex", Double.NaN), l.optDouble("live_gamma_flip", Double.NaN), g.optString("live_net_gex_label", g.optString("regime", "unknown")), l.optDouble("live_call_wall", Double.NaN), l.optDouble("live_put_wall", Double.NaN), l.optDouble("live_max_pain", Double.NaN), f.optString("flow_direction", f.optString("direction", "")), f.optDouble("intraday_oi_delta", Double.NaN), f.optDouble("flow_gex_pct_shift", Double.NaN), g.optDouble("underlying_price", Double.NaN), strikes)
         }
-        FlashAlphaSnapshot(
-            symbol,
-            g.optDouble("net_gex", Double.NaN),
-            g.optDouble("live_net_gex", Double.NaN),
-            l.optDouble("live_gamma_flip", g.optDouble("live_gamma_flip", Double.NaN)),
-            g.optString("live_net_gex_label", g.optString("regime", "unknown")),
-            l.optDouble("live_call_wall", Double.NaN),
-            l.optDouble("live_put_wall", Double.NaN),
-            l.optDouble("live_max_pain", Double.NaN),
-            f.optString("flow_direction", f.optString("direction", "")),
-            f.optDouble("intraday_oi_delta", Double.NaN),
-            f.optDouble("flow_gex_pct_shift", Double.NaN),
-            g.optDouble("underlying_price", Double.NaN),
-            strikes
-        )
-    } }
+    }
 }
