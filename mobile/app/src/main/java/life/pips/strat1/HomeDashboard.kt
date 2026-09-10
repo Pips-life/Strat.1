@@ -1,7 +1,6 @@
 package life.pips.strat1
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,7 +20,6 @@ import kotlin.math.abs
 private val Bg = Color(0xFF030B15)
 private val Panel = Color(0xFF071727)
 private val Panel2 = Color(0xFF0A1D31)
-private val Line = Color(0xFF16466A)
 private val Text = Color(0xFFF3F7FF)
 private val Muted = Color(0xFF91A8C5)
 private val Cyan = Color(0xFF23D8FF)
@@ -35,9 +33,7 @@ fun HomeDashboard(
     account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?,
     strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, status: String,
     engine: TradingEngine, selectedSymbol: String,
-    onSelectStrategy: (TradingEngine.StrategyId) -> Unit = {},
-    onOpenStrategy: () -> Unit, onStartStop: (Boolean) -> Unit,
-    onMetaApi: () -> Unit = {}, onMarkets: () -> Unit = {}, onAccount: () -> Unit = {}
+    onStartStop: (Boolean) -> Unit
 ) {
     val tick = snapshot?.prices?.get(selectedSymbol)
     val price = tick?.let { (it.bid + it.ask) / 2.0 }
@@ -149,7 +145,7 @@ private fun ksh(value: Double?): String = value?.takeIf { it.isFinite() }?.let {
 @Composable private fun RowScope.Cell(value: String, strong: Boolean) { Text(value, color = if (strong) Green else Text, fontSize = 8.sp, fontWeight = if (strong) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f), textAlign = TextAlign.Center) }
 @Composable private fun GreekBars(best: StrikeView?) { val vals = listOf(best?.gamma ?: Double.NaN,best?.delta ?: Double.NaN,best?.vega ?: Double.NaN,best?.theta ?: Double.NaN,best?.skew ?: Double.NaN,best?.oi ?: Double.NaN); val labels = listOf("Γ","Δ","V","Θ","S","OI"); val finite = vals.filter { it.isFinite() }; val scale = (finite.maxOfOrNull { abs(it) } ?: 1.0).coerceAtLeast(1.0); Row(Modifier.fillMaxWidth().height(62.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.SpaceEvenly) { vals.forEachIndexed { i,v -> val h = if (v.isFinite()) (8 + abs(v)/scale*38).toFloat() else 7f; Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) { Box(Modifier.width(13.dp).height(h.dp).background(if(i<2) Green else if(i<4) Cyan else Purple, RoundedCornerShape(2.dp))); Text(labels[i], color=Muted, fontSize=6.sp) } } } }
 @Composable private fun Level(name: String, value: Double?) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(name, color = Muted, fontSize = 7.sp); Text(value?.takeIf { it.isFinite() }?.let { fmt(it,2) } ?: "—", color = Text, fontSize = 8.sp, fontWeight = FontWeight.Bold) } }
-@Composable private fun FlowTable(options: List<StrikeView>) { Column { Row(Modifier.fillMaxWidth().padding(vertical=4.dp)) { listOf("STRIKE","CALL OI","PUT OI","CALL IV","PUT IV","NET FLOW").forEach { Text(it, color=Cyan, fontSize=6.sp, modifier=Modifier.weight(1f), textAlign=TextAlign.Center) } }; options.take(4).forEach { r -> Row(Modifier.fillMaxWidth().padding(vertical=2.dp)) { listOf(fmt(r.strike,2),fmt(r.oi*.67,0),fmt(r.oi*.33,0),"—","—","—").forEach { Text(it,color=Text,fontSize=7.sp,modifier=Modifier.weight(1f),textAlign=TextAlign.Center) } } } } }
-private fun strategyLabel(strategy: TradingEngine.StrategyId) = when (strategy) { TradingEngine.StrategyId.STRATEGY_001 -> "STRATEGY 001"; TradingEngine.StrategyId.STRATEGY_002 -> "STRATEGY 002"; TradingEngine.StrategyId.STRATEGY_003 -> "STRATEGY 003" }
+@Composable private fun FlowTable(options: List<StrikeView>) { Column { Row(Modifier.fillMaxWidth().padding(vertical=4.dp)) { listOf("STRIKE","CALL OI","PUT OI","CALL IV","PUT IV","NET FLOW").forEach { Text(it, color=Cyan, fontSize=6.sp, modifier=Modifier.weight(1f), textAlign=TextAlign.Center) }; options.take(4).forEach { r -> Row(Modifier.fillMaxWidth().padding(vertical=2.dp)) { listOf(fmt(r.strike,2),fmt(r.oi*.67,0),fmt(r.oi*.33,0),"—","—","—").forEach { Text(it,color=Text,fontSize=7.sp,modifier=Modifier.weight(1f),textAlign=TextAlign.Center) } } } } }
+private fun strategyLabel(strategy: TradingEngine.StrategyId) = when (strategy) { TradingEngine.StrategyId.STRATEGY_001 -> "S001 • GEX"; TradingEngine.StrategyId.STRATEGY_002 -> "S002 • VELOCITY"; TradingEngine.StrategyId.STRATEGY_003 -> "S003 • SMC" }
 private data class StrikeView(val strike: Double,val gamma: Double,val delta: Double,val vega: Double,val theta: Double,val skew: Double,val oi: Double)
 private fun fmt(v: Double, digits: Int): String = if (v.isFinite()) String.format("%.${digits}f", v) else "—"
