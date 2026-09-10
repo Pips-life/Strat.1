@@ -28,6 +28,7 @@ class FlashAlphaClient:
         self.base_url = os.getenv("FLASHALPHA_BASE_URL", "https://lab.flashalpha.com").rstrip("/")
         self.timeout = max(0.5, float(os.getenv("FLASHALPHA_TIMEOUT_SECONDS", "2.5")))
         self.cache_ttl = max(0.0, float(os.getenv("FLASHALPHA_CACHE_TTL_SECONDS", "5")))
+        self.use_flow_signal = os.getenv("FLASHALPHA_USE_FLOW_SIGNAL", "true").strip().lower() == "true"
         self.cache: dict[str, _CacheEntry] = {}
 
     @property
@@ -64,15 +65,17 @@ class FlashAlphaClient:
         gex = self._get(f"/v1/exposure/gex/{encoded}") or {}
         levels_response = self._get(f"/v1/exposure/levels/{encoded}") or {}
         flow = self._get(f"/v1/flow/summary/{encoded}") or {}
+        flow_signal = self._get(f"/v1/strategies/flow-anomaly/{encoded}") if self.use_flow_signal else None
+        flow_signal = flow_signal or {}
         levels = levels_response.get("levels") if isinstance(levels_response.get("levels"), dict) else {}
 
-        if not gex and not levels and not flow:
+        if not gex and not levels and not flow and not flow_signal:
             return None
 
         value = {
             "symbol": symbol,
-            "as_of": flow.get("as_of") or gex.get("as_of") or levels_response.get("as_of"),
-            "underlying_price": flow.get("underlying_price") or gex.get("underlying_price") or levels_response.get("underlying_price"),
+            "as_of": flow.get("as_of") or gex.get("as_of") or levels_response.get("as_of") or flow_signal.get("timestamp"),
+            "underlying_price": flow.get("underlying_price") or gex.get("underlying_price") or levels_response.get("underlying_price") or (flow_signal.get("metrics") or {}).get("underlying_price"),
             "net_gex": gex.get("net_gex"),
             "live_gex": flow.get("live_gex"),
             "gamma_flip": gex.get("gamma_flip") if gex.get("gamma_flip") is not None else levels.get("gamma_flip"),
@@ -83,6 +86,15 @@ class FlashAlphaClient:
             "flow_direction": flow.get("flow_direction"),
             "intraday_oi_delta": flow.get("intraday_oi_delta"),
             "flow_gex_pct_shift": flow.get("flow_gex_pct_shift"),
+            "flow_signal": {
+                "decision": flow_signal.get("decision"),
+                "score": flow_signal.get("score"),
+                "confidence": flow_signal.get("confidence"),
+                "regime": flow_signal.get("regime"),
+                "data_quality": flow_signal.get("data_quality"),
+                "why": flow_signal.get("why"),
+                "risk_flags": flow_signal.get("risk_flags"),
+            } if flow_signal else None,
         }
         self.cache[symbol] = _CacheEntry(now + self.cache_ttl, value)
         return value
