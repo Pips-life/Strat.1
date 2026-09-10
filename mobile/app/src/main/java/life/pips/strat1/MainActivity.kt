@@ -1,5 +1,7 @@
 package life.pips.strat1
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,11 +27,17 @@ private val Cyan = Color(0xFF27D8FF)
 private val Green = Color(0xFF43F28E)
 private val Red = Color(0xFFFF5872)
 private val Purple = Color(0xFFB36BFF)
+private const val LATEST_APK = "https://github.com/Pips-life/Strat.1/releases/latest/download/pips-life-latest.apk"
+private const val LATEST_RELEASE = "https://github.com/Pips-life/Strat.1/releases/latest"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { PipsLifeApp() }
+    }
+
+    fun openUpdate() {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(LATEST_APK)))
     }
 }
 
@@ -38,6 +46,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, ACTIVITY }
 @Composable
 private fun PipsLifeApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? MainActivity
     val scope = rememberCoroutineScope()
     val meta = remember { DirectMetaApiClient() }
     val flash = remember { FlashAlphaClient() }
@@ -84,9 +93,7 @@ private fun PipsLifeApp() {
             }
 
             if (running && armed && saved.metaApiToken.isNotBlank()) {
-                snapshot?.let { s ->
-                    engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it }
-                }
+                snapshot?.let { s -> engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it } }
             }
             delay(1000)
         }
@@ -101,29 +108,26 @@ private fun PipsLifeApp() {
             }
         }) { pad ->
             when (tab) {
-                Tab.HOME -> Home(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed) { tab = Tab.STRATEGY }
+                Tab.HOME -> Home(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed,
+                    onOpenStrategy = { tab = Tab.STRATEGY }, onStartStop = { running = it; if (!it) armed = false }, onUpdate = { activity?.openUpdate() })
                 Tab.METAAPI -> MetaApiTab(Modifier.padding(pad), saved, account, busy, status,
                     onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } },
                     onConnect = { value ->
                         busy = true
                         scope.launch {
-                            val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId)
-                            else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server)
+                            val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId) else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server)
                             result.onSuccess { a2 -> account = a2; saved = value.copy(accountId = a2.id); context.saveConnection(saved); status = "CONNECTED — ${a2.login} / ${a2.server}" }
                                 .onFailure { status = it.message ?: "Connection failed" }
                             busy = false
                         }
                     })
                 Tab.STRATEGY -> StrategyTab(Modifier.padding(pad), saved, account, snapshot, flashData, selectedSymbol, flashSymbol, selectedStrategy, running, armed, status,
-                    onSelect = { selectedStrategy = it; running = false; armed = false },
-                    onFlashSymbol = { flashSymbol = it },
+                    onSelect = { selectedStrategy = it; running = false; armed = false }, onFlashSymbol = { flashSymbol = it },
                     onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } },
-                    onRun = { running = it; if (!it) armed = false },
-                    onArm = { armed = it })
+                    onRun = { running = it; if (!it) armed = false }, onArm = { armed = it })
                 Tab.WATCHLIST -> WatchlistTab(Modifier.padding(pad), saved, snapshot, selectedSymbol) { value ->
                     selectedSymbol = value.split(',').firstOrNull()?.trim().orEmpty().ifBlank { selectedSymbol }
-                    saved = saved.copy(watchlist = value)
-                    scope.launch { context.saveConnection(saved) }
+                    saved = saved.copy(watchlist = value); scope.launch { context.saveConnection(saved) }
                 }
                 Tab.ACTIVITY -> ActivityTab(Modifier.padding(pad), status, account, selectedStrategy, running, armed, flashData, snapshot, selectedSymbol, engine)
             }
@@ -139,15 +143,19 @@ private fun PipsLifeApp() {
     }
 }
 
-@Composable private fun Home(modifier: Modifier, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, openStrategy: () -> Unit) {
+@Composable private fun Home(modifier: Modifier, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, strategy: TradingEngine.StrategyId, running: Boolean, armed: Boolean, onOpenStrategy: () -> Unit, onStartStop: (Boolean) -> Unit, onUpdate: () -> Unit) {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { Header("Command Center", "Live broker monitor • independent strategy modules") }
+        item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = onUpdate) { Text("↓ UPDATE APP", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+        } }
         item { CardBlock { Text("CONNECTION", color = Muted, fontSize = 10.sp); Text(if (account == null) "NOT CONNECTED" else "METAAPI • ${account.connectionStatus}", color = if (account == null) Red else Green, fontWeight = FontWeight.Bold) } }
         item { CardBlock {
             Text("SELECTED STRATEGY", color = Muted, fontSize = 10.sp)
             Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "001 — GEX / QOF DATA ZONES" else "002 — VELOCITY EXPANSION", color = Cyan, fontSize = 18.sp, fontWeight = FontWeight.Black)
             Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "Live price → FlashAlpha zones → confluence → execution → management. London + New York only." else "Live tick-to-tick velocity drives direction and a 70-pip trailing stop.", color = Muted, fontSize = 11.sp)
-            Button(onClick = openStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }
+            Button(onClick = onOpenStrategy, modifier = Modifier.fillMaxWidth()) { Text("OPEN STRATEGY SELECTOR") }
+            Button(onClick = { onStartStop(!running) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (running) Red else Green)) { Text(if (running) "STOP BOT" else "START BOT") }
             Text(if (!running) "STOPPED" else if (armed) "LIVE TRADING ARMED" else "MONITORING", color = if (armed) Red else Cyan, fontWeight = FontWeight.Bold)
         } }
         item { CardBlock { Text("EQUITY", color = Muted, fontSize = 10.sp); Text(money(snapshot?.equity), color = TextMain, fontSize = 29.sp, fontWeight = FontWeight.Black); Text("Balance ${money(snapshot?.balance)} • Free margin ${money(snapshot?.freeMargin)}", color = Muted, fontSize = 11.sp) } }
@@ -224,15 +232,7 @@ private fun PipsLifeApp() {
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         item { Header("Activity", "Live strategy state") }
         item { CardBlock { Text("ENGINE", color = Muted, fontSize = 10.sp); Text("${if (strategy == TradingEngine.StrategyId.STRATEGY_001) "STRATEGY 001" else "STRATEGY 002"} • ${if (running) "RUNNING" else "STOPPED"}", color = if (armed) Red else Cyan, fontWeight = FontWeight.Black); Text(if (armed) "LIVE EXECUTION ARMED" else "Monitoring only", color = Muted) } }
-        if (view != null) item { CardBlock {
-            Text("LIVE DECISION", color = Muted, fontSize = 10.sp)
-            Text("${view.phase} • ${view.session}", color = if (view.side == null) Cyan else Green, fontWeight = FontWeight.Black, fontSize = 17.sp)
-            Text("Symbol $symbol • Direction ${view.side?.name ?: "WAIT"} • Confluence ${view.confidence}%", color = TextMain, fontSize = 12.sp)
-            Text("Entry zone: ${view.entry?.let(::number) ?: "—"}", color = Cyan, fontSize = 11.sp)
-            Text("Exit level: ${view.exit?.let(::number) ?: "—"}", color = Purple, fontSize = 11.sp)
-            Text("Stop / invalidation: ${view.stop?.let(::number) ?: "—"}", color = Red, fontSize = 11.sp)
-            Text(view.confluence, color = Muted, fontSize = 10.sp)
-        } }
+        if (view != null) item { CardBlock { Text("LIVE DECISION", color = Muted, fontSize = 10.sp); Text("${view.phase} • ${view.session}", color = if (view.side == null) Cyan else Green, fontWeight = FontWeight.Black, fontSize = 17.sp); Text("Symbol $symbol • Direction ${view.side?.name ?: "WAIT"} • Confluence ${view.confidence}%", color = TextMain, fontSize = 12.sp); Text("Entry zone: ${view.entry?.let(::number) ?: "—"}", color = Cyan, fontSize = 11.sp); Text("Exit level: ${view.exit?.let(::number) ?: "—"}", color = Purple, fontSize = 11.sp); Text("Stop / invalidation: ${view.stop?.let(::number) ?: "—"}", color = Red, fontSize = 11.sp); Text(view.confluence, color = Muted, fontSize = 10.sp) } }
         item { CardBlock { Text("LATEST EXECUTION EVENT", color = Muted, fontSize = 10.sp); Text(status, color = TextMain, fontSize = 12.sp) } }
         item { CardBlock { Text("DATA PIPELINE", color = Muted, fontSize = 10.sp); Text("MetaApi: ${account?.connectionStatus ?: "not connected"}", color = TextMain); Text("Broker price: ${price?.let(::number) ?: "—"}", color = Muted); Text("FlashAlpha: ${flash?.symbol ?: "not configured"}", color = Muted); Text("Pipeline: live broker price → zones → confluence → execution → management → exit", color = Muted, fontSize = 10.sp) } }
     }
@@ -242,7 +242,9 @@ private fun PipsLifeApp() {
     OutlinedTextField(value = value, onValueChange = onValue, label = { Text(label) }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None)
 }
 
-@Composable private fun CardBlock(content: @Composable ColumnScope.() -> Unit) { Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp), content = content) } }
+@Composable private fun CardBlock(content: @Composable ColumnScope.() -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp), content = content) }
+}
 
 private fun number(value: Double): String = if (value.isFinite()) String.format("%.4f", value) else "—"
 private fun money(value: Double?): String = value?.let { if (it.isFinite()) String.format("%.2f", it) else "—" } ?: "—"
