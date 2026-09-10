@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- UI release marker for the compact dashboard build. Trading logic is unchanged. -->
+    <string name="ui_release_track" translatable="false">0.2.69</string>
+</resources>
