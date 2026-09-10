@@ -24,15 +24,15 @@ def test_velocity_expansion_detects_direction_and_immediate_entry():
     signal = strategy.generate_signal(analysis)
     assert signal.action == "BUY"
     assert signal.entry == 101.0
-    assert signal.stop_loss == 100.0  # 100 pips at pip_size=0.01
+    assert signal.stop_loss == 100.3  # 70 pips at pip_size=0.01
     assert signal.metadata["opposite_stop_side"] == "SELL"
 
 
 def test_velocity_expansion_sizes_from_balance_and_tick_value():
     strategy = Strategy002()
-    # $1,000 balance, 1% risk = $10. A $1.00 stop is 100 ticks at $0.10/tick/lot.
+    # $1,000 balance, 1% risk = $10. A $0.70 stop is 70 ticks at $0.10/tick/lot.
     qty = strategy.calculate_quantity(balance=1000, entry=3000, tick_size=0.01, tick_value=0.10)
-    assert qty == 1.0
+    assert qty == 1.42
 
 
 def test_controller_keeps_one_opposite_stop_and_reverses_on_trigger():
@@ -47,18 +47,18 @@ def test_controller_keeps_one_opposite_stop_and_reverses_on_trigger():
     assert len(execution.positions()) == 1
     pair = controller.pairs["XAUUSD"]
     assert pair.position_side == "BUY"
-    assert pair.stop_price == 100.0
+    assert pair.stop_price == 100.3
 
-    # Price rises: SELL STOP trails from 100.00 to 100.50.
+    # Price rises: SELL STOP trails from 100.30 to 100.80 using the 70-pip distance.
     controller.on_bar("XAUUSD", datetime(2026, 1, 1, 12, 0, 1), 101.6, 101.4, 101.5)
-    assert controller.pairs["XAUUSD"].stop_price == 100.5
+    assert controller.pairs["XAUUSD"].stop_price == 100.8
 
     # Price reverses through the paired stop. The source BUY is closed and a
-    # SELL becomes the new running position with a fresh BUY STOP 100 pips above.
+    # SELL becomes the new running position with a fresh BUY STOP 70 pips above.
     fills = controller.on_bar("XAUUSD", datetime(2026, 1, 1, 12, 0, 2), 100.6, 100.4, 100.5)
     assert any(fill.order_id.startswith("VEL2-STOP-") for fill in fills)
     positions = execution.positions()
     assert len(positions) == 1
     assert positions[0].side == "SELL"
     assert controller.pairs["XAUUSD"].position_side == "SELL"
-    assert controller.pairs["XAUUSD"].stop_price == 101.5
+    assert controller.pairs["XAUUSD"].stop_price == 101.2
