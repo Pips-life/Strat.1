@@ -10,14 +10,15 @@ import kotlin.math.max
 /**
  * Strategy 001 only.
  *
- * Entries/exits are derived from the options-flow/GEX market map. No 1-minute
- * candle reversal is used to decide an entry or an exit. Candles belong to
- * other strategies and are deliberately not part of this engine's inputs.
+ * QOF/GEX chain:
+ * FlashAlpha flow + GEX data -> market map -> directional confluence ->
+ * entry zone -> opposing data-derived target -> broker TP/SL -> local
+ * position monitoring. No 1-minute candle reversal logic is used here.
  */
 class Strategy001Engine {
     data class Zone(val kind: Kind, val lower: Double, val upper: Double, val center: Double, val strength: Double, val source: String) {
         enum class Kind { SUPPORT, RESISTANCE }
-        fun contains(price: Double): Boolean = price >= lower && price <= upper
+        fun contains(price: Double): Boolean = price.isFinite() && price >= lower && price <= upper
     }
 
     data class Plan(
@@ -34,12 +35,14 @@ class Strategy001Engine {
 
     fun buildMarketMap(f: FlashAlphaSnapshot, price: Double): List<Zone> {
         val points = mutableListOf<Zone>()
-        val sorted = f.strikes.filter { it.strike.isFinite() }.sortedBy { it.strike }
-        val spacing = medianSpacing(sorted).coerceAtLeast(price * 0.0001)
+        val sorted = f.strikes.filter { it.strike.isFinite() && it.strike > 0.0 }.sortedBy { it.strike }
+        val spacing = medianSpacing(sorted).coerceAtLeast(price.coerceAtLeast(1.0) * 0.0001)
         val halfWidth = spacing * 0.50
 
         fun add(center: Double, kind: Zone.Kind, strength: Double, source: String) {
-            if (center.isFinite() && center > 0.0) points += Zone(kind, center - halfWidth, center + halfWidth, center, strength.coerceIn(0.0, 100.0), source)
+            if (center.isFinite() && center > 0.0) {
+                points += Zone(kind, center - halfWidth, center + halfWidth, center, strength.coerceIn(0.0, 100.0), source)
+            }
         }
 
         if (f.putWall.isFinite()) add(f.putWall, Zone.Kind.SUPPORT, 100.0, "LIVE_PUT_WALL")
@@ -54,13 +57,14 @@ class Strategy001Engine {
         }
 
         val strongest = sorted.sortedByDescending { abs(it.netGex) }.take(8)
+        val maxAbsGex = strongest.maxOfOrNull { abs(it.netGex) }?.coerceAtLeast(1.0) ?: 1.0
         strongest.forEach { s ->
             val kind = when {
                 s.strike < price -> Zone.Kind.SUPPORT
                 s.strike > price -> Zone.Kind.RESISTANCE
-                else -> if (s.netGex >= 0) Zone.Kind.SUPPORT else Zone.Kind.RESISTANCE
+                else -> if (s.netGex >= 0.0) Zone.Kind.SUPPORT else Zone.Kind.RESISTANCE
             }
-            val strength = (50.0 + 50.0 * abs(s.netGex) / max(1.0, abs(strongest.maxOfOrNull { it.netGex } ?: 1.0))).coerceIn(50.0, 95.0)
+            val strength = (50.0 + 45.0 * abs(s.netGex) / maxAbsGex).coerceIn(50.0, 95.0)
             add(s.strike, kind, strength, "GEX_STRIKE")
         }
         return points.distinctBy { "${it.kind}:${"%.5f".format(it.center)}" }.sortedBy { it.center }
@@ -87,33 +91,45 @@ class Strategy001Engine {
             shortScore >= 70 && shortScore >= longScore + 8 -> TradeSide.SELL
             else -> null
         }
-        if (side == null) return Plan(null, max(longScore, shortScore), null, null, null, "GEX zones exist, but Strategy 001 directional confluence is not strong enough.", zones)
+        if (side == null) return Plan(null, max(longScore, shortScore), null, null, null, "GEX/QOF zones exist, but directional confluence is not strong enough.", zones)
 
         val entry = if (side == TradeSide.BUY) support else resistance
         val target = if (side == TradeSide.BUY) resistance else support
         if (entry == null || target == null) return Plan(null, max(longScore, shortScore), entry, target, null, "Strategy 001 requires both a data-derived entry zone and opposing exit zone.", zones)
+
         val invalidation = if (side == TradeSide.BUY) entry.lower else entry.upper
         val score = if (side == TradeSide.BUY) longScore else shortScore
-        val reason = if (side == TradeSide.BUY) "GEX support entry zone → opposing GEX resistance exit zone." else "GEX resistance entry zone → opposing GEX support exit zone."
+        val reason = if (side == TradeSide.BUY) {
+            "QOF/GEX support entry -> opposing resistance target."
+        } else {
+            "QOF/GEX resistance entry -> opposing support target."
+        }
         return Plan(side, score, entry, target, invalidation, reason, zones)
     }
 
-    fun entryAllowed(plan: Plan, price: Double): Boolean = plan.side != null && plan.entryZone?.contains(price) == true
+    fun entryAllowed(plan: Plan, price: Double): Boolean =
+        plan.side != null && plan.entryZone != null && plan.exitZone != null && plan.entryZone.contains(price)
 
     fun exitDecision(plan: Plan, position: MetaPosition, price: Double): ExitDecision {
         val side = positionSide(position) ?: return ExitDecision(false, "Unknown position side")
-        val target = plan.exitZone
-        val invalidation = plan.invalidation
-        if (target != null && ((side == TradeSide.BUY && price >= target.lower) || (side == TradeSide.SELL && price <= target.upper))) {
-            return ExitDecision(true, "Strategy 001 data-derived exit zone reached (${target.source}).")
+        if (!price.isFinite()) return ExitDecision(false, "Waiting for valid live price")
+
+        // Once a trade exists, its broker TP/SL is the authoritative trade plan.
+        // This prevents a moving GEX map from silently moving the target underneath
+        // an already-open position.
+        val target = position.takeProfit.takeIf { it.isFinite() && it > 0.0 } ?: plan.exitZone?.center
+        val stop = position.stopLoss.takeIf { it.isFinite() && it > 0.0 } ?: plan.invalidation
+
+        if (target != null && ((side == TradeSide.BUY && price >= target) || (side == TradeSide.SELL && price <= target))) {
+            return ExitDecision(true, "QOF/GEX take-profit reached at ${format(target)}.")
         }
-        if (invalidation != null && ((side == TradeSide.BUY && price <= invalidation) || (side == TradeSide.SELL && price >= invalidation))) {
-            return ExitDecision(true, "Strategy 001 data-derived entry-zone invalidation reached.")
+        if (stop != null && ((side == TradeSide.BUY && price <= stop) || (side == TradeSide.SELL && price >= stop))) {
+            return ExitDecision(true, "QOF/GEX invalidation/stop reached at ${format(stop)}.")
         }
         if (plan.side != null && plan.side != side && plan.confidence >= 70) {
-            return ExitDecision(true, "Strategy 001 GEX/flow map has changed to the opposite directional setup.")
+            return ExitDecision(true, "QOF/GEX map changed to a high-confidence opposite setup.")
         }
-        return ExitDecision(false, "Position remains inside the Strategy 001 data-derived plan.")
+        return ExitDecision(false, "Position remains active toward its fixed QOF/GEX target.")
     }
 
     fun positionSide(p: MetaPosition): TradeSide? = when {
@@ -131,7 +147,7 @@ class Strategy001Engine {
         val zone = if (long) support else resistance
         if (zone != null) {
             val distance = abs(price - zone.center)
-            val width = max(abs(zone.upper - zone.lower), price * 0.0001)
+            val width = max(abs(zone.upper - zone.lower), price.coerceAtLeast(1.0) * 0.0001)
             if (distance <= width * 2.0) s += 10
         }
         return s.coerceIn(0, 100)
@@ -142,4 +158,6 @@ class Strategy001Engine {
         if (diffs.isEmpty()) return 1.0
         return diffs[diffs.size / 2]
     }
+
+    private fun format(value: Double): String = "%.5f".format(value)
 }
