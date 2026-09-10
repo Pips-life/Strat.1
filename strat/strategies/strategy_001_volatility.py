@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 from strat.confluence import ConfluenceConfig, ConfluenceEngine
 from strat.intelligence import build_volatility_snapshot
+from strat.intelligence.flashalpha import enrich_market
+from strat.intelligence.greeks import gamma_regime
 from .strategy_001 import Strategy001 as BaseStrategy001
 
 
@@ -31,7 +33,7 @@ class VolatilityConfluenceEngine(ConfluenceEngine):
 
 
 class Strategy001Volatility(BaseStrategy001):
-    version = "4.4.1"
+    version = "4.5.0"
 
     def __init__(self, config=None) -> None:
         super().__init__(config)
@@ -49,6 +51,14 @@ class Strategy001Volatility(BaseStrategy001):
             strong_score=self.config.strong_confluence,
             minimum_directional_edge=self.config.minimum_directional_edge,
         ))
+
+    def analyze(self, market: Any) -> Dict[str, Any]:
+        if not isinstance(market, dict):
+            raise TypeError("market must be a dictionary")
+        # FlashAlpha is an external confirmation layer; the API key never
+        # enters market data or source control and is read by the adapter from
+        # FLASHALPHA_API_KEY at runtime.
+        return super().analyze(enrich_market(market))
 
     def _intelligence(self, market: Dict[str, Any]) -> Dict[str, Any]:
         intelligence = super()._intelligence(market)
@@ -83,6 +93,17 @@ class Strategy001Volatility(BaseStrategy001):
             "charm_exposure": snapshot.charm_exposure,
             "volatility_score": snapshot.volatility_score,
         })
+        flashalpha = market.get("flashalpha") or {}
+        net_gex = flashalpha.get("live_gex")
+        if net_gex is None:
+            net_gex = flashalpha.get("net_gex")
+        if net_gex is not None:
+            try:
+                intelligence["gex"] = float(net_gex)
+                intelligence["gamma_regime"] = gamma_regime(float(net_gex))
+            except (TypeError, ValueError):
+                pass
+        intelligence["flashalpha"] = flashalpha
         return intelligence
 
     def _component_scores(self, market, intelligence, zones):
@@ -94,4 +115,25 @@ class Strategy001Volatility(BaseStrategy001):
         short_scores.pop("iv", None)
         long_scores["volatility"] = volatility_score
         short_scores["volatility"] = volatility_score
+
+        # FlashAlpha's directional flow-anomaly signal is confirmation, not a
+        # replacement for QOF. It only changes the options-flow component when
+        # the external response is sufficiently complete to be trusted.
+        flashalpha = market.get("flashalpha") or {}
+        signal = flashalpha.get("flow_signal") or {}
+        quality = signal.get("data_quality") or {}
+        quality_score = quality.get("score", 100) if isinstance(quality, dict) else 100
+        score = signal.get("score")
+        regime = str(signal.get("regime") or "").lower()
+        if score is not None and quality_score >= 70:
+            try:
+                score = max(0.0, min(100.0, float(score)))
+                if "bullish" in regime:
+                    long_scores["options_flow"] = max(long_scores.get("options_flow", 50.0), score)
+                    short_scores["options_flow"] = min(short_scores.get("options_flow", 50.0), 100.0 - score)
+                elif "bearish" in regime:
+                    short_scores["options_flow"] = max(short_scores.get("options_flow", 50.0), score)
+                    long_scores["options_flow"] = min(long_scores.get("options_flow", 50.0), 100.0 - score)
+            except (TypeError, ValueError):
+                pass
         return long_scores, short_scores
