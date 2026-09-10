@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifyAccountSession } from '@/lib/session';
 
-// Canonical runner endpoint. Keep the legacy name as a compatibility fallback so
-// an older Vercel environment does not break while the deployment is migrated.
 const control = () => process.env.PIPSLIFE_RUNNER_URL?.trim() || process.env.PIPSLIFE_BOT_CONTROL_URL?.trim();
 export const runtime = 'nodejs';
 
@@ -20,23 +18,17 @@ async function currentRunnerState(url: string, accountId?: string): Promise<Runn
   }
 }
 
+const validStrategy = (value: unknown): value is '001' | '002' | '003' => value === '001' || value === '002' || value === '003';
+
 export async function GET(request: Request) {
   const url = control();
   if (!url) return NextResponse.json({ configured: false, state: 'RUNNER_NOT_CONFIGURED', strategy: '001', activity: 'Bot runner control is not configured' }, { status: 503 });
   const accountId = new URL(request.url).searchParams.get('accountId')?.trim();
   if (!accountId) return NextResponse.json({ error: 'accountId is required' }, { status: 400 });
-  try {
-    verifyAccountSession(request, accountId);
-  } catch {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  try { verifyAccountSession(request, accountId); } catch { return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }); }
   const state = await currentRunnerState(url, accountId);
-  return NextResponse.json({
-    configured: true,
-    state: state?.state ?? 'UNKNOWN',
-    strategy: state?.strategy === '002' ? '002' : '001',
-    activity: state?.activity ?? 'Bot runner control online'
-  }, { headers: { 'cache-control': 'no-store' } });
+  const strategy = validStrategy(state?.strategy) ? state!.strategy : '001';
+  return NextResponse.json({ configured: true, state: state?.state ?? 'UNKNOWN', strategy, activity: state?.activity ?? 'Bot runner control online' }, { headers: { 'cache-control': 'no-store' } });
 }
 
 export async function POST(request: Request) {
@@ -51,23 +43,18 @@ export async function POST(request: Request) {
     verifyAccountSession(request, accountId);
 
     let action = rawAction;
-    let strategy = body.strategy === '002' ? '002' : body.strategy === '001' ? '001' : undefined;
-    const selection = rawAction.match(/^select:(001|002)$/);
-    if (selection) {
-      action = 'select';
-      strategy = selection[1];
-    }
+    let strategy = validStrategy(body.strategy) ? body.strategy : undefined;
+    const selection = rawAction.match(/^select:(001|002|003)$/);
+    if (selection) { action = 'select'; strategy = selection[1]; }
 
-    // Start/stop without an explicit strategy uses the runner's current selection.
     if (!strategy && (action === 'start' || action === 'stop')) {
-      strategy = (await currentRunnerState(url, accountId))?.strategy === '002' ? '002' : '001';
+      const current = await currentRunnerState(url, accountId);
+      strategy = validStrategy(current?.strategy) ? current.strategy : '001';
     }
 
     const payload: Record<string, unknown> = { action, accountId };
     if (strategy) payload.strategy = strategy;
 
-    // Prefer the dedicated runner token. If Vercel has not been given that
-    // variable, use the already-required MetaApi secret as the shared server-to-server credential.
     const runnerToken = process.env.PIPSLIFE_BOT_CONTROL_TOKEN?.trim()
       || process.env.METAAPI_TOKEN?.trim()
       || process.env.META_API_TOKEN?.trim()
@@ -75,15 +62,12 @@ export async function POST(request: Request) {
       || process.env.META_API_KEY?.trim();
     const r = await fetch(url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(runnerToken ? { authorization: `Bearer ${runnerToken}` } : {})
-      },
+      headers: { 'content-type': 'application/json', ...(runnerToken ? { authorization: `Bearer ${runnerToken}` } : {}) },
       body: JSON.stringify(payload)
     });
     const data = await r.json().catch(() => ({}));
     const response = data && typeof data === 'object' ? data as RunnerState : {};
-    return NextResponse.json({ ...response, strategy: response.strategy === '002' ? '002' : strategy ?? '001' }, { status: r.status });
+    return NextResponse.json({ ...response, strategy: validStrategy(response.strategy) ? response.strategy : strategy ?? '001' }, { status: r.status });
   } catch (e) {
     const status = e instanceof Response && e.status === 401 ? 401 : 502;
     return NextResponse.json({ configured: true, state: 'ERROR', strategy: '001', error: status === 401 ? 'Unauthorized' : (e instanceof Error ? e.message : 'Bot control failed') }, { status });
