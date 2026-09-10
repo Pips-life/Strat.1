@@ -49,7 +49,6 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("io.vertx:vertx-core:4.5.10")
     implementation("cloud.metaapi.sdk:metaapi-java-sdk:14.0.9")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
