@@ -28,7 +28,7 @@ class BotEngine:
     @staticmethod
     def _normalize_strategy_id(strategy_id: str) -> str:
         value = str(strategy_id).strip()
-        return {"001": "strategy_001", "002": "strategy_002"}.get(value, value)
+        return {"001": "strategy_001", "002": "strategy_002", "003": "strategy_003"}.get(value, value)
 
     def select_strategy(self, strategy_id: str, **kwargs: Any) -> None:
         normalized = self._normalize_strategy_id(strategy_id)
@@ -68,10 +68,9 @@ class BotEngine:
         """Process one market tick without awaiting or performing I/O.
 
         The live runner supplies ticks for every strategy. Strategy 002 consumes
-        those ticks directly. Strategy 001 also needs its richer QOF/options/bar
-        snapshot for a tradable decision; the small derived ATR below keeps the
-        strategy interface total and makes a tick-only snapshot a safe WAIT
-        rather than a KeyError/crash until that upstream data is available.
+        those ticks directly. Strategies requiring richer OHLC/options data
+        safely return WAIT until that upstream snapshot is supplied through
+        evaluate().
         """
         if self.strategy is None:
             raise RuntimeError("No strategy selected")
@@ -84,12 +83,7 @@ class BotEngine:
 
         prices = [p for _, p in self._ticks]
         derived_atr = max(max(prices) - min(prices), 1e-6)
-        market = {
-            "ticks": list(self._ticks),
-            "price": price,
-            "atr": derived_atr,
-            "timestamp": ts,
-        }
+        market = {"ticks": list(self._ticks), "price": price, "atr": derived_atr, "timestamp": ts}
         analysis = self.strategy.analyze(market)
         signal = self.strategy.generate_signal(analysis)
         self.last_decision_ns = time.perf_counter_ns()
@@ -98,8 +92,6 @@ class BotEngine:
             self._last_emitted_action = "WAIT"
             return signal
         if signal.action == "CLOSE":
-            # CLOSE is a position-management command and must not be filtered by
-            # the new-entry position-count gate below.
             self._last_emitted_action = "CLOSE"
             return signal
         if current_positions >= self.risk_engine.limits.max_positions:
