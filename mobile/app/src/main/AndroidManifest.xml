@@ -7,8 +7,8 @@
         android:name=".PipsLifeApplication"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:label="Pips-life"
-        android:icon="@drawable/pipslife_launcher"
-        android:roundIcon="@drawable/pipslife_launcher"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:supportsRtl="true">
         <provider
