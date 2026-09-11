@@ -42,8 +42,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(grep '^versionName=' release.properties | cut -d= -f2)" = "0.2.72"
-          test "$(grep '^versionCode=' release.properties | cut -d= -f2)" = "72"
+          test "$(grep '^versionName=' release.properties | cut -d= -f2)" = "0.2.73"
+          test "$(grep '^versionCode=' release.properties | cut -d= -f2)" = "73"
 
       - name: Build debug APK and compile-check UI
         working-directory: mobile
@@ -87,20 +87,20 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-release-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
-          grep -q "versionCode='72'" /tmp/pips-release-badging.txt
-          grep -q "versionName='0.2.72'" /tmp/pips-release-badging.txt
+          grep -q "versionCode='73'" /tmp/pips-release-badging.txt
+          grep -q "versionName='0.2.73'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.72-72.apk"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.73-73.apk"
 
       - name: Upload signed release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-v0.2.72-build72
-          path: ${{ runner.temp }}/pips-life-0.2.72-72.apk
+          name: pips-life-v0.2.73-build73
+          path: ${{ runner.temp }}/pips-life-0.2.73-73.apk
           if-no-files-found: error
 
   release:
-    name: Publish v2.72 release
+    name: Publish v2.73 release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
@@ -116,8 +116,8 @@ jobs:
           set -euo pipefail
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
-          test "$version_name" = "0.2.72"
-          test "$version_code" = "72"
+          test "$version_name" = "0.2.73"
+          test "$version_code" = "73"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
@@ -125,7 +125,7 @@ jobs:
       - name: Download signed APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: pips-life-v0.2.72-build72
+          name: pips-life-v0.2.73-build73
           path: release
 
       - name: Publish GitHub release
@@ -136,7 +136,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="release/pips-life-0.2.72-72.apk"
+          APK="release/pips-life-0.2.73-73.apk"
           test -s "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
