@@ -1,27 +1,32 @@
 """Strategy-independent risk controls for replay, demo, and live trading.
 
-The risk engine is deliberately broker- and strategy-neutral. It approves or
-rejects a proposed trade, calculates a risk-based quantity, tracks daily risk
-state, and enforces the project's low-equity/intraday guardrails.
+The risk policy is shared with the Android runtime through the repository-level
+risk_policy.json. Keep the policy file as the single source of truth for the
+limits; this module remains the canonical Python implementation of the rules.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, time
 from math import floor
+from pathlib import Path
 from typing import Optional
+
+
+_POLICY_PATH = Path(__file__).resolve().parents[2] / "risk_policy.json"
+
+
+def _canonical_policy() -> dict:
+    with _POLICY_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 @dataclass(frozen=True)
 class RiskLimits:
-    """Global safety limits.
-
-    Percentages are expressed as decimals: 0.01 == 1%.
-    """
+    """Global safety limits. Percentages are expressed as decimals."""
 
     risk_per_trade: float = 0.01
-    # AccountRiskSizer owns the broker-aware small-account safety reserve.
-    # Keep the strategy-independent engine's sizing contract deterministic.
     risk_budget_utilization: float = 1.0
     max_positions: int = 1
     max_daily_loss: float = 0.03
@@ -37,11 +42,32 @@ class RiskLimits:
     quantity_step: float = 0.01
     min_quantity: float = 0.01
 
+    @classmethod
+    def canonical(cls) -> "RiskLimits":
+        p = _canonical_policy()
+        start_h, start_m = map(int, str(p["session_start"]).split(":")[:2])
+        end_h, end_m = map(int, str(p["session_end"]).split(":")[:2])
+        return cls(
+            risk_per_trade=float(p["risk_per_trade"]),
+            risk_budget_utilization=float(p["risk_budget_utilization"]),
+            max_positions=int(p["max_positions"]),
+            max_daily_loss=float(p["max_daily_loss"]),
+            max_trades_per_day=int(p["max_trades_per_day"]),
+            max_consecutive_losses=int(p["max_consecutive_losses"]),
+            min_reward_risk=float(p["min_reward_risk"]),
+            max_position_notional_pct=float(p["max_position_notional_pct"]),
+            min_confidence=float(p["min_confidence"]),
+            flatten_minutes_before_close=int(p["flatten_minutes_before_close"]),
+            session_start=time(start_h, start_m),
+            session_end=time(end_h, end_m),
+            allow_overnight=bool(p["allow_overnight"]),
+            quantity_step=float(p["quantity_step"]),
+            min_quantity=float(p["min_quantity"]),
+        )
+
 
 @dataclass(frozen=True)
 class RiskRequest:
-    """Inputs required to approve and size one proposed position."""
-
     side: str
     entry: float
     stop_loss: float
@@ -66,10 +92,10 @@ class RiskDecision:
 
 
 class RiskEngine:
-    """Global risk gate shared by every strategy and every environment."""
+    """Global risk gate shared by every strategy and environment."""
 
     def __init__(self, limits: RiskLimits | None = None) -> None:
-        self.limits = limits or RiskLimits()
+        self.limits = limits or RiskLimits.canonical()
 
     @staticmethod
     def _valid_side(side: str) -> bool:
@@ -97,19 +123,7 @@ class RiskEngine:
             end_minutes += 24 * 60
         return 0 <= end_minutes - minutes <= self.limits.flatten_minutes_before_close
 
-    def calculate_quantity(
-        self,
-        *,
-        equity: float,
-        entry: float,
-        stop_loss: float,
-        point_value: float = 1.0,
-    ) -> float:
-        """Calculate quantity from account equity and stop distance.
-
-        This generic engine deliberately performs no account-regime adjustment.
-        Broker-aware small-account policy belongs in AccountRiskSizer.
-        """
+    def calculate_quantity(self, *, equity: float, entry: float, stop_loss: float, point_value: float = 1.0) -> float:
         if equity <= 0 or point_value <= 0:
             return 0.0
         stop_distance = abs(entry - stop_loss)
@@ -129,7 +143,6 @@ class RiskEngine:
     def evaluate(self, request: RiskRequest) -> RiskDecision:
         limits = self.limits
         side = request.side.upper()
-
         if not self._valid_side(side):
             return RiskDecision(False, reason="invalid side")
         if request.equity <= 0:
@@ -151,40 +164,32 @@ class RiskEngine:
                 return RiskDecision(False, reason="outside configured trading session")
             if self.near_session_close(request.now):
                 return RiskDecision(False, reason="too close to session close for new entry")
-
         if side == "BUY":
             if not (request.stop_loss < request.entry < request.take_profit):
                 return RiskDecision(False, reason="invalid BUY stop/target geometry")
         else:
             if not (request.take_profit < request.entry < request.stop_loss):
                 return RiskDecision(False, reason="invalid SELL stop/target geometry")
-
         rr = self._reward_risk(side, request.entry, request.stop_loss, request.take_profit)
         if rr < limits.min_reward_risk:
             return RiskDecision(False, reward_risk=rr, reason="reward/risk below minimum")
-
-        quantity = self.calculate_quantity(
-            equity=request.equity,
-            entry=request.entry,
-            stop_loss=request.stop_loss,
-            point_value=request.point_value,
-        )
+        quantity = self.calculate_quantity(equity=request.equity, entry=request.entry, stop_loss=request.stop_loss, point_value=request.point_value)
         if quantity <= 0:
             return RiskDecision(False, reward_risk=rr, reason="minimum executable quantity exceeds risk budget")
-
         risk_amount = abs(request.entry - request.stop_loss) * request.point_value * quantity
         notional = abs(request.entry * request.point_value * quantity)
         if notional > request.equity * limits.max_position_notional_pct:
             return RiskDecision(False, quantity, risk_amount, rr, "position notional exceeds equity limit")
-
         return RiskDecision(True, quantity, risk_amount, rr, "approved")
 
     def approve(self, *, confidence: float, current_positions: int, daily_loss: float) -> bool:
+        """Lightweight gate; daily_loss is a fractional loss and may be signed."""
+        loss_fraction = abs(float(daily_loss))
         return (
             0 <= confidence <= 100
             and confidence >= self.limits.min_confidence
             and current_positions < self.limits.max_positions
-            and daily_loss < self.limits.max_daily_loss
+            and loss_fraction < self.limits.max_daily_loss
         )
 
     def should_flatten(self, now: datetime) -> bool:

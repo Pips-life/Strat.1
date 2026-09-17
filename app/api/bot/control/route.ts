@@ -45,7 +45,11 @@ export async function POST(request: Request) {
     let action = rawAction;
     let strategy = validStrategy(body.strategy) ? body.strategy : undefined;
     const selection = rawAction.match(/^select:(001|002|003)$/);
-    if (selection) { action = 'select'; strategy = selection[1]; }
+    if (selection) {
+      action = 'select';
+      const selected = selection[1];
+      if (validStrategy(selected)) strategy = selected;
+    }
 
     if (!strategy && (action === 'start' || action === 'stop')) {
       const current = await currentRunnerState(url, accountId);

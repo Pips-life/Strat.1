@@ -8,6 +8,8 @@ plugins {
 
 val releaseProps = Properties().apply { file("../release.properties").inputStream().use(::load) }
 val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
+val canonicalRiskPolicy = rootProject.file("../risk_policy.json").readText().trim()
+    .replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n")
 
 android {
     namespace = "life.pips.strat1"
@@ -19,6 +21,7 @@ android {
         versionCode = releaseProps.getProperty("versionCode").toInt()
         versionName = releaseProps.getProperty("versionName")
         buildConfigField("String", "FLASHALPHA_API_KEY", "\"$flashAlphaKey\"")
+        buildConfigField("String", "RISK_POLICY_JSON", "\"$canonicalRiskPolicy\"")
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
