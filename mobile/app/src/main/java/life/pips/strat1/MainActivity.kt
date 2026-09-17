@@ -3,6 +3,7 @@ package life.pips.strat1
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -10,6 +11,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -19,7 +22,7 @@ import life.pips.strat1.data.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val Bg = Color(0xFF050A12)
+private val Bg = Color.Transparent
 private val Panel = Color(0xFF0C1422)
 private val TextMain = Color(0xFFF4F7FB)
 private val Muted = Color(0xFF8EA2BB)
@@ -47,13 +50,16 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
         }
     }
     MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Panel, primary = Cyan, secondary = Green, error = Red)) {
-        Scaffold(containerColor = Bg, bottomBar = { NavigationBar(containerColor = Color(0xFF08111D), tonalElevation = 0.dp) { listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH", Tab.UPDATE to "UPDATE").forEach { (t, label) -> NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 7.sp) }) } } }) { pad ->
-            when (tab) {
-                Tab.HOME -> HomeDashboard(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, status, engine, selectedSymbol, onStartStop = { running = it; if (!it) armed = false })
-                Tab.METAAPI -> MetaApiTab(Modifier.padding(pad), saved, account, busy, status, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onConnect = { value -> busy = true; scope.launch { val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId) else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server); result.onSuccess { a2 -> account = a2; saved = value.copy(accountId = a2.id); context.saveConnection(saved); status = "CONNECTED — ${a2.login} / ${a2.server}" }.onFailure { status = it.message ?: "Connection failed" }; busy = false } })
-                Tab.STRATEGY -> StrategyTab(Modifier.padding(pad), saved, account, snapshot, flashData, selectedSymbol, flashSymbol, selectedStrategy, running, armed, status, engine.strategy003.latest(), onSelect = { selectedStrategy = it; running = false; armed = false }, onFlashSymbol = { flashSymbol = it }, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onRun = { running = it; if (!it) armed = false }, onArm = { armed = it })
-                Tab.WATCHLIST -> WatchlistTab(Modifier.padding(pad), saved, snapshot, selectedSymbol) { value -> selectedSymbol = value.split(',').firstOrNull()?.trim().orEmpty().ifBlank { selectedSymbol }; saved = saved.copy(watchlist = value); scope.launch { context.saveConnection(saved) } }
-                Tab.UPDATE -> LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { item { Header("App Update", "Release updater — download only when a newer signed release exists") }; item { AppUpdateCard() }; item { CardBlock { Text("CURRENT RELEASE", color = Muted, fontSize = 9.sp); Text("v${BuildConfig.VERSION_NAME} • build ${BuildConfig.VERSION_CODE}", color = TextMain, fontWeight = FontWeight.Bold); Text("Updates install over the existing Pips-life app when the package is signed with the same release key.", color = Muted, fontSize = 9.sp) } } }
+        Box(Modifier.fillMaxSize()) {
+            Image(painter = painterResource(id = R.drawable.pipslife_ocean_background), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Scaffold(containerColor = Color.Transparent, bottomBar = { NavigationBar(containerColor = Color(0xFF08111D), tonalElevation = 0.dp) { listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH", Tab.UPDATE to "UPDATE").forEach { (t, label) -> NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 7.sp) }) } } }) { pad ->
+                when (tab) {
+                    Tab.HOME -> HomeDashboard(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, status, engine, selectedSymbol, onStartStop = { running = it; if (!it) armed = false })
+                    Tab.METAAPI -> MetaApiTab(Modifier.padding(pad), saved, account, busy, status, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onConnect = { value -> busy = true; scope.launch { val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId) else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server); result.onSuccess { a2 -> account = a2; saved = value.copy(accountId = a2.id); context.saveConnection(saved); status = "CONNECTED — ${a2.login} / ${a2.server}" }.onFailure { status = it.message ?: "Connection failed" }; busy = false } })
+                    Tab.STRATEGY -> StrategyTab(Modifier.padding(pad), saved, account, snapshot, flashData, selectedSymbol, flashSymbol, selectedStrategy, running, armed, status, engine.strategy003.latest(), onSelect = { selectedStrategy = it; running = false; armed = false }, onFlashSymbol = { flashSymbol = it }, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onRun = { running = it; if (!it) armed = false }, onArm = { armed = it })
+                    Tab.WATCHLIST -> WatchlistTab(Modifier.padding(pad), saved, snapshot, selectedSymbol) { value -> selectedSymbol = value.split(',').firstOrNull()?.trim().orEmpty().ifBlank { selectedSymbol }; saved = saved.copy(watchlist = value); scope.launch { context.saveConnection(saved) } }
+                    Tab.UPDATE -> LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { item { Header("App Update", "Release updater — download only when a newer signed release exists") }; item { AppUpdateCard() }; item { CardBlock { Text("CURRENT RELEASE", color = Muted, fontSize = 9.sp); Text("v${BuildConfig.VERSION_NAME} • build ${BuildConfig.VERSION_CODE}", color = TextMain, fontWeight = FontWeight.Bold); Text("Updates install over the existing Pips-life app when the package is signed with the same release key.", color = Muted, fontSize = 9.sp) } } }
+                }
             }
         }
     }
