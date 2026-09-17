@@ -1,11 +1,11 @@
 package life.pips.strat1
 
 import android.util.Log
+import life.pips.strat1.data.TradeSide
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.floor
 
-/** Single repository risk policy consumed by Android and Python. */
 data class CanonicalRiskPolicy(
     val riskPerTrade: Double,
     val riskBudgetUtilization: Double,
@@ -84,23 +84,10 @@ class ExecutionRecoveryStateMachine {
 class TradingSafetyGate {
     @Volatile private var halted = false
     @Volatile private var reason = ""
-
-    fun halt(reason: String) {
-        halted = true
-        this.reason = reason
-        Log.e("PipsLife.Safety", "KILL SWITCH ON | $reason")
-    }
-
-    fun clear() {
-        if (halted) Log.i("PipsLife.Safety", "KILL SWITCH CLEARED")
-        halted = false
-        reason = ""
-    }
-
+    fun halt(reason: String) { halted = true; this.reason = reason; Log.e("PipsLife.Safety", "KILL SWITCH ON | $reason") }
+    fun clear() { if (halted) Log.i("PipsLife.Safety", "KILL SWITCH CLEARED"); halted = false; reason = "" }
     fun canEnter(): Boolean = !halted
     fun reason(): String = reason
 }
 
-fun logTradingDecision(message: String) {
-    Log.i("PipsLife.Decision", message)
-}
+fun logTradingDecision(message: String) { Log.i("PipsLife.Decision", message) }
