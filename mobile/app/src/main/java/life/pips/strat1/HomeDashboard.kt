@@ -17,9 +17,9 @@ import androidx.compose.ui.unit.sp
 import life.pips.strat1.data.*
 import kotlin.math.abs
 
-private val Bg = Color(0xFF030B15)
-private val Panel = Color(0xFF071727)
-private val Panel2 = Color(0xFF0A1D31)
+private val Bg = Color.Transparent
+private val Panel = Color(0xFF071727).copy(alpha = .76f)
+private val Panel2 = Color(0xFF0A1D31).copy(alpha = .82f)
 private val Text = Color(0xFFF3F7FF)
 private val Muted = Color(0xFF91A8C5)
 private val Cyan = Color(0xFF23D8FF)
