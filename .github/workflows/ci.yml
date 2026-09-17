@@ -64,17 +64,18 @@ jobs:
 
       - name: Restore release signing material
         env:
-          KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_B64 }}
+          KEYSTORE_B64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
         run: |
-          set -e
+          set -euo pipefail
           test -n "$KEYSTORE_B64"
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/pips-life-release.jks"
+          test -s "$RUNNER_TEMP/pips-life-release.jks"
 
       - name: Build debug APK
         working-directory: ${{ env.ANDROID_DIR }}
         env:
           FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
-        run: ./gradlew --no-daemon --stacktrace assembleDebug
+        run: ./gradlew --no-daemon --stacktrace clean assembleDebug
 
       - name: Build signed release APK
         working-directory: ${{ env.ANDROID_DIR }}
@@ -84,42 +85,71 @@ jobs:
           PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon --stacktrace assembleRelease
-
-      - name: Verify release artifact
-        working-directory: ${{ env.ANDROID_DIR }}
         run: |
-          set -e
-          test -s app/build/outputs/apk/release/app-release.apk
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          apksigner verify --verbose app/build/outputs/apk/release/app-release.apk
+          set -euo pipefail
+          test -n "$FLASHALPHA_API_KEY"
+          test -n "$PIPS_LIFE_KEYSTORE_PASSWORD"
+          test -n "$PIPS_LIFE_KEY_ALIAS"
+          test -n "$PIPS_LIFE_KEY_PASSWORD"
+          ./gradlew --no-daemon --stacktrace assembleRelease
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-release-badging.txt
+          grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
+          grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
+          grep -q "versionCode='73'" /tmp/pips-release-badging.txt
+          grep -q "versionName='0.2.73'" /tmp/pips-release-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.73-73.apk"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: strat1-apks-${{ github.sha }}
-          path: |
-            mobile/app/build/outputs/apk/release/app-release.apk
-            mobile/app/build/outputs/apk/debug/app-debug.apk
+          name: pips-life-v0.2.73-build73
+          path: ${{ runner.temp }}/pips-life-0.2.73-73.apk
+          if-no-files-found: error
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Download release APK
+      - name: Read release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
+          version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
+          test "$version_name" = "0.2.73"
+          test "$version_code" = "73"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Download signed APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: strat1-apks-${{ github.sha }}
-          path: dist
+          name: pips-life-v0.2.73-build73
+          path: release
 
-      - name: Publish v2.73 release
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
         run: |
-          set -e
-          gh release view v2.73 >/dev/null 2>&1 || gh release create v2.73 --title "Pips-life v2.73" --notes "Stability-hardened Strategy 001 build"
-          gh release upload v2.73 dist/app-release.apk dist/app-debug.apk --clobber
+          set -euo pipefail
+          APK="release/pips-life-0.2.73-73.apk"
+          test -s "$APK"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" --title "Pips-life v$VERSION" --generate-notes
+          fi
