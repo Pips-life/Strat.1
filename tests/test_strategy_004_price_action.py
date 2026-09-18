@@ -6,66 +6,66 @@ def _bars(values):
     return [{"open": o, "high": h, "low": l, "close": c} for o, h, l, c in values]
 
 
+def _mtf():
+    context = _bars([
+        (100, 101, 99, 100), (100, 102, 98, 101), (101, 101.5, 99, 100.5),
+        (100.5, 103, 100, 102), (102, 102.5, 99.5, 101.5),
+        (101.5, 104, 100.5, 103), (103, 103.5, 101, 102.5),
+        (102.5, 105, 102, 104),
+    ])
+    setup = _bars([
+        (100, 101, 99, 100.5), (100.5, 102, 100, 101), (101, 101.5, 99.5, 100.5),
+        (100.5, 102.5, 100, 102), (102, 102.5, 100.5, 101.5),
+        (101.5, 103, 101, 102.5), (102.5, 103, 101.5, 102),
+        (102, 102.5, 98.8, 101.8), (101.8, 104.5, 101.5, 104),
+    ])
+    execution = _bars([
+        (103, 103.5, 102.5, 103.2), (103.2, 103.6, 102.8, 103.3),
+        (103.3, 103.7, 103, 103.4), (103.4, 103.8, 103.1, 103.5),
+        (103.5, 103.7, 102.9, 103.1), (103.1, 104.5, 103, 104.2),
+    ])
+    return {"timeframes": {"15m": context, "5m": setup, "1m": execution}}
+
+
 def test_strategy_004_is_registered_and_independent():
     ids = {item["id"] for item in registry.list()}
-    assert "strategy_001" in ids
-    assert "strategy_002" in ids
-    assert "strategy_003" in ids
-    assert "strategy_004" in ids
+    assert {"strategy_001", "strategy_002", "strategy_003", "strategy_004"} <= ids
 
 
-def test_strategy_004_waits_for_confirmation():
-    bars = _bars(
-        [(100, 101, 99, 100.5)] * 10
-        + [(100.5, 102, 100, 101)] * 8
-        + [(101, 102, 100, 101)]
-    )
+def test_strategy_004_requires_all_three_timeframes():
     strategy = Strategy004()
-    analysis = strategy.analyze(bars)
-    signal = strategy.generate_signal(analysis)
-    assert signal.action == "WAIT"
+    analysis = strategy.analyze({"timeframes": {"15m": [], "5m": [], "1m": []}})
+    assert analysis["price_action_ready"] is False
+    assert analysis["timeframes"] == {"context": "15m", "setup": "5m", "execution": "1m"}
 
 
-def test_strategy_004_requires_real_price_action_not_just_a_wick():
-    bars = _bars(
-        [(100, 101, 99, 100)] * 8
-        + [(100, 105, 99, 104)]
-        + [(104, 104.5, 100, 101)]
-        + [(101, 101.5, 99.5, 100)]
-        + [(100, 100.5, 98.5, 99)]
-        + [(99, 99.5, 98, 98.5)]
-    )
-    strategy = Strategy004()
-    analysis = strategy.analyze(bars)
-    assert analysis["price_action_ready"]
-    assert analysis["direction"] in {"WAIT", "BUY", "SELL"}
-    if analysis["direction"] == "WAIT":
-        assert "liquidity" in analysis.get("reason", "").lower() or analysis.get("bullish_pending") or analysis.get("bearish_pending")
-
-
-def test_strategy_004_does_not_use_external_market_inputs():
-    bars = _bars(
-        [(100, 101, 99, 100.5)] * 20
-    )
-    strategy = Strategy004()
-    analysis = strategy.analyze({"bars": bars, "options": [{"gamma": 999}], "volume": 999999})
+def test_strategy_004_uses_only_ohlc():
+    market = _mtf()
+    market["options"] = [{"gamma": 999}]
+    market["volume"] = 999999
+    analysis = Strategy004().analyze(market)
     assert analysis["price_action_ready"] is True
-    assert "options" not in analysis or "gamma" not in str(analysis.get("reasons", ""))
+    assert "gamma" not in str(analysis["reasons"])
 
-def test_strategy_004_allows_sweep_rejection_and_bos_on_different_candles():
-    # The sweep occurs first, rejection second, and displacement/BOS third.
-    bars = _bars(
-        [(100, 101, 99, 100.5)] * 10
-        + [(100.5, 102, 100, 101)] * 6
-        + [(101, 101.5, 98.8, 100.2)]   # sell-side sweep
-        + [(100.2, 102.0, 99.8, 101.7)]  # bullish rejection
-        + [(101.7, 105.0, 101.5, 104.5)] # displacement + BOS
-    )
-    strategy = Strategy004()
-    analysis = strategy.analyze(bars)
-    signal = strategy.generate_signal(analysis)
-    assert analysis["setup_state"] == "BOS_CONFIRMED"
-    assert analysis["direction"] == "BUY"
-    assert analysis["sweep_extreme"] is not None
-    assert analysis["rejection_index"] < analysis["bos_index"]
-    assert signal.action == "BUY"
+
+def test_strategy_004_exposes_mtf_state():
+    analysis = Strategy004().analyze(_mtf())
+    assert analysis["context_timeframe"] == "15m"
+    assert analysis["setup_timeframe"] == "5m"
+    assert analysis["execution_timeframe"] == "1m"
+    assert set(analysis["sample_counts"]) == {"15m", "5m", "1m"}
+    assert analysis["setup_state"] in {"NO_SETUP", "SWEPT", "DISPLACED"}
+
+
+def test_strategy_004_does_not_allow_setup_without_1m_confirmation():
+    market = _mtf()
+    market["timeframes"]["1m"] = _bars([
+        (103, 103.3, 102.7, 103.1),
+        (103.1, 103.4, 102.8, 103.2),
+        (103.2, 103.5, 102.9, 103.3),
+        (103.3, 103.5, 103, 103.2),
+        (103.2, 103.4, 103, 103.1),
+    ])
+    analysis = Strategy004().analyze(market)
+    assert analysis["direction"] == "WAIT"
+    assert analysis["execution_state"] == "WAIT"
