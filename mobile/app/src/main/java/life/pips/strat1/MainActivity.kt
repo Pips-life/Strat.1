@@ -46,7 +46,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             meta.refresh(saved.metaApiToken, a, symbols).onSuccess { s -> snapshot = s; if (!running) status = "MetaApi ${s.account.connectionStatus} • live quote monitor" }.onFailure { if (!running) status = it.message ?: "MetaApi refresh failed" }
             if (saved.flashAlphaKey.isNotBlank() && (flashData == null || now - lastFlashPull >= 2 * 60 * 60 * 1000L)) { lastFlashPull = now; flash.snapshot(saved.flashAlphaKey, flashSymbol).onSuccess { flashData = it; status = "FlashAlpha GC=F snapshot received" }.onFailure { if (running && selectedStrategy == TradingEngine.StrategyId.STRATEGY_001) status = it.message ?: "FlashAlpha unavailable" } }
             if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_003) engine.strategy003.refresh(a, saved.metaApiToken, selectedSymbol).onFailure { if (!running) status = it.message ?: "SMC candle data unavailable" }
-            if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_004) engine.strategy004.refresh(a, saved.metaApiToken, selectedSymbol).onFailure { if (!running) status = it.message ?: "Price action candles unavailable" }
+            if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_004) engine.strategy004.refresh(a, saved.metaApiToken, selectedSymbol)
             if (running && armed && saved.metaApiToken.isNotBlank()) snapshot?.let { s -> engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it } }
             delay(1000)
         }
