@@ -22,6 +22,7 @@ class Strategy004Config:
     pivot_left: int = 2
     pivot_right: int = 2
     structure_lookback: int = 8
+    setup_lookback: int = 12
     range_lookback: int = 8
     displacement_multiple: float = 1.35
     sweep_tolerance_fraction: float = 0.10
@@ -34,7 +35,7 @@ class Strategy004Config:
 class Strategy004(Strategy):
     id = "strategy_004"
     name = "Pure Price Action"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def __init__(self, config: Strategy004Config | None = None) -> None:
         self.config = config or Strategy004Config()
@@ -122,82 +123,75 @@ class Strategy004(Strategy):
             }
 
         last = bars[-1]
-        prev = bars[-2]
         swing_high = bars[highs[-1]]["high"]
         prior_swing_high = bars[highs[-2]]["high"]
         swing_low = bars[lows[-1]]["low"]
         prior_swing_low = bars[lows[-2]]["low"]
 
-        # Liquidity is represented by confirmed swing extremes. A sweep must
-        # trade through the level and close back on the original side.
-        high_buffer = max(
-            (swing_high - swing_low) * self.config.sweep_tolerance_fraction,
-            1e-9,
-        )
-        low_buffer = high_buffer
-        buy_side_sweep = (
-            last["high"] > swing_high
-            and last["close"] < swing_high
-            and last["high"] - swing_high <= high_buffer
-        )
-        sell_side_sweep = (
-            last["low"] < swing_low
-            and last["close"] > swing_low
-            and swing_low - last["low"] <= low_buffer
-        )
-
+        # Evaluate chronologically: sweep -> rejection -> displacement -> BOS.
         typical_range = self._recent_range(bars)
-        displacement = self._range(last)
-        displacement_ok = (
-            typical_range > 0
-            and displacement >= typical_range * self.config.displacement_multiple
-        )
+        search_start = max(0, len(bars) - self.config.setup_lookback)
+        candidates: list[dict[str, Any]] = []
+        for i in range(search_start, len(bars)):
+            b = bars[i]
+            prior_highs = [p for p in highs if p < i]
+            prior_lows = [p for p in lows if p < i]
+            if not prior_highs or not prior_lows:
+                continue
+            liq_high = bars[prior_highs[-1]]["high"]
+            liq_low = bars[prior_lows[-1]]["low"]
+            tolerance = max(liq_high - liq_low, 1e-9) * self.config.sweep_tolerance_fraction
+            if b["low"] < liq_low and b["close"] > liq_low and liq_low - b["low"] <= tolerance:
+                candidates.append({"side": "BUY", "sweep_index": i, "level": liq_low, "bos_level": liq_high, "sweep_extreme": b["low"]})
+            if b["high"] > liq_high and b["close"] < liq_high and b["high"] - liq_high <= tolerance:
+                candidates.append({"side": "SELL", "sweep_index": i, "level": liq_high, "bos_level": liq_low, "sweep_extreme": b["high"]})
 
-        bullish_rejection = last["close"] > last["open"] and sell_side_sweep
-        bearish_rejection = last["close"] < last["open"] and buy_side_sweep
+        setup: dict[str, Any] | None = None
+        for candidate in reversed(candidates):
+            rejection_i: int | None = None
+            bos_i: int | None = None
+            displacement_i: int | None = None
+            for j in range(candidate["sweep_index"] + 1, len(bars)):
+                b = bars[j]
+                rejection = (b["close"] > b["open"] and b["close"] > candidate["level"]) if candidate["side"] == "BUY" else (b["close"] < b["open"] and b["close"] < candidate["level"])
+                if rejection and rejection_i is None:
+                    rejection_i = j
+                if rejection_i is None:
+                    continue
+                displacement_ok = typical_range > 0 and self._range(b) >= typical_range * self.config.displacement_multiple
+                if not displacement_ok:
+                    continue
+                if candidate["side"] == "BUY" and b["close"] > candidate["bos_level"]:
+                    displacement_i, bos_i = j, j
+                    break
+                if candidate["side"] == "SELL" and b["close"] < candidate["bos_level"]:
+                    displacement_i, bos_i = j, j
+                    break
+            if bos_i is not None:
+                setup = {**candidate, "rejection_index": rejection_i, "displacement_index": displacement_i, "bos_index": bos_i}
+                break
+            if candidate["sweep_index"] == len(bars) - 1:
+                setup = candidate
+                break
 
-        # Confirmation is a close beyond the most recent confirmed swing,
-        # following the sweep. This prevents the wick alone from becoming an
-        # entry.
-        bullish_bos = (
-            sell_side_sweep
-            and displacement_ok
-            and last["close"] > swing_high
-        )
-        bearish_bos = (
-            buy_side_sweep
-            and displacement_ok
-            and last["close"] < swing_low
-        )
-
-        # If the current candle sweeps one side but does not yet break
-        # structure, the setup remains pending rather than becoming a trade.
-        bullish_pending = sell_side_sweep and not bullish_bos
-        bearish_pending = buy_side_sweep and not bearish_bos
-
+        bullish_bos = bool(setup and setup["side"] == "BUY" and setup.get("bos_index") == len(bars) - 1)
+        bearish_bos = bool(setup and setup["side"] == "SELL" and setup.get("bos_index") == len(bars) - 1)
+        bullish_pending = bool(setup and setup["side"] == "BUY" and setup.get("bos_index") is None)
+        bearish_pending = bool(setup and setup["side"] == "SELL" and setup.get("bos_index") is None)
         if bullish_bos:
-            direction = "BUY"
-            confidence = 92.0
-            reasons = [
-                "sell-side liquidity sweep",
-                "bullish rejection",
-                "bullish displacement",
-                "bullish break of structure",
-            ]
+            direction, confidence = "BUY", 92.0
+            reasons = ["sell-side liquidity sweep", "bullish rejection", "bullish displacement", "bullish break of structure"]
         elif bearish_bos:
-            direction = "SELL"
-            confidence = 92.0
-            reasons = [
-                "buy-side liquidity sweep",
-                "bearish rejection",
-                "bearish displacement",
-                "bearish break of structure",
-            ]
+            direction, confidence = "SELL", 92.0
+            reasons = ["buy-side liquidity sweep", "bearish rejection", "bearish displacement", "bearish break of structure"]
         else:
-            direction = "WAIT"
-            confidence = 0.0
-            reasons = []
+            direction, confidence, reasons = "WAIT", 0.0, []
 
+        buy_side_sweep = bool(setup and setup["side"] == "SELL" and setup["sweep_index"] == len(bars) - 1)
+        sell_side_sweep = bool(setup and setup["side"] == "BUY" and setup["sweep_index"] == len(bars) - 1)
+        bullish_rejection = bool(setup and setup["side"] == "BUY" and setup.get("rejection_index") == len(bars) - 1)
+        bearish_rejection = bool(setup and setup["side"] == "SELL" and setup.get("rejection_index") == len(bars) - 1)
+        displacement = self._range(last)
         return {
             "price_action_ready": True,
             "direction": direction,
@@ -224,17 +218,25 @@ class Strategy004(Strategy):
                 displacement / typical_range if typical_range > 0 else 0.0
             ),
             "reasons": reasons,
+            "setup_state": ("BOS_CONFIRMED" if bullish_bos or bearish_bos else "SETUP_PENDING" if bullish_pending or bearish_pending else "NO_SETUP"),
+            "setup": setup,
+            "sweep_extreme": setup.get("sweep_extreme") if setup else None,
+            "sweep_level": setup.get("level") if setup else None,
+            "bos_level": setup.get("bos_level") if setup else None,
+            "rejection_index": setup.get("rejection_index") if setup else None,
+            "displacement_index": setup.get("displacement_index") if setup else None,
+            "bos_index": setup.get("bos_index") if setup else None,
             "sample_count": len(bars),
         }
 
     def _target(self, analysis: dict[str, Any], side: str) -> float | None:
         price = float(analysis["price"])
         if side == "BUY":
-            target = float(analysis["prior_swing_high"])
+            target = float(analysis.get("bos_level") or analysis["prior_swing_high"])
             if target <= price:
                 return None
             return target
-        target = float(analysis["prior_swing_low"])
+        target = float(analysis.get("bos_level") or analysis["prior_swing_low"])
         if target >= price:
             return None
         return target
@@ -279,9 +281,11 @@ class Strategy004(Strategy):
         buffer = structure_range * self.config.stop_buffer_fraction
 
         if side == "BUY":
-            stop = swing_low - buffer
+            stop_base = float(analysis.get("sweep_extreme") or swing_low)
+            stop = stop_base - buffer
         else:
-            stop = swing_high + buffer
+            stop_base = float(analysis.get("sweep_extreme") or swing_high)
+            stop = stop_base + buffer
 
         target = self._target(analysis, side)
         if target is None:
@@ -319,7 +323,7 @@ class Strategy004(Strategy):
                 "strategy": self.id,
                 "entry_mode": "liquidity-sweep-displacement-bos",
                 "reward_risk": rr,
-                "stop_model": "opposite confirmed swing plus price-range buffer",
+                "stop_model": "sweep extreme plus price-range buffer",
                 "target_model": "previous opposing confirmed swing/liquidity",
                 "indicator_free": True,
             },
