@@ -221,6 +221,7 @@ class Strategy004(Strategy):
         }
 
     @staticmethod
+    @staticmethod
     def _next_opposing_liquidity(
         bars: list[dict[str, float]], side: str, entry: float, pivots: tuple[list[int], list[int]]
     ) -> float | None:
@@ -254,6 +255,8 @@ class Strategy004(Strategy):
         context = self._context(context_bars)
         setup = self._setup(setup_bars, context)
         execution = self._execution(execution_bars, setup)
+        setup_pivots = self._pivots(setup_bars)
+        target = self._next_opposing_liquidity(setup_bars, setup.get("side", ""), execution_bars[-1]["close"], setup_pivots) if setup.get("side") else None
 
         direction = "WAIT"
         if execution.get("state") == "BOS_CONFIRMED":
@@ -274,6 +277,7 @@ class Strategy004(Strategy):
             "setup": setup,
             "execution_state": execution.get("state", "WAIT"),
             "bos_level": execution.get("bos_level"),
+            "target_liquidity": target,
             "sweep_extreme": setup.get("sweep_extreme"),
             "sweep_level": setup.get("level"),
             "rejection_index": setup.get("rejection_index"),
@@ -309,15 +313,11 @@ class Strategy004(Strategy):
         if sweep is None:
             return Signal(action="WAIT", reason="No confirmed liquidity-sweep extreme for the entry.", metadata=analysis)
 
-        setup_bars = self._series(
-            {"timeframes": {self.config.setup_timeframe: analysis.get("_setup_bars", [])}},
-            self.config.setup_timeframe,
-        )
-        # Target is supplied from analysis when available; otherwise use a conservative
-        # projection beyond the broken level. The live analyze path populates it below.
         target = analysis.get("target_liquidity")
         if target is None:
-            target = float(analysis["bos_level"]) + abs(float(analysis["bos_level"]) - float(sweep)) if side == "BUY" else float(analysis["bos_level"]) - abs(float(analysis["bos_level"]) - float(sweep))
+            return Signal(action="WAIT", confidence=float(analysis["confidence"]),
+                          reason="No confirmed opposing 5m liquidity target beyond entry.",
+                          metadata={**analysis, "entry_block": "NO_OPPOSING_LIQUIDITY"})
 
         risk = abs(entry - (float(sweep) - abs(entry - float(sweep)) * self.config.stop_buffer_fraction if side == "BUY" else float(sweep) + abs(entry - float(sweep)) * self.config.stop_buffer_fraction))
         reward = abs(float(target) - entry)
