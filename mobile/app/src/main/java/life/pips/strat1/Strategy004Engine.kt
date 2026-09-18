@@ -18,7 +18,7 @@ class Strategy004Engine(private val http: OkHttpClient=OkHttpClient()){
  data class Plan(val side:TradeSide?,val confidence:Int,val entry:Double?,val stop:Double?,val target:Double?,val reason:String,val contextBias:Bias,val setupState:SetupState,val bos:String,val sweptLiquidity:String,val targetLiquidity:String)
  private data class Setup(val side:TradeSide,val extreme:Double,val range:Double,val text:String)
  @Volatile private var refreshed=0L
- @Volatile private var data:Map<String,List<Candle>>=emptyMap()
+ @Volatile private var data:Map<String, List<Candle>> = emptyMap()
  @Volatile private var plan=empty("Waiting for 15M/5M/1M price action")
  suspend fun refresh(a:MetaAccount,token:String,symbol:String,force:Boolean=false):Plan{
   val now=SystemClock.elapsedRealtime()
