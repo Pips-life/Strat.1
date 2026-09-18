@@ -74,7 +74,7 @@ class TradingEngine(
         StrategyId.STRATEGY_003 -> {
             val p = strategy003.latest()
             View(id, p.side, p.confidence, p.entry, null, p.stop, p.reason, if (p.side == null) "WAIT STRUCTURE" else if (p.newFiveMinuteBar) "5M EXECUTION WINDOW" else "5M STRUCTURE", "LONDON + NEW YORK", "1H ${p.h1Bias.name} • 15M ${p.m15Bias.name} • 5M ${p.m5Bias.name} • 1M ${p.m1Bias.name}")
-        },
+        }
         StrategyId.STRATEGY_004 -> {
             val p = strategy004.latest()
             View(id, p.side, p.confidence, p.entry, p.target, p.stop, p.reason,
