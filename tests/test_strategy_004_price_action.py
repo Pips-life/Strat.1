@@ -51,3 +51,21 @@ def test_strategy_004_does_not_use_external_market_inputs():
     analysis = strategy.analyze({"bars": bars, "options": [{"gamma": 999}], "volume": 999999})
     assert analysis["price_action_ready"] is True
     assert "options" not in analysis or "gamma" not in str(analysis.get("reasons", ""))
+
+def test_strategy_004_allows_sweep_rejection_and_bos_on_different_candles():
+    # The sweep occurs first, rejection second, and displacement/BOS third.
+    bars = _bars(
+        [(100, 101, 99, 100.5)] * 10
+        + [(100.5, 102, 100, 101)] * 6
+        + [(101, 101.5, 98.8, 100.2)]   # sell-side sweep
+        + [(100.2, 102.0, 99.8, 101.7)]  # bullish rejection
+        + [(101.7, 105.0, 101.5, 104.5)] # displacement + BOS
+    )
+    strategy = Strategy004()
+    analysis = strategy.analyze(bars)
+    signal = strategy.generate_signal(analysis)
+    assert analysis["setup_state"] == "BOS_CONFIRMED"
+    assert analysis["direction"] == "BUY"
+    assert analysis["sweep_extreme"] is not None
+    assert analysis["rejection_index"] < analysis["bos_index"]
+    assert signal.action == "BUY"
