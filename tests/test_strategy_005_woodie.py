@@ -71,7 +71,7 @@ def test_sell_pp_retest_uses_5m_price_action_and_targets_s1():
             {"open": 108, "high": 109, "low": 104, "close": 105},
         ],
         "5m": [
-            {"open": 106.8, "high": 107.0, "low": 106.5, "close": 106.7},
+            {"open": 106.8, "high": 107.0, "low": 106.3, "close": 106.4},
             {"open": 106.6, "high": 106.7, "low": 106.0, "close": 106.2},
         ],
     }}
