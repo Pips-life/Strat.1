@@ -40,6 +40,7 @@ class Strategy005Engine(private val meta: DirectMetaApiClient) {
         if (levels == null || now - lastPivotFetch >= 60_000L) {
             val candles = meta.historicalCandles(token, account, symbol, "4h", 3).getOrThrow()
                 .filter { it.high.isFinite() && it.low.isFinite() && it.close.isFinite() }
+                .sortedBy { it.time }
             require(candles.size >= 2) { "Strategy 005 waiting for two 4H candles." }
             val source = candles[candles.lastIndex - 1]
             if (source.time != pivotSourceTime) {
