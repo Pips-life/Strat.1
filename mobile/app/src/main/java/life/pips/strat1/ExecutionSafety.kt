@@ -32,7 +32,7 @@ data class CanonicalRiskPolicy(
         fun load(): CanonicalRiskPolicy {
             val p = JSONObject(BuildConfig.RISK_POLICY_JSON)
             return CanonicalRiskPolicy(
-                p.getDouble("risk_per_trade"), p.getDouble("risk_budget_utilization"), p.getInt("max_positions"), p.getInt("entries_per_signal").coerceAtLeast(1),
+                p.getDouble("risk_per_trade"), p.getDouble("risk_budget_utilization"), p.getInt("max_positions").coerceAtLeast(0), p.getInt("entries_per_signal").coerceAtLeast(0),
                 p.getDouble("max_daily_loss"), p.getInt("max_trades_per_day"), p.getInt("max_consecutive_losses"),
                 p.getDouble("min_reward_risk"), p.getDouble("max_position_notional_pct"), p.getDouble("min_confidence"),
                 p.getInt("flatten_minutes_before_close"), p.getString("session_start"), p.getString("session_end"),
@@ -49,7 +49,7 @@ class CanonicalRiskEngine(private val policy: CanonicalRiskPolicy = CanonicalRis
     fun decide(side: TradeSide, entry: Double, stop: Double, target: Double, equity: Double, positions: Int, confidence: Double, dailyLossFraction: Double, tradesToday: Int, consecutiveLosses: Int, tickValue: Double, tickSize: Double): CanonicalRiskDecision {
         if (!entry.isFinite() || !stop.isFinite() || !target.isFinite() || equity <= 0.0) return CanonicalRiskDecision(false, reason = "invalid risk inputs")
         if (confidence < policy.minConfidence) return CanonicalRiskDecision(false, reason = "confidence below risk threshold")
-        if (positions >= policy.maxPositions) return CanonicalRiskDecision(false, reason = "maximum simultaneous positions reached")
+        if (policy.maxPositions > 0 && positions >= policy.maxPositions) return CanonicalRiskDecision(false, reason = "maximum simultaneous positions reached")
         if (abs(dailyLossFraction) >= policy.maxDailyLoss) return CanonicalRiskDecision(false, reason = "maximum daily loss reached")
         if (tradesToday >= policy.maxTradesPerDay) return CanonicalRiskDecision(false, reason = "maximum daily trades reached")
         if (consecutiveLosses >= policy.maxConsecutiveLosses) return CanonicalRiskDecision(false, reason = "consecutive-loss limit reached")
