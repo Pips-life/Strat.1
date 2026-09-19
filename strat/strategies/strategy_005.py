@@ -83,16 +83,23 @@ class Strategy005(Strategy):
                     side,trigger,target_level=s,name,levels["pp"]
                     break
             if side!="WAIT": break
-        # PP retest model: a completed 5M candle must retest PP from the
-        # correct side and close back away from it with directional confirmation.
+        # PP continuation model: the previous completed 4H candle sets
+        # the directional context. A bullish 4H candle makes PP support;
+        # a bearish 4H candle makes PP resistance. Price must first be on
+        # that side of PP, retrace to PP, and then confirm continuation with
+        # the completed 5M candle.
         if side=="WAIT":
             o,h,l,c=candle["open"],candle["high"],candle["low"],candle["close"]
-            if (prior["close"] > levels["pp"] and l <= levels["pp"]+tolerance
+            bullish_4h = pivot_source["close"] > pivot_source["open"]
+            bearish_4h = pivot_source["close"] < pivot_source["open"]
+            if (bullish_4h and prior["close"] > levels["pp"]
+                    and l <= levels["pp"]+tolerance
                     and c > levels["pp"] and c > o):
-                side,trigger,target_level="BUY","PP_RETEST_BUY",levels["r1"]
-            elif (prior["close"] < levels["pp"] and h >= levels["pp"]-tolerance
+                side,trigger,target_level="BUY","PP_SUPPORT_BUY",levels["r1"]
+            elif (bearish_4h and prior["close"] < levels["pp"]
+                  and h >= levels["pp"]-tolerance
                   and c < levels["pp"] and c < o):
-                side,trigger,target_level="SELL","PP_RETEST_SELL",levels["s1"]
+                side,trigger,target_level="SELL","PP_RESISTANCE_SELL",levels["s1"]
         stop=None
         if side=="BUY": stop=candle["low"]-abs(candle["close"]-candle["low"])*self.config.stop_buffer_fraction
         elif side=="SELL": stop=candle["high"]+abs(candle["high"]-candle["close"])*self.config.stop_buffer_fraction
@@ -107,18 +114,18 @@ class Strategy005(Strategy):
             return Signal(action="WAIT",reason=analysis.get("reason","Strategy 005 waiting"),metadata=analysis)
         side=analysis.get("side","WAIT")
         if side not in {"BUY","SELL"}:
-            return Signal(action="WAIT",reason="No confirmed 5M price action at a Woodie S1/S2, R1/R2, or PP retest level.",metadata=analysis)
+            return Signal(action="WAIT",reason="No confirmed 5M price action at a Woodie S1/S2, R1/R2, or PP continuation level.",metadata=analysis)
         if float(analysis.get("reward_risk",0)) < self.config.min_reward_risk:
             return Signal(action="WAIT",confidence=0,reason="Woodie PP target does not provide sufficient room for the 5M setup.",
                           metadata={**analysis,"entry_block":"INSUFFICIENT_REWARD_RISK"})
         return Signal(action=side,confidence=90,entry=float(analysis["price"]),
                       stop_loss=float(analysis["stop"]),take_profit=float(analysis["target"]),
                       reason=f"Woodie 4H {analysis['trigger']} confirmed by 5M price action; exit at 4H PP.",
-                      metadata={**analysis,"strategy":self.id,"entry_model":"5M rejection at S1/S2 or R1/R2; PP retest with 5M price action",
+                      metadata={**analysis,"strategy":self.id,"entry_model":"5M rejection at S1/S2 or R1/R2; 4H-directional PP support/resistance continuation with 5M price action",
                                 "exit_model":"4H Woodie PP","risk_model":"maximum 5% account balance"})
 
     def risk_parameters(self):
         return {"risk_cap":self.config.risk_cap,"risk_basis":"account balance",
                 "pivot_formula":"P=(H+L+2C)/4","pivot_source":"previous completed 4H candle",
-                "entry_timeframe":"5m","entry_model":"5M rejection/reclaim at S1/S2 or R1/R2; PP retest with 5M price action",
+                "entry_timeframe":"5m","entry_model":"5M rejection/reclaim at S1/S2 or R1/R2; 4H-directional PP support/resistance continuation with 5M price action",
                 "exit_model":"current 4H Woodie PP","independent":True,"feed":"MetaApi stream"}
