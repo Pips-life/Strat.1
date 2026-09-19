@@ -60,7 +60,7 @@ def test_buy_pp_retest_uses_5m_price_action_and_targets_r1():
     assert a["side"] == "BUY"
     assert a["trigger"] == "PP_SUPPORT_BUY"
     assert a["target"] == 113.0
-    assert a["stop"] < a["entry"]
+    assert a["stop"] < a["price"]
 
 
 def test_sell_pp_retest_uses_bearish_4h_direction_and_5m_price_action():
@@ -79,4 +79,4 @@ def test_sell_pp_retest_uses_bearish_4h_direction_and_5m_price_action():
     assert a["side"] == "SELL"
     assert a["trigger"] == "PP_RESISTANCE_SELL"
     assert a["target"] == 100.0
-    assert a["stop"] > a["entry"]
+    assert a["stop"] > a["price"]
