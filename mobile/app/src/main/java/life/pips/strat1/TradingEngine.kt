@@ -52,6 +52,7 @@ class TradingEngine(
     private var tradesToday = 0
     private var consecutiveLosses = 0
     private var lastDecisionKey = ""
+    private val burstState = mutableMapOf<String, String>()
 
     fun liveSamples(symbol: String): List<Strategy002Engine.Sample> = history[symbol]?.toList().orEmpty()
 
@@ -163,7 +164,7 @@ class TradingEngine(
                     .onFailure { safety.halt("S005 protection repair failed: ${it.message ?: "unknown"}") }
             }
         }
-        if (positions.isNotEmpty()) return
+        if (positions.size >= riskPolicy.maxPositions) return
         if (!safety.canEnter()) { onStatus("S005 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         if (plan.side == null || plan.entry == null || plan.stop == null || plan.target == null) return
         if (plan.rewardRisk < riskPolicy.minRewardRisk) { onStatus("S005 | ENTRY BLOCKED | RR ${fmt(plan.rewardRisk)} < ${fmt(riskPolicy.minRewardRisk)}"); return }
@@ -173,7 +174,7 @@ class TradingEngine(
         if (volume <= 0.0) { onStatus("S005 | ENTRY BLOCKED | broker minimum volume exceeds 5% balance risk cap"); return }
         val riskCash = abs(plan.entry - plan.stop) / spec.tickSize * tick.lossTickValue * volume
         logDecisionOnce("S005-${plan.side}-${plan.trigger}-${fmt(plan.entry)}", "S005 | decision=${plan.side.name} | 4H PP=${fmt(plan.target)} | entry=${fmt(plan.entry)} | SL=${fmt(plan.stop)} | TP=${fmt(plan.target)} | RR=${fmt(plan.rewardRisk)} | risk=${fmt(riskCash)} (${fmt(riskCash / snapshot.balance * 100.0)}%)")
-        submitAndVerifyEntry(account, saved, symbol, plan.side, volume, plan.stop, plan.target, tick, snapshot, true, "S005", onStatus)
+        submitBurstAndVerifyEntries(account, saved, symbol, plan.side, volume, plan.stop, plan.target, tick, snapshot, true, "S005", onStatus, "S005|$symbol|${plan.side}|${fmt(plan.stop)}|${fmt(plan.target)}|${plan.trigger}")
     }
 
     private fun isFreshTick(tick: TickPrice): Boolean { val age = System.currentTimeMillis() - tick.time; return age >= -2000 && age <= riskPolicy.maxTickAgeMs }
@@ -185,14 +186,14 @@ class TradingEngine(
             if (strategy003.exitDecision(plan, p)) { meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S003 | 5M STRUCTURE REVERSAL | EXIT CONFIRMED | ${p.id}") }.onFailure { onStatus("S003 | EXIT FAILED | ${it.message ?: "unknown"}") }; continue }
             strategy003.trailStop(plan, p)?.let { newStop -> if (!p.stopLoss.isFinite() || ((strategy003.positionSide(p) == TradeSide.BUY && newStop > p.stopLoss) || (strategy003.positionSide(p) == TradeSide.SELL && newStop < p.stopLoss))) meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = newStop).onSuccess { onStatus("S003 | 5M TRAIL UPDATED | ${p.id} | SL=${fmt(newStop)}") }.onFailure { onStatus("S003 | TRAIL FAILED | ${it.message ?: "unknown"}") } }
         }
-        if (positions.isNotEmpty() || !strategy003.shouldExecute(plan) || plan.side == null || plan.stop == null) return
+        if (positions.size >= riskPolicy.maxPositions || !strategy003.shouldExecute(plan) || plan.side == null || plan.stop == null) return
         if (!safety.canEnter()) { onStatus("S003 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         val entry = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         val syntheticTarget = if (plan.side == TradeSide.BUY) entry + abs(entry - plan.stop) * riskPolicy.minRewardRisk else entry - abs(entry - plan.stop) * riskPolicy.minRewardRisk
         val decision = risk.decide(plan.side, entry, plan.stop, syntheticTarget, snapshot.equity, positions.size, plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, snapshot.specifications[symbol]?.tickSize ?: 0.0)
         logDecisionOnce("S003-${plan.side}-${plan.confidence}-${plan.reason}", "S003 | decision=${plan.side.name} | confidence=${plan.confidence}% | entry=${fmt(entry)} | stop=${fmt(plan.stop)} | syntheticTarget=${fmt(syntheticTarget)} | risk=${decision.reason}")
         if (!decision.approved) { onStatus("S003 | ENTRY BLOCKED | ${decision.reason}"); return }
-        submitAndVerifyEntry(account, saved, symbol, plan.side, decision.quantity, plan.stop, null, tick, snapshot, false, "S003", onStatus)
+        submitBurstAndVerifyEntries(account, saved, symbol, plan.side, decision.quantity, plan.stop, null, tick, snapshot, false, "S003", onStatus, "S003|$symbol|${plan.side}|${fmt(plan.stop)}|${plan.reason}")
     }
 
     private suspend fun execute004(account: MetaAccount, saved: SavedConnection, symbol: String, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
@@ -204,7 +205,7 @@ class TradingEngine(
                     .onFailure { onStatus("S004 | EXIT FAILED | " + (it.message ?: "unknown")) }
             }
         }
-        if (positions.isNotEmpty() || plan.side == null || plan.stop == null || plan.target == null) return
+        if (positions.size >= riskPolicy.maxPositions || plan.side == null || plan.stop == null || plan.target == null) return
         if (!safety.canEnter()) { onStatus("S004 | ENTRY BLOCKED | KILL SWITCH | " + safety.reason()); return }
         val entry = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         val spec = snapshot.specifications[symbol] ?: return
@@ -214,7 +215,7 @@ class TradingEngine(
             "S004 | decision=" + plan.side.name + " | confidence=" + plan.confidence + "% | entry=" + fmt(entry) +
             " | SL=" + fmt(plan.stop) + " | TP=" + fmt(plan.target) + " | RR=" + fmt(decision.rewardRisk) + " | risk=" + decision.reason)
         if (!decision.approved) { onStatus("S004 | ENTRY BLOCKED | " + decision.reason); return }
-        submitAndVerifyEntry(account, saved, symbol, plan.side, decision.quantity, plan.stop, plan.target, tick, snapshot, true, "S004", onStatus)
+        submitBurstAndVerifyEntries(account, saved, symbol, plan.side, decision.quantity, plan.stop, plan.target, tick, snapshot, true, "S004", onStatus, "S004|$symbol|${plan.side}|${fmt(plan.stop)}|${fmt(plan.target)}|${plan.bos}")
     }
 
     fun stopStreaming() { streamStarted = false; streamLive = false; streamState = null; stream.stop(); safety.clear() }
@@ -246,7 +247,7 @@ class TradingEngine(
         logDecisionOnce("S001-${plan.side}-${plan.confidence}-${fmt(entryPrice)}-${fmt(stop)}-${fmt(target)}", "S001 | decision=${plan.side.name} | confidence=${plan.confidence}% | entry=${fmt(entryPrice)} | stop=${fmt(stop)} | target=${fmt(target)} | rr=${fmt(decision.rewardRisk)} | risk=${decision.reason} | flow=${plan.reason}")
         if (!decision.approved) { onStatus("S001 | $session | ${plan.side.name} | ENTRY BLOCKED | ${decision.reason}"); return }
         onStatus("S001 | $session | ${plan.side.name} | CONFLUENCE ${plan.confidence}% | EXECUTING | entry=${fmt(entryPrice)} | zone=$entryText | exit=$exitText | SL=${fmt(stop)} TP=${fmt(target)}")
-        submitAndVerifyEntry(account, saved, symbol, plan.side, decision.quantity, stop, target, tick, snapshot, true, "S001", onStatus)
+        submitBurstAndVerifyEntries(account, saved, symbol, plan.side, decision.quantity, stop, target, tick, snapshot, true, "S001", onStatus, "S001|$symbol|${plan.side}|${fmt(stop)}|${fmt(target)}")
     }
 
     private suspend fun execute002(account: MetaAccount, saved: SavedConnection, symbol: String, price: Double, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
@@ -256,14 +257,76 @@ class TradingEngine(
             if (exit.close) meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S002 | EXIT CONFIRMED | ${p.id}") }.onFailure { onStatus("S002 | EXIT FAILED | ${it.message ?: "unknown"}") }
             else strategy002.trailStop(p, price)?.let { newStop -> if (!p.stopLoss.isFinite() || newStop != p.stopLoss) meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = newStop).onFailure { onStatus("S002 | TRAIL FAILED | ${it.message ?: "unknown"}") } }
         }
-        if (positions.isNotEmpty() || plan.side == null || plan.entry == null || plan.stop == null) return
+        if (positions.size >= riskPolicy.maxPositions || plan.side == null || plan.entry == null || plan.stop == null) return
         if (!safety.canEnter()) { onStatus("S002 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         val target = if (plan.side == TradeSide.BUY) plan.entry + abs(plan.entry - plan.stop) * riskPolicy.minRewardRisk else plan.entry - abs(plan.entry - plan.stop) * riskPolicy.minRewardRisk
         val spec = snapshot.specifications[symbol] ?: return
         val decision = risk.decide(plan.side, plan.entry, plan.stop, target, snapshot.equity, positions.size, plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, spec.tickSize)
         logDecisionOnce("S002-${plan.side}-${plan.confidence}-${plan.reason}", "S002 | decision=${plan.side.name} | confidence=${plan.confidence}% | entry=${fmt(plan.entry)} | stop=${fmt(plan.stop)} | target=${fmt(target)} | risk=${decision.reason}")
         if (!decision.approved) { onStatus("S002 | ENTRY BLOCKED | ${decision.reason}"); return }
-        submitAndVerifyEntry(account, saved, symbol, plan.side, decision.quantity, plan.stop, null, tick, snapshot, false, "S002", onStatus)
+        submitBurstAndVerifyEntries(account, saved, symbol, plan.side, decision.quantity, plan.stop, null, tick, snapshot, false, "S002", onStatus, "S002|$symbol|${plan.side}|${fmt(plan.stop)}")
+    }
+
+    private suspend fun submitBurstAndVerifyEntries(
+        account: MetaAccount, saved: SavedConnection, symbol: String, side: TradeSide, volume: Double,
+        stop: Double, target: Double?, tick: TickPrice, snapshot: MetaSnapshot, requireTakeProfit: Boolean,
+        tag: String, onStatus: (String) -> Unit, signalKey: String
+    ): Boolean {
+        val stateKey = "${tag}|${symbol}"
+        if (burstState[stateKey] == signalKey) return false
+        val slots = (riskPolicy.maxPositions - snapshot.positions.count { it.symbol.equals(symbol, true) }).coerceAtLeast(0).coerceAtMost(riskPolicy.entriesPerSignal)
+        if (slots <= 0) return false
+        burstState[stateKey] = signalKey
+        onStatus("${tag} | BURST EXECUTION | entries=${slots} | side=${side.name} | entry≈${fmt(if (side == TradeSide.BUY) tick.ask else tick.bid)}")
+        val receipts = kotlinx.coroutines.coroutineScope {
+            (0 until slots).map {
+                kotlinx.coroutines.async(kotlinx.coroutines.Dispatchers.IO) {
+                    meta.marketOrder(saved.metaApiToken, account, side, symbol, volume, stopLoss = stop, takeProfit = target)
+                }
+            }.mapIndexed { index, deferred ->
+                val result = deferred.await()
+                result.onSuccess { r -> onStatus("${tag} | ORDER ${index + 1}/${slots} ACK | order=${r.orderId.ifBlank { r.positionId }} | code=${r.stringCode}") }
+                    .onFailure { onStatus("${tag} | ORDER ${index + 1}/${slots} SUBMIT FAILED | ${it.message ?: "unknown"}") }
+                index to result
+            }
+        }
+        val successful = receipts.mapNotNull { it.second.getOrNull() }
+        if (successful.size != slots) safety.halt("${tag} burst submission incomplete: ${successful.size}/${slots} orders acknowledged")
+        var remaining = successful.toMutableList()
+        repeat(riskPolicy.orderVerifyAttempts) { attempt ->
+            if (remaining.isEmpty()) return@repeat
+            delay(riskPolicy.orderVerifyDelayMs)
+            val refreshed = meta.refresh(saved.metaApiToken, account, listOf(symbol)).getOrNull() ?: return@repeat
+            val positions = refreshed.positions.filter { it.symbol.equals(symbol, true) }
+            val verifiedReceipts = mutableListOf<TradeReceipt>()
+            for (receipt in remaining) {
+                val found = if (receipt.positionId.isNotBlank()) positions.firstOrNull { it.id == receipt.positionId }
+                else positions.firstOrNull { positionSide(it) == side && abs(it.volume - volume) <= 0.0000001 }
+                if (found != null) {
+                    var protected = found.stopLoss.isFinite() && found.stopLoss > 0.0 && (!requireTakeProfit || (found.takeProfit.isFinite() && found.takeProfit > 0.0))
+                    if (!protected) {
+                        meta.modifyPosition(saved.metaApiToken, account, found.id, stopLoss = stop, takeProfit = target)
+                            .onSuccess { onStatus("${tag} | PROTECTION REPAIR | position=${found.id}") }
+                        protected = true
+                    }
+                    if (protected) {
+                        verifiedReceipts += receipt
+                        onStatus("${tag} | ORDER VERIFIED | position=${found.id} | fill=${fmt(found.openPrice)} | SL=${fmt(found.stopLoss)} TP=${fmt(found.takeProfit)}")
+                    }
+                }
+            }
+            remaining = remaining.filterNot { r -> verifiedReceipts.any { it.orderId == r.orderId && it.positionId == r.positionId } }.toMutableList()
+            if (remaining.isNotEmpty()) onStatus("${tag} | VERIFY PASS ${attempt + 1}/${riskPolicy.orderVerifyAttempts} | pending=${remaining.size}")
+        }
+        if (remaining.isNotEmpty()) {
+            safety.halt("${tag} burst verification incomplete: ${remaining.size}/${slots} broker positions unverified")
+            onStatus("${tag} | EXECUTION UNCERTAIN | verified=${slots - remaining.size}/${slots} | KILL SWITCH")
+            return false
+        }
+        tradesToday += successful.size
+        logTradingDecision("${tag} | burst verification=ACTIVE | entries=${successful.size} | individually_acknowledged=true | individually_protected=true")
+        onStatus("${tag} | BURST ACTIVE | ${successful.size} entries individually acknowledged and protected")
+        return true
     }
 
     private suspend fun submitAndVerifyEntry(account: MetaAccount, saved: SavedConnection, symbol: String, side: TradeSide, volume: Double, stop: Double, target: Double?, tick: TickPrice, snapshot: MetaSnapshot, requireTakeProfit: Boolean, tag: String, onStatus: (String) -> Unit): Boolean {
