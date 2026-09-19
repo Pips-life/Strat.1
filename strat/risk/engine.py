@@ -178,8 +178,18 @@ class RiskEngine:
             return RiskDecision(False, reward_risk=rr, reason="minimum executable quantity exceeds risk budget")
         risk_amount = abs(request.entry - request.stop_loss) * request.point_value * quantity
         notional = abs(request.entry * request.point_value * quantity)
-        if notional > request.equity * limits.max_position_notional_pct:
-            return RiskDecision(False, quantity, risk_amount, rr, "position notional exceeds equity limit")
+        max_notional = request.equity * limits.max_position_notional_pct
+        if notional > max_notional:
+            # Treat the notional ceiling as a sizing constraint, not an all-or-nothing rejection.
+            # Preserve the configured risk budget while reducing the order to the largest
+            # executable quantity that fits the account notional limit.
+            step = limits.quantity_step
+            capped_quantity = floor(max_notional / (abs(request.entry) * request.point_value) / step) * step if request.entry > 0 else 0.0
+            capped_quantity = round(capped_quantity, 10)
+            if capped_quantity < limits.min_quantity:
+                return RiskDecision(False, quantity, risk_amount, rr, "minimum executable quantity exceeds notional limit")
+            quantity = capped_quantity
+            risk_amount = abs(request.entry - request.stop_loss) * request.point_value * quantity
         return RiskDecision(True, quantity, risk_amount, rr, "approved")
 
     def approve(self, *, confidence: float, current_positions: int, daily_loss: float) -> bool:
