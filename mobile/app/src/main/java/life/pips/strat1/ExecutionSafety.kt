@@ -10,6 +10,7 @@ data class CanonicalRiskPolicy(
     val riskPerTrade: Double,
     val riskBudgetUtilization: Double,
     val maxPositions: Int,
+    val entriesPerSignal: Int,
     val maxDailyLoss: Double,
     val maxTradesPerDay: Int,
     val maxConsecutiveLosses: Int,
@@ -31,7 +32,7 @@ data class CanonicalRiskPolicy(
         fun load(): CanonicalRiskPolicy {
             val p = JSONObject(BuildConfig.RISK_POLICY_JSON)
             return CanonicalRiskPolicy(
-                p.getDouble("risk_per_trade"), p.getDouble("risk_budget_utilization"), p.getInt("max_positions"),
+                p.getDouble("risk_per_trade"), p.getDouble("risk_budget_utilization"), p.getInt("max_positions"), p.getInt("entries_per_signal").coerceAtLeast(1),
                 p.getDouble("max_daily_loss"), p.getInt("max_trades_per_day"), p.getInt("max_consecutive_losses"),
                 p.getDouble("min_reward_risk"), p.getDouble("max_position_notional_pct"), p.getDouble("min_confidence"),
                 p.getInt("flatten_minutes_before_close"), p.getString("session_start"), p.getString("session_end"),
