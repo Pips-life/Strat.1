@@ -47,6 +47,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             if (saved.flashAlphaKey.isNotBlank() && (flashData == null || now - lastFlashPull >= 2 * 60 * 60 * 1000L)) { lastFlashPull = now; flash.snapshot(saved.flashAlphaKey, flashSymbol).onSuccess { flashData = it; status = "FlashAlpha GC=F snapshot received" }.onFailure { if (running && selectedStrategy == TradingEngine.StrategyId.STRATEGY_001) status = it.message ?: "FlashAlpha unavailable" } }
             if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_003) engine.strategy003.refresh(a, saved.metaApiToken, selectedSymbol).onFailure { if (!running) status = it.message ?: "SMC candle data unavailable" }
             if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_004) engine.strategy004.refresh(a, saved.metaApiToken, selectedSymbol)
+            if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_005) engine.strategy005.refresh(a, saved.metaApiToken, selectedSymbol, engine.liveSamples(selectedSymbol)).onFailure { if (!running) status = it.message ?: "Woodie pivot data unavailable" }
             if (running && armed && saved.metaApiToken.isNotBlank()) snapshot?.let { s -> engine.execute(selectedStrategy, a, saved, s, flashData, selectedSymbol) { status = it } }
             delay(1000)
         }
