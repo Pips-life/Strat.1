@@ -77,7 +77,18 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
             }
         }
     }
-    suspend fun calculateMargin(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, openPrice: Double): Result<Double> = runCatching {\n        val body = JSONObject().apply {\n            put("symbol", symbol)\n            put("type", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL")\n            put("volume", volume)\n            put("openPrice", openPrice)\n        }\n        val r = request("POST", "${clientBase(account.region)}/users/current/accounts/${account.id}/calculate-margin", body.toString(), token)\n        r.optDouble("margin", Double.NaN).also { require(it.isFinite() && it >= 0.0) { "MetaApi returned invalid margin" } }\n    }\n\n    suspend fun marketOrder(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, stopLoss: Double? = null, takeProfit: Double? = null): Result<TradeReceipt> = trade(token, account, JSONObject().apply {
+    suspend fun calculateMargin(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, openPrice: Double): Result<Double> = runCatching {
+        val body = JSONObject().apply {
+            put("symbol", symbol)
+            put("type", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL")
+            put("volume", volume)
+            put("openPrice", openPrice)
+        }
+        val r = request("POST", "${clientBase(account.region)}/users/current/accounts/${account.id}/calculate-margin", body.toString(), token)
+        r.optDouble("margin", Double.NaN).also { require(it.isFinite() && it >= 0.0) { "MetaApi returned invalid margin" } }
+    }
+
+    suspend fun marketOrder(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, stopLoss: Double? = null, takeProfit: Double? = null): Result<TradeReceipt> = trade(token, account, JSONObject().apply {
         put("actionType", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL"); put("symbol", symbol); put("volume", volume); put("clientId", clientId()); put("comment", "P1")
         stopLoss?.let { put("stopLoss", it) }; takeProfit?.let { put("takeProfit", it) }
     })
