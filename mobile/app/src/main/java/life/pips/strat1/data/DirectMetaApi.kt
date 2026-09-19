@@ -65,6 +65,18 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
         }, prices, specs)
     }
 
+    suspend fun historicalCandles(token: String, account: MetaAccount, symbol: String, timeframe: String, limit: Int = 3): Result<List<HistoricalCandle>> = runCatching {
+        val encoded = URLEncoder.encode(symbol, "UTF-8")
+        val safeLimit = limit.coerceIn(1, 1000)
+        val url = "https://mt-market-data-client-api-v1.${account.region.ifBlank { "london" }}.agiliumtrade.ai/users/current/accounts/${account.id}/historical-market-data/symbols/$encoded/timeframes/$timeframe/candles?limit=$safeLimit"
+        val a = requestArray("GET", url, null, token)
+        buildList {
+            for (i in 0 until a.length()) {
+                val b = a.optJSONObject(i) ?: continue
+                add(HistoricalCandle(b.optString("time"), b.optString("brokerTime"), b.optDouble("open", Double.NaN), b.optDouble("high", Double.NaN), b.optDouble("low", Double.NaN), b.optDouble("close", Double.NaN)))
+            }
+        }
+    }
     suspend fun marketOrder(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, stopLoss: Double? = null, takeProfit: Double? = null): Result<TradeReceipt> = trade(token, account, JSONObject().apply {
         put("actionType", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL"); put("symbol", symbol); put("volume", volume); put("clientId", clientId()); put("comment", "P1")
         stopLoss?.let { put("stopLoss", it) }; takeProfit?.let { put("takeProfit", it) }
@@ -122,6 +134,7 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
 
 enum class TradeSide { BUY, SELL }
 data class TickPrice(val bid: Double, val ask: Double, val time: Long, val profitTickValue: Double = Double.NaN, val lossTickValue: Double = Double.NaN)
+data class HistoricalCandle(val time: String, val brokerTime: String, val open: Double, val high: Double, val low: Double, val close: Double)
 data class TradeReceipt(val numericCode: Int, val stringCode: String, val message: String, val orderId: String, val positionId: String)
 data class MetaAccount(val id: String, val login: String, val server: String, val state: String, val connectionStatus: String, val region: String, val currency: String)
 data class MetaPosition(val id: String, val symbol: String, val type: String, val volume: Double, val openPrice: Double, val currentPrice: Double, val profit: Double, val stopLoss: Double, val takeProfit: Double)
