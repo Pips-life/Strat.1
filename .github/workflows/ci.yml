@@ -1,4 +1,5 @@
 name: Strat.1 Android + Python + Web CI
+# Release pipeline: push-to-main and manual dispatch must build v2.79.
 
 on:
   push:
