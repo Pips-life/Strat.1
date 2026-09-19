@@ -53,6 +53,8 @@ class TradingEngine(
     private var consecutiveLosses = 0
     private var lastDecisionKey = ""
 
+    fun liveSamples(symbol: String): List<Strategy002Engine.Sample> = history[symbol]?.toList().orEmpty()
+
     fun recordTick(symbol: String, tickTime: Long, price: Double) {
         if (!price.isFinite()) return
         lastTickAt = System.currentTimeMillis()
