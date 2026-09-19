@@ -57,7 +57,7 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
                 specs[symbol] = spec
             }
         }
-        MetaSnapshot(current, info.optDouble("balance", Double.NaN), info.optDouble("equity", Double.NaN), info.optDouble("freeMargin", Double.NaN), buildList {
+        MetaSnapshot(current, info.optDouble("balance", Double.NaN), info.optDouble("equity", Double.NaN), info.optDouble("freeMargin", Double.NaN), info.optDouble("leverage", Double.NaN), buildList {
             for (i in 0 until positions.length()) {
                 val p = positions.optJSONObject(i) ?: continue
                 add(MetaPosition(p.optString("id").ifBlank { p.optString("positionId") }, p.optString("symbol"), p.optString("type"), p.optDouble("volume", 0.0), p.optDouble("openPrice", Double.NaN), p.optDouble("currentPrice", Double.NaN), p.optDouble("profit", Double.NaN), p.optDouble("stopLoss", Double.NaN), p.optDouble("takeProfit", Double.NaN)))
@@ -77,7 +77,7 @@ class DirectMetaApiClient(private val http: OkHttpClient = OkHttpClient()) {
             }
         }
     }
-    suspend fun marketOrder(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, stopLoss: Double? = null, takeProfit: Double? = null): Result<TradeReceipt> = trade(token, account, JSONObject().apply {
+    suspend fun calculateMargin(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, openPrice: Double): Result<Double> = runCatching {\n        val body = JSONObject().apply {\n            put("symbol", symbol)\n            put("type", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL")\n            put("volume", volume)\n            put("openPrice", openPrice)\n        }\n        val r = request("POST", "${clientBase(account.region)}/users/current/accounts/${account.id}/calculate-margin", body.toString(), token)\n        r.optDouble("margin", Double.NaN).also { require(it.isFinite() && it >= 0.0) { "MetaApi returned invalid margin" } }\n    }\n\n    suspend fun marketOrder(token: String, account: MetaAccount, side: TradeSide, symbol: String, volume: Double, stopLoss: Double? = null, takeProfit: Double? = null): Result<TradeReceipt> = trade(token, account, JSONObject().apply {
         put("actionType", if (side == TradeSide.BUY) "ORDER_TYPE_BUY" else "ORDER_TYPE_SELL"); put("symbol", symbol); put("volume", volume); put("clientId", clientId()); put("comment", "P1")
         stopLoss?.let { put("stopLoss", it) }; takeProfit?.let { put("takeProfit", it) }
     })
@@ -139,7 +139,7 @@ data class TradeReceipt(val numericCode: Int, val stringCode: String, val messag
 data class MetaAccount(val id: String, val login: String, val server: String, val state: String, val connectionStatus: String, val region: String, val currency: String)
 data class MetaPosition(val id: String, val symbol: String, val type: String, val volume: Double, val openPrice: Double, val currentPrice: Double, val profit: Double, val stopLoss: Double, val takeProfit: Double)
 data class SymbolSpecification(val tickSize: Double, val minVolume: Double, val maxVolume: Double, val volumeStep: Double, val contractSize: Double)
-data class MetaSnapshot(val account: MetaAccount, val balance: Double, val equity: Double, val freeMargin: Double, val positions: List<MetaPosition>, val prices: Map<String, TickPrice>, val specifications: Map<String, SymbolSpecification> = emptyMap())
+data class MetaSnapshot(val account: MetaAccount, val balance: Double, val equity: Double, val freeMargin: Double, val leverage: Double = Double.NaN, val positions: List<MetaPosition>, val prices: Map<String, TickPrice>, val specifications: Map<String, SymbolSpecification> = emptyMap())
 data class GexStrike(val strike: Double, val callGex: Double, val putGex: Double, val netGex: Double, val callOi: Double, val putOi: Double, val callVolume: Double, val putVolume: Double)
 data class OptionContract(val type: String, val expiry: String, val strike: Double, val iv: Double, val delta: Double, val gamma: Double, val theta: Double, val vega: Double, val openInterest: Double, val volume: Double, val sviVol: Double = Double.NaN)
 data class FlashAlphaSnapshot(val symbol: String, val netGex: Double, val liveGex: Double, val gammaFlip: Double, val regime: String, val callWall: Double, val putWall: Double, val zeroDteMagnet: Double, val flowDirection: String, val intradayOiDelta: Double, val flowGexPctShift: Double, val underlyingPrice: Double, val strikes: List<GexStrike>, val atmIv: Double = Double.NaN, val put25dIv: Double = Double.NaN, val call25dIv: Double = Double.NaN, val skew25d: Double = Double.NaN, val skew25dPut: Double = Double.NaN, val skew25dCall: Double = Double.NaN, val putCallVolumeRatio: Double = Double.NaN, val putCallOiRatio: Double = Double.NaN, val totalCallVolume: Double = Double.NaN, val totalPutVolume: Double = Double.NaN, val totalCallOi: Double = Double.NaN, val totalPutOi: Double = Double.NaN, val termState: String = "unknown", val ivDispersionCrossStrike: Double = Double.NaN, val options: List<OptionContract> = emptyList())
