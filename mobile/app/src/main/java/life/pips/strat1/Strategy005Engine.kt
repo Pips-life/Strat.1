@@ -28,6 +28,7 @@ class Strategy005Engine(private val meta: DirectMetaApiClient) {
     private var levels: Levels? = null
     private var pivotSourceTime = ""
     private var lastPivotFetch = 0L
+    @Volatile private var latestPlan = Plan(null, 0, null, null, null, "Waiting for Strategy 005 data.", "", null, 0.0)
 
     private fun woodie(c: HistoricalCandle): Levels {
         val p = (c.high + c.low + 2.0 * c.close) / 4.0
@@ -47,7 +48,7 @@ class Strategy005Engine(private val meta: DirectMetaApiClient) {
             }
             lastPivotFetch = now
         }
-        evaluateFromTicks(levels, samples)
+        evaluateFromTicks(levels, samples).also { latestPlan = it }
     }
 
     fun evaluateFromTicks(current: Levels?, samples: List<Strategy002Engine.Sample>): Plan {
@@ -80,6 +81,8 @@ class Strategy005Engine(private val meta: DirectMetaApiClient) {
         if (rr < 1.0) return Plan(null, 0, candle.close, current.pp, stop, "5M rejection found, but PP target has insufficient room.", trigger, current, rr)
         return Plan(side, 90, candle.close, current.pp, stop, "5M $trigger confirmed; target is the fixed 4H Woodie PP.", trigger, current, rr)
     }
+
+    fun latest(): Plan = latestPlan
 
     fun exitOnPivot(position: MetaPosition, price: Double, target: Double): Boolean {
         val side = positionSide(position) ?: return false
