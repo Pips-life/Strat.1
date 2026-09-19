@@ -63,20 +63,20 @@ def test_buy_pp_retest_uses_5m_price_action_and_targets_r1():
     assert a["stop"] < a["entry"]
 
 
-def test_sell_pp_retest_uses_5m_price_action_and_targets_s1():
+def test_sell_pp_retest_uses_bearish_4h_direction_and_5m_price_action():
     s = Strategy005()
     market = {"timeframes": {
         "4h": [
-            {"open": 95, "high": 110, "low": 100, "close": 108},
-            {"open": 108, "high": 109, "low": 104, "close": 105},
+            {"open": 108, "high": 110, "low": 100, "close": 105},
+            {"open": 105, "high": 106, "low": 102, "close": 103},
         ],
         "5m": [
-            {"open": 106.8, "high": 107.0, "low": 106.3, "close": 106.4},
-            {"open": 106.6, "high": 106.7, "low": 106.0, "close": 106.2},
+            {"open": 104.8, "high": 104.9, "low": 104.4, "close": 104.7},
+            {"open": 104.9, "high": 105.2, "low": 104.3, "close": 104.7},
         ],
     }}
     a = s.analyze(market)
     assert a["side"] == "SELL"
-    assert a["trigger"] == "PP_RETEST_SELL"
-    assert a["target"] == 103.0
+    assert a["trigger"] == "PP_RESISTANCE_SELL"
+    assert a["target"] == 100.0
     assert a["stop"] > a["entry"]
