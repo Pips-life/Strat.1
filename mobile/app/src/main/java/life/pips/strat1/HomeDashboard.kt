@@ -137,6 +137,9 @@ fun HomeDashboard(
                     if (strategy == TradingEngine.StrategyId.STRATEGY_001) {
                         Text("TP  ${view?.exit?.let { fmt(it, 2) } ?: "—"}", color = Cyan, fontSize = 9.sp)
                         Text("Exit  GEX exit zone", color = Muted, fontSize = 8.sp)
+                    } else if (strategy == TradingEngine.StrategyId.STRATEGY_005) {
+                        Text("TP  ${view?.exit?.let { fmt(it, 2) } ?: "—"}", color = Cyan, fontSize = 9.sp)
+                        Text("Exit  4H Woodie PP", color = Muted, fontSize = 8.sp)
                     } else {
                         Text("TP  NONE", color = Muted, fontSize = 9.sp)
                         Text("Exit  strategy-managed trailing/reversal", color = Cyan, fontSize = 8.sp)
