@@ -297,17 +297,21 @@ class TradingEngine(
             if (remaining.isEmpty()) return@repeat
             delay(riskPolicy.orderVerifyDelayMs)
             val refreshed = meta.refresh(saved.metaApiToken, account, listOf(symbol)).getOrNull() ?: return@repeat
-            val positions = refreshed.positions.filter { it.symbol.equals(symbol, true) }
+            val positions = refreshed.positions.filter { it.symbol.equals(symbol, true) }.toMutableList()
             val verifiedReceipts = mutableListOf<TradeReceipt>()
             for (receipt in remaining) {
-                val found = if (receipt.positionId.isNotBlank()) positions.firstOrNull { it.id == receipt.positionId }
-                else positions.firstOrNull { positionSide(it) == side && abs(it.volume - volume) <= 0.0000001 }
+                val found = if (receipt.positionId.isNotBlank()) {
+                    positions.firstOrNull { it.id == receipt.positionId }
+                } else {
+                    positions.firstOrNull { positionSide(it) == side && abs(it.volume - volume) <= 0.0000001 }
+                }
                 if (found != null) {
+                    positions.remove(found)
                     var protected = found.stopLoss.isFinite() && found.stopLoss > 0.0 && (!requireTakeProfit || (found.takeProfit.isFinite() && found.takeProfit > 0.0))
                     if (!protected) {
                         meta.modifyPosition(saved.metaApiToken, account, found.id, stopLoss = stop, takeProfit = target)
-                            .onSuccess { onStatus("${tag} | PROTECTION REPAIR | position=${found.id}") }
-                        protected = true
+                            .onSuccess { protected = true; onStatus("${tag} | PROTECTION REPAIR CONFIRMED | position=${found.id}") }
+                            .onFailure { onStatus("${tag} | PROTECTION REPAIR FAILED | position=${found.id} | ${it.message ?: "unknown"}") }
                     }
                     if (protected) {
                         verifiedReceipts += receipt
