@@ -94,7 +94,7 @@ class BotEngine:
         if signal.action == "CLOSE":
             self._last_emitted_action = "CLOSE"
             return signal
-        if current_positions >= self.risk_engine.limits.max_positions:
+        if self.risk_engine.limits.max_positions > 0 and current_positions >= self.risk_engine.limits.max_positions:
             signal.action = "WAIT"
             signal.reason = "Maximum simultaneous positions reached."
             return signal
