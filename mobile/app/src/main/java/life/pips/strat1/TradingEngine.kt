@@ -328,7 +328,7 @@ class TradingEngine(
         onStatus("${tag} | BURST EXECUTION | entries=${slots} | side=${side.name} | entry≈${fmt(if (side == TradeSide.BUY) tick.ask else tick.bid)}")
         val receipts = kotlinx.coroutines.coroutineScope {
             (0 until slots).map {
-                kotlinx.coroutines.async(kotlinx.coroutines.Dispatchers.IO) {
+                async(kotlinx.coroutines.Dispatchers.IO) {
                     meta.marketOrder(saved.metaApiToken, account, side, symbol, capacity.second, stopLoss = stop, takeProfit = target)
                 }
             }.mapIndexed { index, deferred ->
