@@ -1,6 +1,7 @@
 name: Strat.1 Android + Python + Web CI
 # Release pipeline: push-to-main and manual dispatch must build v2.79.
 # Build release trigger verification.
+# v2.79 trigger after TradingEngine compile fix.
 
 on:
   push:
