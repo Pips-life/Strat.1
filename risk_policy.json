@@ -1,7 +1,8 @@
 {
   "risk_per_trade": 0.01,
   "risk_budget_utilization": 1.0,
-  "max_positions": 1,
+  "max_positions": 3,
+  "entries_per_signal": 3,
   "max_daily_loss": 0.03,
   "max_trades_per_day": 5,
   "max_consecutive_losses": 3,
