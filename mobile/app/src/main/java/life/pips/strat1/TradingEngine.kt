@@ -9,11 +9,14 @@ import life.pips.strat1.data.MetaSnapshot
 import life.pips.strat1.data.SavedConnection
 import life.pips.strat1.data.TickPrice
 import life.pips.strat1.data.TradeSide
+import life.pips.strat1.data.TradeReceipt
 import life.pips.strat1.data.MetaApiStreamingBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -205,7 +208,7 @@ class TradingEngine(
                     .onFailure { onStatus("S004 | EXIT FAILED | " + (it.message ?: "unknown")) }
             }
         }
-        if (positions.size >= riskPolicy.maxPositions || plan.side == null || plan.stop == null || plan.target == null) return
+        if (riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions || plan.side == null || plan.stop == null || plan.target == null) return
         if (!safety.canEnter()) { onStatus("S004 | ENTRY BLOCKED | KILL SWITCH | " + safety.reason()); return }
         val entry = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         val spec = snapshot.specifications[symbol] ?: return
