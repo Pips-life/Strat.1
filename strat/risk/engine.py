@@ -151,7 +151,7 @@ class RiskEngine:
             return RiskDecision(False, reason="invalid confidence")
         if request.confidence < limits.min_confidence:
             return RiskDecision(False, reason="confidence below risk threshold")
-        if request.current_positions >= limits.max_positions:
+        if limits.max_positions > 0 and request.current_positions >= limits.max_positions:
             return RiskDecision(False, reason="maximum simultaneous positions reached")
         if request.daily_pnl <= -(request.equity * limits.max_daily_loss):
             return RiskDecision(False, reason="maximum daily loss reached")
@@ -188,7 +188,7 @@ class RiskEngine:
         return (
             0 <= confidence <= 100
             and confidence >= self.limits.min_confidence
-            and current_positions < self.limits.max_positions
+            and (self.limits.max_positions <= 0 or current_positions < self.limits.max_positions)
             and loss_fraction < self.limits.max_daily_loss
         )
 
