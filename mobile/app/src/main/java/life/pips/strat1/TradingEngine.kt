@@ -164,7 +164,7 @@ class TradingEngine(
                     .onFailure { safety.halt("S005 protection repair failed: ${it.message ?: "unknown"}") }
             }
         }
-        if (positions.size >= riskPolicy.maxPositions) return
+        if (riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions) return
         if (!safety.canEnter()) { onStatus("S005 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         if (plan.side == null || plan.entry == null || plan.stop == null || plan.target == null) return
         if (plan.rewardRisk < riskPolicy.minRewardRisk) { onStatus("S005 | ENTRY BLOCKED | RR ${fmt(plan.rewardRisk)} < ${fmt(riskPolicy.minRewardRisk)}"); return }
@@ -186,7 +186,7 @@ class TradingEngine(
             if (strategy003.exitDecision(plan, p)) { meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S003 | 5M STRUCTURE REVERSAL | EXIT CONFIRMED | ${p.id}") }.onFailure { onStatus("S003 | EXIT FAILED | ${it.message ?: "unknown"}") }; continue }
             strategy003.trailStop(plan, p)?.let { newStop -> if (!p.stopLoss.isFinite() || ((strategy003.positionSide(p) == TradeSide.BUY && newStop > p.stopLoss) || (strategy003.positionSide(p) == TradeSide.SELL && newStop < p.stopLoss))) meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = newStop).onSuccess { onStatus("S003 | 5M TRAIL UPDATED | ${p.id} | SL=${fmt(newStop)}") }.onFailure { onStatus("S003 | TRAIL FAILED | ${it.message ?: "unknown"}") } }
         }
-        if (positions.size >= riskPolicy.maxPositions || !strategy003.shouldExecute(plan) || plan.side == null || plan.stop == null) return
+        if ((riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions) || !strategy003.shouldExecute(plan) || plan.side == null || plan.stop == null) return
         if (!safety.canEnter()) { onStatus("S003 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         val entry = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         val syntheticTarget = if (plan.side == TradeSide.BUY) entry + abs(entry - plan.stop) * riskPolicy.minRewardRisk else entry - abs(entry - plan.stop) * riskPolicy.minRewardRisk
@@ -234,7 +234,6 @@ class TradingEngine(
                 if (targetMissing || stopMissing) meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = stop, takeProfit = target).onSuccess { onStatus("S001 | $session | MANAGEMENT | ${p.id} | SL=${fmt(stop)} TP=${fmt(target)}") }.onFailure { safety.halt("existing position protection uncertain: ${it.message}") }
             }
         }
-        if (positions.isNotEmpty()) return
         if (!safety.canEnter()) { onStatus("S001 | $session | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         if (plan.side == null) { logDecisionOnce("S001-WAIT-${plan.reason}", "S001 | decision=WAIT | confidence=${plan.confidence}% | reason=${plan.reason} | zone=$entryText | exit=$exitText"); onStatus("S001 | $session | $symbol | WAIT CONFLUENCE | ${plan.reason} | zone=$entryText | exit=$exitText | SL=$stopText"); return }
         if (!strategy001.entryAllowed(plan, price)) { logDecisionOnce("S001-ZONE-${plan.side}-${fmt(price)}", "S001 | decision=WAIT ZONE | side=${plan.side.name} | confidence=${plan.confidence}% | price=${fmt(price)} | entry=$entryText | exit=$exitText"); onStatus("S001 | $session | ${plan.side.name} | WAIT ZONE | price=${fmt(price)} | entry=$entryText | exit=$exitText | conf=${plan.confidence}%"); return }
@@ -267,6 +266,51 @@ class TradingEngine(
         submitBurstAndVerifyEntries(account, saved, symbol, plan.side, decision.quantity, plan.stop, null, tick, snapshot, false, "S002", onStatus, "S002|$symbol|${plan.side}|${fmt(plan.stop)}")
     }
 
+    private suspend fun dynamicEntryCapacity(
+        account: MetaAccount,
+        saved: SavedConnection,
+        symbol: String,
+        side: TradeSide,
+        tick: TickPrice,
+        stop: Double,
+        snapshot: MetaSnapshot
+    ): Pair<Int, Double> {
+        val spec = snapshot.specifications[symbol] ?: return 0 to 0.0
+        val volume = riskPolicy.minQuantity
+        val entry = if (side == TradeSide.BUY) tick.ask else tick.bid
+        if (!entry.isFinite() || entry <= 0.0 || !stop.isFinite() || !spec.tickSize.isFinite() || spec.tickSize <= 0.0 ||
+            !tick.lossTickValue.isFinite() || tick.lossTickValue <= 0.0 || volume < spec.minVolume ||
+            volume > spec.maxVolume || spec.volumeStep <= 0.0) return 0 to 0.0
+
+        val budget = snapshot.equity * riskPolicy.riskPerTrade * riskPolicy.riskBudgetUtilization
+        if (!budget.isFinite() || budget <= 0.0) return 0 to 0.0
+
+        var usedRisk = 0.0
+        for (p in snapshot.positions.filter { it.symbol.equals(symbol, true) }) {
+            if (!p.stopLoss.isFinite() || p.stopLoss <= 0.0) {
+                return 0 to 0.0
+            }
+            usedRisk += abs(p.openPrice - p.stopLoss) / spec.tickSize * tick.lossTickValue * p.volume
+        }
+
+        val riskPerEntry = abs(entry - stop) / spec.tickSize * tick.lossTickValue * volume
+        val remainingRisk = budget - usedRisk
+        if (!riskPerEntry.isFinite() || riskPerEntry <= 0.0 || remainingRisk < riskPerEntry) return 0 to 0.0
+
+        val marginPerEntry = meta.calculateMargin(saved.metaApiToken, account, side, symbol, volume, entry).getOrElse {
+            if (snapshot.leverage.isFinite() && snapshot.leverage > 0.0 && spec.contractSize.isFinite() && spec.contractSize > 0.0)
+                entry * spec.contractSize * volume / snapshot.leverage
+            else Double.NaN
+        }
+        if (!marginPerEntry.isFinite() || marginPerEntry <= 0.0 || !snapshot.freeMargin.isFinite() || snapshot.freeMargin <= 0.0) return 0 to 0.0
+
+        val riskSlots = floor(remainingRisk / riskPerEntry).toInt()
+        val marginSlots = floor(snapshot.freeMargin / marginPerEntry).toInt()
+        val signalCap = if (riskPolicy.entriesPerSignal > 0) riskPolicy.entriesPerSignal else Int.MAX_VALUE
+        val slots = minOf(riskSlots, marginSlots, signalCap)
+        return slots.coerceAtLeast(0) to volume
+    }
+
     private suspend fun submitBurstAndVerifyEntries(
         account: MetaAccount, saved: SavedConnection, symbol: String, side: TradeSide, volume: Double,
         stop: Double, target: Double?, tick: TickPrice, snapshot: MetaSnapshot, requireTakeProfit: Boolean,
@@ -274,14 +318,15 @@ class TradingEngine(
     ): Boolean {
         val stateKey = "${tag}|${symbol}"
         if (burstState[stateKey] == signalKey) return false
-        val slots = (riskPolicy.maxPositions - snapshot.positions.count { it.symbol.equals(symbol, true) }).coerceAtLeast(0).coerceAtMost(riskPolicy.entriesPerSignal)
+        val capacity = dynamicEntryCapacity(account, saved, symbol, side, tick, stop, snapshot)
+        val slots = capacity.first
         if (slots <= 0) return false
         burstState[stateKey] = signalKey
         onStatus("${tag} | BURST EXECUTION | entries=${slots} | side=${side.name} | entry≈${fmt(if (side == TradeSide.BUY) tick.ask else tick.bid)}")
         val receipts = kotlinx.coroutines.coroutineScope {
             (0 until slots).map {
                 kotlinx.coroutines.async(kotlinx.coroutines.Dispatchers.IO) {
-                    meta.marketOrder(saved.metaApiToken, account, side, symbol, volume, stopLoss = stop, takeProfit = target)
+                    meta.marketOrder(saved.metaApiToken, account, side, symbol, capacity.second, stopLoss = stop, takeProfit = target)
                 }
             }.mapIndexed { index, deferred ->
                 val result = deferred.await()
@@ -303,7 +348,7 @@ class TradingEngine(
                 val found = if (receipt.positionId.isNotBlank()) {
                     positions.firstOrNull { it.id == receipt.positionId }
                 } else {
-                    positions.firstOrNull { positionSide(it) == side && abs(it.volume - volume) <= 0.0000001 }
+                    positions.firstOrNull { positionSide(it) == side && abs(it.volume - capacity.second) <= 0.0000001 }
                 }
                 if (found != null) {
                     positions.remove(found)
