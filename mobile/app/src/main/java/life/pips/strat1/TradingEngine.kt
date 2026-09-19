@@ -28,9 +28,10 @@ class TradingEngine(
     val strategy001: Strategy001Engine = Strategy001Engine(),
     val strategy002: Strategy002Engine = Strategy002Engine(),
     val strategy003: Strategy003Engine = Strategy003Engine(),
-    val strategy004: Strategy004Engine = Strategy004Engine()
+    val strategy004: Strategy004Engine = Strategy004Engine(),
+    val strategy005: Strategy005Engine = Strategy005Engine(meta)
 ) {
-    enum class StrategyId { STRATEGY_001, STRATEGY_002, STRATEGY_003, STRATEGY_004 }
+    enum class StrategyId { STRATEGY_001, STRATEGY_002, STRATEGY_003, STRATEGY_004, STRATEGY_005 }
     data class View(val id: StrategyId, val side: TradeSide?, val confidence: Int, val entry: Double?, val exit: Double?, val stop: Double?, val reason: String, val phase: String = "WAIT", val session: String = "", val confluence: String = "")
     private data class StreamState(val selected: StrategyId, val account: MetaAccount, val saved: SavedConnection, val snapshot: MetaSnapshot, val flash: FlashAlphaSnapshot?, val symbol: String, val onStatus: (String) -> Unit)
     private val history = mutableMapOf<String, ArrayDeque<Strategy002Engine.Sample>>()
@@ -57,7 +58,7 @@ class TradingEngine(
         lastTickAt = System.currentTimeMillis()
         val q = history.getOrPut(symbol) { ArrayDeque() }
         q.addLast(Strategy002Engine.Sample(tickTime, price))
-        while (q.size > 40) q.removeFirst()
+        while (q.size > 2000) q.removeFirst()
     }
 
     fun view(id: StrategyId, flash: FlashAlphaSnapshot?, price: Double, symbol: String): View = when (id) {
@@ -80,6 +81,12 @@ class TradingEngine(
             View(id, p.side, p.confidence, p.entry, p.target, p.stop, p.reason,
                 if (p.side == null) "WAIT PRICE ACTION" else "READY • 15M/5M/1M",
                 "ALL SESSIONS", "15M ${p.contextBias.name} • 5M ${p.setupState.name} • ${p.bos}")
+        }
+        StrategyId.STRATEGY_005 -> {
+            val p = strategy005.latest()
+            View(id, p.side, p.confidence, p.entry, p.target, p.stop, p.reason,
+                if (p.side == null) "WAIT 5M PRICE ACTION" else "READY • 4H/5M",
+                "ALL SESSIONS", "4H PP ${p.levels?.pp?.let { fmt(it) } ?: "—"} • ${p.trigger.ifBlank { "WAIT" }}")
         }
     }
 
@@ -133,7 +140,38 @@ class TradingEngine(
             StrategyId.STRATEGY_002 -> execute002(state.account, state.saved, state.symbol, price, tick, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, snapshot, state.onStatus)
             StrategyId.STRATEGY_003 -> execute003(state.account, state.saved, state.symbol, tick, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, snapshot, state.onStatus)
             StrategyId.STRATEGY_004 -> execute004(state.account, state.saved, state.symbol, tick, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, snapshot, state.onStatus)
+            StrategyId.STRATEGY_005 -> execute005(state.account, state.saved, state.symbol, tick, snapshot.positions.filter { it.symbol.equals(state.symbol, true) }, snapshot, state.onStatus)
         }
+    }
+
+    private suspend fun execute005(account: MetaAccount, saved: SavedConnection, symbol: String, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
+        val plan = strategy005.refresh(account, saved.metaApiToken, symbol, history[symbol]?.toList().orEmpty()).getOrElse {
+            onStatus("S005 | WAIT | ${it.message ?: "4H Woodie/5M data unavailable"}")
+            return
+        }
+        val price = (tick.bid + tick.ask) / 2.0
+        val target = plan.target
+        for (p in positions) {
+            if (target != null && strategy005.exitOnPivot(p, price, target)) {
+                meta.closePosition(saved.metaApiToken, account, p.id)
+                    .onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S005 | 4H PP EXIT CONFIRMED | ${p.id} | PP=${fmt(target)}") }
+                    .onFailure { onStatus("S005 | EXIT FAILED | ${it.message ?: "unknown"}") }
+            } else if (target != null && (!p.takeProfit.isFinite() || p.takeProfit <= 0.0) && p.stopLoss.isFinite()) {
+                meta.modifyPosition(saved.metaApiToken, account, p.id, stopLoss = p.stopLoss, takeProfit = target)
+                    .onFailure { safety.halt("S005 protection repair failed: ${it.message ?: "unknown"}") }
+            }
+        }
+        if (positions.isNotEmpty()) return
+        if (!safety.canEnter()) { onStatus("S005 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
+        if (plan.side == null || plan.entry == null || plan.stop == null || plan.target == null) return
+        if (plan.rewardRisk < riskPolicy.minRewardRisk) { onStatus("S005 | ENTRY BLOCKED | RR ${fmt(plan.rewardRisk)} < ${fmt(riskPolicy.minRewardRisk)}"); return }
+        if (dailyLossFraction >= riskPolicy.maxDailyLoss || tradesToday >= riskPolicy.maxTradesPerDay || consecutiveLosses >= riskPolicy.maxConsecutiveLosses) { onStatus("S005 | ENTRY BLOCKED | GLOBAL DAILY RISK LIMIT"); return }
+        val spec = snapshot.specifications[symbol] ?: return
+        val volume = strategy005.sizeForMaxRisk(snapshot.balance, plan.entry, plan.stop, tick, spec, 0.05)
+        if (volume <= 0.0) { onStatus("S005 | ENTRY BLOCKED | broker minimum volume exceeds 5% balance risk cap"); return }
+        val riskCash = abs(plan.entry - plan.stop) / spec.tickSize * tick.lossTickValue * volume
+        logDecisionOnce("S005-${plan.side}-${plan.trigger}-${fmt(plan.entry)}", "S005 | decision=${plan.side.name} | 4H PP=${fmt(plan.target)} | entry=${fmt(plan.entry)} | SL=${fmt(plan.stop)} | TP=${fmt(plan.target)} | RR=${fmt(plan.rewardRisk)} | risk=${fmt(riskCash)} (${fmt(riskCash / snapshot.balance * 100.0)}%)")
+        submitAndVerifyEntry(account, saved, symbol, plan.side, volume, plan.stop, plan.target, tick, snapshot, true, "S005", onStatus)
     }
 
     private fun isFreshTick(tick: TickPrice): Boolean { val age = System.currentTimeMillis() - tick.time; return age >= -2000 && age <= riskPolicy.maxTickAgeMs }
