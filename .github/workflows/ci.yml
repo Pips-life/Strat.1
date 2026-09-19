@@ -156,3 +156,5 @@ jobs:
           else
             gh release create "$TAG" "$APK" --title "Pips-life v$VERSION" --generate-notes
           fi
+
+# v2.79 rebuild trigger after TradingEngine coroutine fix.
