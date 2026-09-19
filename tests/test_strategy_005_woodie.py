@@ -42,3 +42,41 @@ def test_no_entry_from_forming_4h_pivot():
         {"open": 103, "high": 104, "low": 101, "close": 103},
     ]}}
     assert s.analyze(market)["pivots"]["pp"] == 106.5
+
+
+def test_buy_pp_retest_uses_5m_price_action_and_targets_r1():
+    s = Strategy005()
+    market = {"timeframes": {
+        "4h": [
+            {"open": 95, "high": 110, "low": 100, "close": 108},
+            {"open": 108, "high": 109, "low": 104, "close": 107},
+        ],
+        "5m": [
+            {"open": 106.8, "high": 107.2, "low": 106.6, "close": 106.9},
+            {"open": 106.4, "high": 107.2, "low": 106.3, "close": 106.8},
+        ],
+    }}
+    a = s.analyze(market)
+    assert a["side"] == "BUY"
+    assert a["trigger"] == "PP_RETEST_BUY"
+    assert a["target"] == 113.0
+    assert a["stop"] < a["entry"]
+
+
+def test_sell_pp_retest_uses_5m_price_action_and_targets_s1():
+    s = Strategy005()
+    market = {"timeframes": {
+        "4h": [
+            {"open": 95, "high": 110, "low": 100, "close": 108},
+            {"open": 108, "high": 109, "low": 104, "close": 105},
+        ],
+        "5m": [
+            {"open": 106.8, "high": 107.0, "low": 106.5, "close": 106.7},
+            {"open": 106.6, "high": 106.7, "low": 106.0, "close": 106.2},
+        ],
+    }}
+    a = s.analyze(market)
+    assert a["side"] == "SELL"
+    assert a["trigger"] == "PP_RETEST_SELL"
+    assert a["target"] == 103.0
+    assert a["stop"] > a["entry"]
