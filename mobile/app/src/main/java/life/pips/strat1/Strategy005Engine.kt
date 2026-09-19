@@ -34,7 +34,7 @@ class Strategy005Engine(private val meta: DirectMetaApiClient) {
         return Levels(p, 2.0 * p - c.low, 2.0 * p - c.high, p + c.high - c.low, p - c.high + c.low)
     }
 
-    suspend fun refresh(account: MetaAccount, token: String, symbol: String): Result<Plan> = runCatching {
+    suspend fun refresh(account: MetaAccount, token: String, symbol: String, samples: List<Strategy002Engine.Sample>): Result<Plan> = runCatching {
         val now = System.currentTimeMillis()
         if (levels == null || now - lastPivotFetch >= 60_000L) {
             val candles = meta.historicalCandles(token, account, symbol, "4h", 3).getOrThrow()
@@ -47,7 +47,7 @@ class Strategy005Engine(private val meta: DirectMetaApiClient) {
             }
             lastPivotFetch = now
         }
-        evaluateFromTicks(levels, emptyList())
+        evaluateFromTicks(levels, samples)
     }
 
     fun evaluateFromTicks(current: Levels?, samples: List<Strategy002Engine.Sample>): Plan {
