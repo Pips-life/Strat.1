@@ -54,6 +54,7 @@ class CanonicalRiskEngine(private val policy: CanonicalRiskPolicy = CanonicalRis
         side: TradeSide, entry: Double, stop: Double, target: Double, equity: Double, positions: Int,
         confidence: Double, dailyLossFraction: Double, tradesToday: Int, consecutiveLosses: Int,
         tickValue: Double, tickSize: Double, accountBalance: Double = equity,
+        riskFractionOverride: Double? = null,
         freeMargin: Double = Double.POSITIVE_INFINITY, leverage: Double = Double.NaN,
         contractSize: Double = Double.NaN, brokerMinVolume: Double = policy.minQuantity,
         brokerMaxVolume: Double = Double.POSITIVE_INFINITY, brokerVolumeStep: Double = policy.quantityStep,
@@ -71,7 +72,7 @@ class CanonicalRiskEngine(private val policy: CanonicalRiskPolicy = CanonicalRis
         val rr = if (risk > 0.0) reward / risk else 0.0
         if (!rr.isFinite() || rr < policy.minRewardRisk) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "reward/risk below minimum")
         if (!tickValue.isFinite() || tickValue <= 0.0 || !tickSize.isFinite() || tickSize <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker tick size/value unavailable")
-        val riskCapital = minOf(accountBalance, equity); val riskCash = riskCapital * policy.riskPerTrade * policy.riskBudgetUtilization
+        val riskCapital = minOf(accountBalance, equity); val effectiveRiskFraction = riskFractionOverride?.coerceAtLeast(0.0) ?: policy.riskPerTrade; val riskCash = riskCapital * effectiveRiskFraction * policy.riskBudgetUtilization
         val ticksToStop = risk / tickSize; val riskPerVolume = ticksToStop * tickValue
         if (!riskPerVolume.isFinite() || riskPerVolume <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "invalid broker risk geometry")
         val rawRiskQty = riskCash / riskPerVolume
