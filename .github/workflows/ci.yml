@@ -1,7 +1,7 @@
 name: Strat.1 Android + Python + Web CI
-# Release pipeline: push-to-main and manual dispatch must build v2.79.
+# Release pipeline: push-to-main and manual dispatch must build v2.80.
 # Build release trigger verification.
-# v2.79 trigger after TradingEngine compile fix.
+# v2.80 trigger after TradingEngine compile fix.
 
 on:
   push:
@@ -100,8 +100,8 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-release-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
-          grep -q "versionCode='79'" /tmp/pips-release-badging.txt
-          grep -q "versionName='0.2.79'" /tmp/pips-release-badging.txt
+          grep -q "versionCode='80'" /tmp/pips-release-badging.txt
+          grep -q "versionName='0.2.80'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           cp "$APK" "$RUNNER_TEMP/pips-life-0.2.79-79.apk"
 
