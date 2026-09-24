@@ -80,6 +80,18 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 @Composable private fun StrategyTab(modifier: Modifier, saved: SavedConnection, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, tradeSymbol: String, flashSymbol: String, selected: TradingEngine.StrategyId, running: Boolean, armed: Boolean, status: String, smcPlan: Strategy003Engine.Plan, priceActionPlan: Strategy004Engine.Plan, woodiePlan: Strategy005Engine.Plan, optionsFlow: Strategy006Engine, onSelect: (TradingEngine.StrategyId) -> Unit, onFlashSymbol: (String) -> Unit, onSave: (SavedConnection) -> Unit, onRun: (Boolean) -> Unit, onArm: (Boolean) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var key by remember(saved.flashAlphaKey) { mutableStateOf(saved.flashAlphaKey) }; var symbol by remember(flashSymbol) { mutableStateOf(flashSymbol) }
+    var barchartName by remember { mutableStateOf("No Barchart file selected") }
+    var greeksName by remember { mutableStateOf("No Greeks CSV selected") }
+    var barchartText by remember { mutableStateOf("") }
+    var greeksText by remember { mutableStateOf("") }
+    val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
+            .onSuccess { text -> barchartText = text; barchartName = uri.lastPathSegment ?: "Barchart file" } }
+    }
+    val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
+            .onSuccess { text -> greeksText = text; greeksName = uri.lastPathSegment ?: "Greeks CSV" } }
+    }
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
         item { Header("Strategies", "Each strategy has its own selectable tab and isolated rules") }; item { StrategySelector(selected, onSelect) }; item { Text("MetaApi trading symbol: $tradeSymbol", color = Muted, fontSize = 10.sp) }
         when (selected) {
@@ -89,16 +101,6 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             TradingEngine.StrategyId.STRATEGY_004 -> { item { CardBlock { Text("STRATEGY 004 • PURE PRICE ACTION", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black); Text("15M context → 5M liquidity sweep, rejection and displacement → 1M BOS execution. OHLC only.", color = TextMain, fontSize = 10.sp); Text("15M ${priceActionPlan.contextBias.name} • 5M ${priceActionPlan.setupState.name} • ${priceActionPlan.bos}", color = Green, fontSize = 10.sp); Text("${priceActionPlan.sweptLiquidity} • ${priceActionPlan.targetLiquidity}", color = Muted, fontSize = 9.sp); Text("Entry ${priceActionPlan.entry ?: "—"} • SL ${priceActionPlan.stop ?: "—"} • TP ${priceActionPlan.target ?: "—"}", color = Muted, fontSize = 9.sp); Text("${priceActionPlan.confidence}% • ${priceActionPlan.reason}", color = Muted, fontSize = 9.sp) } }; item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START PURE PRICE ACTION") } }; if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } } }
             TradingEngine.StrategyId.STRATEGY_005 -> { item { CardBlock { Text("STRATEGY 005 • WOODIE 4H / 5M PRICE ACTION", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black); Text("Previous completed 4H Woodie pivots → 5M rejection entries at S1/S2 or R1/R2 → exit at 4H PP. MetaApi stream supplies live ticks; no S001–S004 logic is used.", color = TextMain, fontSize = 10.sp); Text("PP ${woodiePlan.levels?.pp?.let { String.format("%.2f", it) } ?: "—"} • R1 ${woodiePlan.levels?.r1?.let { String.format("%.2f", it) } ?: "—"} • S1 ${woodiePlan.levels?.s1?.let { String.format("%.2f", it) } ?: "—"}", color = Green, fontSize = 10.sp); Text("Trigger ${woodiePlan.trigger.ifBlank { "WAIT" }} • Entry ${woodiePlan.entry?.let { String.format("%.2f", it) } ?: "—"} • SL ${woodiePlan.stop?.let { String.format("%.2f", it) } ?: "—"} • PP exit ${woodiePlan.target?.let { String.format("%.2f", it) } ?: "—"}", color = Muted, fontSize = 9.sp); Text("Risk cap: 5% of account balance • RR ${String.format("%.2f", woodiePlan.rewardRisk)} • ${woodiePlan.reason}", color = Muted, fontSize = 9.sp) } }; item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START WOODIE 4H / 5M") } }; if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } } }
             TradingEngine.StrategyId.STRATEGY_006 -> {
-                var barchartName by remember { mutableStateOf("No Barchart file selected") }
-                var greeksName by remember { mutableStateOf("No Greeks CSV selected") }
-                var barchartText by remember { mutableStateOf("") }
-                var greeksText by remember { mutableStateOf("") }
-                val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-                    uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }.onSuccess { text -> barchartText = text; barchartName = uri.lastPathSegment ?: "Barchart file" } }
-                }
-                val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-                    uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }.onSuccess { text -> greeksText = text; greeksName = uri.lastPathSegment ?: "Greeks CSV" } }
-                }
                 item {
                     CardBlock {
                         Text("STRATEGY 006 • OPTIONS FLOW", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black)
@@ -119,7 +121,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             Text("Primary Hedge Floor: " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
                             Text("Call Wall: " + (z.callWall?.let { String.format("%.2f", it) } ?: "—") + " • Put Wall: " + (z.putWall?.let { String.format("%.2f", it) } ?: "—") + " • Gamma Flip: " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
                         }
-                        Text("Risk cap: 5% account balance • Exit: nearest opposing zone • No trade on zone touch without live reaction confirmation.", color = TextMain, fontSize = 9.sp)
+                        Text("M5 confirmation: completed candle must trade into a mapped zone and close back across it. Risk cap: 5% balance • Exit: nearest opposing zone.", color = TextMain, fontSize = 9.sp)
                     }
                 }
                 item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START OPTIONS FLOW") } }
