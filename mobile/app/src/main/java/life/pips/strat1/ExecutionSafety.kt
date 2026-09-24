@@ -43,11 +43,23 @@ data class CanonicalRiskPolicy(
     }
 }
 
-data class CanonicalRiskDecision(val approved: Boolean, val quantity: Double = 0.0, val rewardRisk: Double = 0.0, val reason: String = "")
+data class CanonicalRiskDecision(
+    val approved: Boolean, val quantity: Double = 0.0, val rewardRisk: Double = 0.0,
+    val reason: String = "", val riskAmount: Double = 0.0, val marginRequired: Double = 0.0,
+    val riskPercent: Double = 0.0
+)
 
 class CanonicalRiskEngine(private val policy: CanonicalRiskPolicy = CanonicalRiskPolicy.load()) {
-    fun decide(side: TradeSide, entry: Double, stop: Double, target: Double, equity: Double, positions: Int, confidence: Double, dailyLossFraction: Double, tradesToday: Int, consecutiveLosses: Int, tickValue: Double, tickSize: Double): CanonicalRiskDecision {
-        if (!entry.isFinite() || !stop.isFinite() || !target.isFinite() || equity <= 0.0) return CanonicalRiskDecision(false, reason = "invalid risk inputs")
+    fun decide(
+        side: TradeSide, entry: Double, stop: Double, target: Double, equity: Double, positions: Int,
+        confidence: Double, dailyLossFraction: Double, tradesToday: Int, consecutiveLosses: Int,
+        tickValue: Double, tickSize: Double, accountBalance: Double = equity,
+        freeMargin: Double = Double.POSITIVE_INFINITY, leverage: Double = Double.NaN,
+        contractSize: Double = Double.NaN, brokerMinVolume: Double = policy.minQuantity,
+        brokerMaxVolume: Double = Double.POSITIVE_INFINITY, brokerVolumeStep: Double = policy.quantityStep,
+        marginPerVolume: Double = Double.NaN
+    ): CanonicalRiskDecision {
+        if (!entry.isFinite() || !stop.isFinite() || !target.isFinite() || equity <= 0.0 || accountBalance <= 0.0) return CanonicalRiskDecision(false, reason = "invalid account/risk inputs")
         if (confidence < policy.minConfidence) return CanonicalRiskDecision(false, reason = "confidence below risk threshold")
         if (policy.maxPositions > 0 && positions >= policy.maxPositions) return CanonicalRiskDecision(false, reason = "maximum simultaneous positions reached")
         if (abs(dailyLossFraction) >= policy.maxDailyLoss) return CanonicalRiskDecision(false, reason = "maximum daily loss reached")
@@ -55,20 +67,36 @@ class CanonicalRiskEngine(private val policy: CanonicalRiskPolicy = CanonicalRis
         if (consecutiveLosses >= policy.maxConsecutiveLosses) return CanonicalRiskDecision(false, reason = "consecutive-loss limit reached")
         val validGeometry = if (side == TradeSide.BUY) stop < entry && entry < target else target < entry && entry < stop
         if (!validGeometry) return CanonicalRiskDecision(false, reason = "invalid stop/target geometry")
-        val risk = abs(entry - stop)
-        val reward = if (side == TradeSide.BUY) target - entry else entry - target
+        val risk = abs(entry - stop); val reward = if (side == TradeSide.BUY) target - entry else entry - target
         val rr = if (risk > 0.0) reward / risk else 0.0
         if (!rr.isFinite() || rr < policy.minRewardRisk) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "reward/risk below minimum")
-        if (!tickValue.isFinite() || tickValue <= 0.0 || !tickSize.isFinite() || tickSize <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker tick value unavailable")
-        val riskCash = equity * policy.riskPerTrade * policy.riskBudgetUtilization
-        val ticksToStop = risk / tickSize
-        val riskPerLot = ticksToStop * tickValue
-        if (!riskPerLot.isFinite() || riskPerLot <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "invalid broker risk geometry")
-        val raw = riskCash / riskPerLot
-        val qty = floor(raw / policy.quantityStep + 1e-9) * policy.quantityStep
-        if (!qty.isFinite() || qty < policy.minQuantity) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "minimum executable quantity exceeds risk budget")
-        return CanonicalRiskDecision(true, qty, rr, "approved")
+        if (!tickValue.isFinite() || tickValue <= 0.0 || !tickSize.isFinite() || tickSize <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker tick size/value unavailable")
+        val riskCapital = minOf(accountBalance, equity); val riskCash = riskCapital * policy.riskPerTrade * policy.riskBudgetUtilization
+        val ticksToStop = risk / tickSize; val riskPerVolume = ticksToStop * tickValue
+        if (!riskPerVolume.isFinite() || riskPerVolume <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "invalid broker risk geometry")
+        val rawRiskQty = riskCash / riskPerVolume
+        val step = if (brokerVolumeStep.isFinite() && brokerVolumeStep > 0.0) brokerVolumeStep else policy.quantityStep
+        val minVolume = if (brokerMinVolume.isFinite() && brokerMinVolume > 0.0) brokerMinVolume else policy.minQuantity
+        val maxVolume = if (brokerMaxVolume.isFinite() && brokerMaxVolume > 0.0) brokerMaxVolume else Double.POSITIVE_INFINITY
+        var qty = floor(rawRiskQty / step + 1e-9) * step
+        if (!qty.isFinite() || qty < minVolume) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker minimum volume exceeds risk budget")
+        if (qty > maxVolume) qty = floor(maxVolume / step + 1e-9) * step
+        if (qty < minVolume) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker volume limits prevent executable size")
+        val marginUnit = when {
+            marginPerVolume.isFinite() && marginPerVolume > 0.0 -> marginPerVolume
+            leverage.isFinite() && leverage > 0.0 && contractSize.isFinite() && contractSize > 0.0 -> entry * contractSize / leverage
+            else -> Double.NaN
+        }
+        if (!marginUnit.isFinite() || marginUnit <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker margin/leverage unavailable")
+        if (!freeMargin.isFinite() || freeMargin <= 0.0) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "free margin unavailable")
+        val marginCapQty = floor((freeMargin / marginUnit) / step + 1e-9) * step
+        if (!marginCapQty.isFinite() || marginCapQty < minVolume) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "broker free margin cannot support minimum volume")
+        qty = minOf(qty, marginCapQty, maxVolume); qty = floor(qty / step + 1e-9) * step
+        if (qty < minVolume) return CanonicalRiskDecision(false, rewardRisk = rr, reason = "margin constraint leaves no executable volume")
+        val actualRisk = riskPerVolume * qty; val actualMargin = marginUnit * qty; val actualRiskPct = actualRisk / riskCapital * 100.0
+        return CanonicalRiskDecision(true, qty, rr, "approved | balance=" + fmtRisk(accountBalance) + " | equity=" + fmtRisk(equity) + " | freeMargin=" + fmtRisk(freeMargin) + " | leverage=" + fmtRisk(leverage) + " | tick=" + fmtRisk(tickSize) + " | risk=" + fmtRisk(actualRisk) + " (" + fmtRisk(actualRiskPct) + "%) | margin=" + fmtRisk(actualMargin), actualRisk, actualMargin, actualRiskPct)
     }
+    private fun fmtRisk(v: Double): String = if (v.isFinite()) "%.4f".format(v) else "—"
 }
 
 enum class RecoveryStage { SUBMIT, ACK, VERIFY, PROTECTED, ACTIVE, FAILED }
