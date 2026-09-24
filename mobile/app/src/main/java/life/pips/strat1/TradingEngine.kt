@@ -189,7 +189,7 @@ class TradingEngine(
         val decision = risk.decide(
             side, entry, stop, takeProfit, snapshot.equity, positions.size,
             abs(plan.rewardRisk).coerceAtMost(100.0), dailyLossFraction, tradesToday, consecutiveLosses,
-            tick.lossTickValue, spec.tickSize ?: 0.0,
+            tick.lossTickValue, (spec.tickSize ?: 0.0) ?: 0.0,
             riskFractionOverride = 0.10,
             accountBalance = snapshot.balance, freeMargin = snapshot.freeMargin, leverage = snapshot.leverage,
             contractSize = spec.contractSize, brokerMinVolume = spec.minVolume, brokerMaxVolume = spec.maxVolume,
@@ -224,7 +224,7 @@ class TradingEngine(
         val spec = snapshot.specifications[symbol] ?: return
         val volume = strategy005.sizeForMaxRisk(snapshot.balance, plan.entry, plan.stop, tick, spec, 0.05)
         if (volume <= 0.0) { onStatus("S005 | ENTRY BLOCKED | broker minimum volume exceeds 5% balance risk cap"); return }
-        val riskCash = abs(plan.entry - plan.stop) / spec.tickSize * tick.lossTickValue * volume
+        val riskCash = abs(plan.entry - plan.stop) / (spec.tickSize ?: 0.0) * tick.lossTickValue * volume
         logDecisionOnce("S005-${plan.side}-${plan.trigger}-${fmt(plan.entry)}", "S005 | decision=${plan.side.name} | 4H PP=${fmt(plan.target)} | entry=${fmt(plan.entry)} | SL=${fmt(plan.stop)} | TP=${fmt(plan.target)} | RR=${fmt(plan.rewardRisk)} | risk=${fmt(riskCash)} (${fmt(riskCash / snapshot.balance * 100.0)}%)")
         submitBurstAndVerifyEntries(account, saved, symbol, plan.side, volume, plan.stop, plan.target, tick, snapshot, true, "S005", onStatus, "S005|$symbol|${plan.side}|${fmt(plan.stop)}|${fmt(plan.target)}|${plan.trigger}")
     }
@@ -262,7 +262,7 @@ class TradingEngine(
         val entry = if (plan.side == TradeSide.BUY) tick.ask else tick.bid
         val spec = snapshot.specifications[symbol] ?: return
         val decision = risk.decide(plan.side, entry, plan.stop, plan.target, snapshot.equity, positions.size,
-            plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, spec.tickSize)
+            plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, (spec.tickSize ?: 0.0))
         logDecisionOnce("S004-" + plan.side + "-" + plan.confidence + "-" + plan.bos,
             "S004 | decision=" + plan.side.name + " | confidence=" + plan.confidence + "% | entry=" + fmt(entry) +
             " | SL=" + fmt(plan.stop) + " | TP=" + fmt(plan.target) + " | RR=" + fmt(decision.rewardRisk) + " | risk=" + decision.reason)
@@ -294,7 +294,7 @@ class TradingEngine(
         if (plan.side == TradeSide.BUY && (target <= entryPrice || stop >= entryPrice)) return
         if (plan.side == TradeSide.SELL && (target >= entryPrice || stop <= entryPrice)) return
         val spec = snapshot.specifications[symbol] ?: return
-        val decision = risk.decide(plan.side, entryPrice, stop, target, snapshot.equity, positions.size, plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, spec.tickSize)
+        val decision = risk.decide(plan.side, entryPrice, stop, target, snapshot.equity, positions.size, plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, (spec.tickSize ?: 0.0))
         logDecisionOnce("S001-${plan.side}-${plan.confidence}-${fmt(entryPrice)}-${fmt(stop)}-${fmt(target)}", "S001 | decision=${plan.side.name} | confidence=${plan.confidence}% | entry=${fmt(entryPrice)} | stop=${fmt(stop)} | target=${fmt(target)} | rr=${fmt(decision.rewardRisk)} | risk=${decision.reason} | flow=${plan.reason}")
         if (!decision.approved) { onStatus("S001 | $session | ${plan.side.name} | ENTRY BLOCKED | ${decision.reason}"); return }
         onStatus("S001 | $session | ${plan.side.name} | CONFLUENCE ${plan.confidence}% | EXECUTING | entry=${fmt(entryPrice)} | zone=$entryText | exit=$exitText | SL=${fmt(stop)} TP=${fmt(target)}")
@@ -312,7 +312,7 @@ class TradingEngine(
         if (!safety.canEnter()) { onStatus("S002 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         val target = if (plan.side == TradeSide.BUY) plan.entry + abs(plan.entry - plan.stop) * riskPolicy.minRewardRisk else plan.entry - abs(plan.entry - plan.stop) * riskPolicy.minRewardRisk
         val spec = snapshot.specifications[symbol] ?: return
-        val decision = risk.decide(plan.side, plan.entry, plan.stop, target, snapshot.equity, positions.size, plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, spec.tickSize)
+        val decision = risk.decide(plan.side, plan.entry, plan.stop, target, snapshot.equity, positions.size, plan.confidence.toDouble(), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, (spec.tickSize ?: 0.0))
         logDecisionOnce("S002-${plan.side}-${plan.confidence}-${plan.reason}", "S002 | decision=${plan.side.name} | confidence=${plan.confidence}% | entry=${fmt(plan.entry)} | stop=${fmt(plan.stop)} | target=${fmt(target)} | risk=${decision.reason}")
         if (!decision.approved) { onStatus("S002 | ENTRY BLOCKED | ${decision.reason}"); return }
         submitBurstAndVerifyEntries(account, saved, symbol, plan.side, decision.quantity, plan.stop, null, tick, snapshot, false, "S002", onStatus, "S002|$symbol|${plan.side}|${fmt(plan.stop)}")
@@ -330,7 +330,7 @@ class TradingEngine(
         val spec = snapshot.specifications[symbol] ?: return 0 to 0.0
         val volume = riskPolicy.minQuantity
         val entry = if (side == TradeSide.BUY) tick.ask else tick.bid
-        if (!entry.isFinite() || entry <= 0.0 || !stop.isFinite() || !spec.tickSize.isFinite() || spec.tickSize <= 0.0 ||
+        if (!entry.isFinite() || entry <= 0.0 || !stop.isFinite() || !(spec.tickSize ?: 0.0).isFinite() || (spec.tickSize ?: 0.0) <= 0.0 ||
             !tick.lossTickValue.isFinite() || tick.lossTickValue <= 0.0 || volume < spec.minVolume ||
             volume > spec.maxVolume || spec.volumeStep <= 0.0) return 0 to 0.0
 
@@ -342,10 +342,10 @@ class TradingEngine(
             if (!p.stopLoss.isFinite() || p.stopLoss <= 0.0) {
                 return 0 to 0.0
             }
-            usedRisk += abs(p.openPrice - p.stopLoss) / spec.tickSize * tick.lossTickValue * p.volume
+            usedRisk += abs(p.openPrice - p.stopLoss) / (spec.tickSize ?: 0.0) * tick.lossTickValue * p.volume
         }
 
-        val riskPerEntry = abs(entry - stop) / spec.tickSize * tick.lossTickValue * volume
+        val riskPerEntry = abs(entry - stop) / (spec.tickSize ?: 0.0) * tick.lossTickValue * volume
         val remainingRisk = budget - usedRisk
         if (!riskPerEntry.isFinite() || riskPerEntry <= 0.0 || remainingRisk < riskPerEntry) return 0 to 0.0
 
@@ -379,7 +379,7 @@ class TradingEngine(
         if (!perPosition.isFinite() || perPosition < minVolume) return false
         val actualTotal = perPosition * slots
         val entry = if (side == TradeSide.BUY) tick.ask else tick.bid
-        val riskPerVolume = abs(entry - stop) / spec.tickSize * tick.lossTickValue
+        val riskPerVolume = abs(entry - stop) / (spec.tickSize ?: 0.0) * tick.lossTickValue
         val actualRisk = riskPerVolume * actualTotal
         val maxBatchRisk = minOf(snapshot.balance, snapshot.equity) * 0.10
         if (!actualRisk.isFinite() || actualRisk > maxBatchRisk + 1e-9) { onStatus("S006 | ENTRY BLOCKED | batch risk exceeds 10% ceiling"); return false }
