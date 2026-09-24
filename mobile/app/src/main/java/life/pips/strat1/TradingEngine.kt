@@ -191,7 +191,7 @@ class TradingEngine(
             tick.lossTickValue, spec.tickSize,
             accountBalance = snapshot.balance, freeMargin = snapshot.freeMargin, leverage = snapshot.leverage,
             contractSize = spec.contractSize, brokerMinVolume = spec.minVolume, brokerMaxVolume = spec.maxVolume,
-            brokerVolumeStep = spec.volumeStep, marginPerVolume = marginPerVolume
+            brokerVolumeStep = spec.volumeStep ?: 0.0, marginPerVolume = marginPerVolume
         )
         if (!decision.approved) { onStatus("S006 | ENTRY BLOCKED | ${decision.reason}"); return }
         logDecisionOnce("S006-${side}-${fmt(takeProfit)}-${fmt(stop)}", "S006 | decision=${side.name} | entry=${fmt(entry)} | SL=${fmt(stop)} | TP=${fmt(takeProfit)} | RR=${fmt(plan.rewardRisk)} | quantity=${fmt(decision.quantity)} | risk=${fmt(decision.riskAmount)} (${fmt(decision.riskPercent)}%) | margin=${fmt(decision.marginRequired)} | ${decision.reason}")
