@@ -32,7 +32,7 @@ def test_risk_is_capped_at_five_percent_and_target_is_next_zone():
 def test_no_trade_without_valid_zone_to_zone_reward():
     rows = [
         OptionsRow(2490, "P", open_interest=10000, gamma=0.10),
-        OptionsRow(2491, "C", open_interest=9000, gamma=0.12),
+        OptionsRow(2490.2, "C", open_interest=9000, gamma=0.12),
     ]
     m = calculate_options_map(rows, 2490)
     signal = zone_trade(m, 2490, 1000, "BUY", 2489.5, Strategy006Config(minimum_reward_risk=1.35))
