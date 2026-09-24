@@ -397,6 +397,38 @@ class TradingEngine(
         }
         val successful = receipts.mapNotNull { it.getOrNull() }
         if (successful.size != slots) { safety.halt("S006 batch submission incomplete: ${successful.size}/$slots"); return false }
+        var remaining = successful.toMutableList()
+        repeat(riskPolicy.orderVerifyAttempts) { attempt ->
+            if (remaining.isEmpty()) return@repeat
+            delay(riskPolicy.orderVerifyDelayMs)
+            val refreshed = meta.refresh(saved.metaApiToken, account, listOf(symbol)).getOrNull() ?: return@repeat
+            val openPositions = refreshed.positions.filter { it.symbol.equals(symbol, true) }.toMutableList()
+            val verified = mutableListOf<TradeReceipt>()
+            for (receipt in remaining) {
+                val found = if (receipt.positionId.isNotBlank()) openPositions.firstOrNull { it.id == receipt.positionId }
+                    else openPositions.firstOrNull { positionSide(it) == side && abs(it.volume - perPosition) <= 0.0000001 }
+                if (found != null) {
+                    openPositions.remove(found)
+                    var protected = found.stopLoss.isFinite() && found.stopLoss > 0.0 && found.takeProfit.isFinite() && found.takeProfit > 0.0
+                    if (!protected) {
+                        meta.modifyPosition(saved.metaApiToken, account, found.id, stopLoss = stop, takeProfit = target)
+                            .onSuccess { protected = true }
+                            .onFailure { onStatus("S006 | PROTECTION REPAIR FAILED | position=${found.id} | ${it.message ?: "unknown"}") }
+                    }
+                    if (protected) {
+                        verified += receipt
+                        onStatus("S006 | BATCH ORDER VERIFIED | position=${found.id} | volume=${fmt(found.volume)}")
+                    }
+                }
+            }
+            remaining = remaining.filterNot { r -> verified.any { it.orderId == r.orderId && it.positionId == r.positionId } }.toMutableList()
+            if (remaining.isNotEmpty()) onStatus("S006 | BATCH VERIFY ${attempt + 1}/${riskPolicy.orderVerifyAttempts} | pending=${remaining.size}")
+        }
+        if (remaining.isNotEmpty()) {
+            safety.halt("S006 batch verification incomplete: ${remaining.size}/$slots positions unverified")
+            onStatus("S006 | EXECUTION UNCERTAIN | verified=${slots - remaining.size}/$slots | KILL SWITCH")
+            return false
+        }
         tradesToday += successful.size
         onStatus("S006 | BATCH ACTIVE | $slots positions | combined risk <= 10% | no new entry until batch is closed")
         return true
