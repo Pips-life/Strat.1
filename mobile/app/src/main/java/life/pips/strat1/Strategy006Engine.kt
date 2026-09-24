@@ -50,6 +50,10 @@ class Strategy006Engine {
     private var lastPrice = Double.NaN
     private var lastState = MarketState.NO_TRADE
     private val priceHistory = ArrayDeque<Double>()
+    private data class FiveMinuteBar(val start: Long, val open: Double, val high: Double, val low: Double, val close: Double)
+    private data class M5Rejection(val side: TradeSide, val zone: Double, val label: String)
+    private var liveBar: FiveMinuteBar? = null
+    private var lastConfirmedBarStart: Long = Long.MIN_VALUE
 
     fun currentMap(): Map? = current
 
@@ -64,6 +68,8 @@ class Strategy006Engine {
         lastPrice = Double.NaN
         lastState = MarketState.NO_TRADE
         priceHistory.clear()
+        liveBar = null
+        lastConfirmedBarStart = Long.MIN_VALUE
         return map
     }
 
@@ -72,6 +78,8 @@ class Strategy006Engine {
         lastPrice = Double.NaN
         lastState = MarketState.NO_TRADE
         priceHistory.clear()
+        liveBar = null
+        lastConfirmedBarStart = Long.MIN_VALUE
     }
 
     /**
@@ -81,101 +89,93 @@ class Strategy006Engine {
      */
     fun plan(
         price: Double, balance: Double, bid: Double, ask: Double,
-        rejection: Boolean = false
+        rejection: Boolean = false, tickTime: Long = System.currentTimeMillis()
     ): TradePlan {
         val m = current ?: return wait("WAIT FILES", "Load both options files.")
-        if (!m.valid || price <= 0.0 || balance <= 0.0)
-            return wait("WAIT DATA", "Options map or account data is invalid.")
-
+        if (!m.valid || price <= 0.0 || balance <= 0.0) return wait("WAIT DATA", "Options map or account data is invalid.")
         priceHistory.addLast(price)
         while (priceHistory.size > 12) priceHistory.removeFirst()
+        val closedBar = updateFiveMinuteBar(price, tickTime)
+        val m5Rejection = closedBar?.let { detectM5Rejection(it, m.zones) }
         val z = m.zones
         val eps = max(price * 0.0005, 0.5)
         val buy = if (ask > 0.0) ask else price
         val sell = if (bid > 0.0) bid else price
 
-        val floor = z.primaryHedgeFloor
-        val shelf = z.dealerAbsorptionShelf
-        val exhaustion = z.liquidityExhaustionFloor
-        val reclaim = z.reclaimGate
-        val wall = z.immediateHedgeWall
-        val ceiling = z.upperInventoryCeiling
+        if (m5Rejection != null && closedBar != null && closedBar.start != lastConfirmedBarStart) {
+            lastConfirmedBarStart = closedBar.start
+            when (m5Rejection.side) {
+                TradeSide.BUY -> {
+                    val target = firstAbove(buy, z.immediateHedgeWall, z.reclaimGate, z.upperInventoryCeiling)
+                    val stop = m5Rejection.zone - eps
+                    if (target != null && target > buy)
+                        return trade(TradeSide.BUY, buy, stop, target, balance, MarketState.ABSORPTION_RECLAIM,
+                            "M5 bullish rejection confirmed at " + m5Rejection.label + " → nearest opposing zone.")
+                }
+                TradeSide.SELL -> {
+                    val target = listOfNotNull(z.primaryHedgeFloor, z.dealerAbsorptionShelf, z.liquidityExhaustionFloor, z.putWall)
+                        .filter { it < sell }.maxOrNull()
+                    val stop = m5Rejection.zone + eps
+                    if (target != null && target < sell)
+                        return trade(TradeSide.SELL, sell, stop, target, balance, MarketState.CONTINUATION,
+                            "M5 bearish rejection confirmed at " + m5Rejection.label + " → nearest opposing zone.")
+                }
+            }
+        }
 
-        val upReaction = risingFromZone(priceHistory, listOfNotNull(floor, shelf, exhaustion), eps)
+        val floor = z.primaryHedgeFloor; val shelf = z.dealerAbsorptionShelf; val exhaustion = z.liquidityExhaustionFloor
+        val reclaim = z.reclaimGate; val wall = z.immediateHedgeWall; val ceiling = z.upperInventoryCeiling
         val downReaction = fallingThroughZone(priceHistory, listOfNotNull(floor, shelf, exhaustion), eps)
-        val downReject = fallingThenRejecting(priceHistory, listOfNotNull(floor, shelf, exhaustion, wall), eps)
         val phfBreak = floor != null && price < floor - eps && crossedBelow(floor)
         val shelfBroken = shelf != null && price < shelf - eps && crossedBelow(shelf)
         val exhaustionBroken = exhaustion != null && price < exhaustion - eps && crossedBelow(exhaustion)
 
-        if (ceiling != null && price >= ceiling - eps) {
-            lastState = MarketState.UPPER_CEILING
-            return wait(lastState.name, "Upper Inventory Ceiling reached; wait for rejection or confirmed breakout.")
-        }
-
-        if (reclaim != null && floor != null && price > floor + eps && price >= reclaim - eps) {
-            lastState = MarketState.RECLAIM_GATE
-            return wait(lastState.name, "Reclaim Gate reached; wait for acceptance/rejection.")
-        }
-
-        if (floor != null && price >= floor - eps && price <= floor + eps) {
-            lastState = MarketState.PHF_HOLD
-            if ((upReaction || rejection) && wall != null && wall > buy)
-                return trade(TradeSide.BUY, buy, floor - eps, wall, balance, MarketState.PHF_HOLD,
-                    "Primary Hedge Floor held/rejected → Immediate Hedge Wall.")
-            return wait(lastState.name, "Primary Hedge Floor touch; waiting for confirmed reaction.")
-        }
-
+        if (ceiling != null && price >= ceiling - eps) { lastState = MarketState.UPPER_CEILING; return wait(lastState.name, "Upper Inventory Ceiling reached; wait for M5 rejection or confirmed breakout.") }
+        if (reclaim != null && floor != null && price > floor + eps && price >= reclaim - eps) { lastState = MarketState.RECLAIM_GATE; return wait(lastState.name, "Reclaim Gate reached; wait for M5 rejection or acceptance.") }
+        if (floor != null && price >= floor - eps && price <= floor + eps) { lastState = MarketState.PHF_HOLD; return wait(lastState.name, "Primary Hedge Floor touched; waiting for completed M5 rejection.") }
         if (floor != null && price < floor - eps) {
-            if (shelf != null && price > shelf + eps) {
-                lastState = MarketState.ABSORPTION_TEST
-                if ((upReaction || rejection)) {
-                    val target = firstAbove(buy, reclaim, wall, floor)
-                    if (target != null)
-                        return trade(TradeSide.BUY, buy, shelf - eps, target, balance,
-                            MarketState.ABSORPTION_RECLAIM,
-                            "PHF broke → Dealer Absorption Shelf absorbed selling → reclaim.")
-                }
-                return wait(lastState.name, if (phfBreak) "PHF breakdown confirmed; testing Dealer Absorption Shelf." else "Testing Dealer Absorption Shelf.")
-            }
-
-            if (exhaustion != null && price > exhaustion + eps) {
-                lastState = MarketState.EXHAUSTION_TEST
-                if (upReaction || rejection) {
-                    val target = firstAbove(buy, floor, reclaim, wall)
-                    if (target != null)
-                        return trade(TradeSide.BUY, buy, exhaustion - eps, target, balance,
-                            MarketState.EXHAUSTION_RECLAIM,
-                            "Dealer Absorption Shelf failed → Liquidity Exhaustion Floor rejected → reclaim.")
-                }
-                return wait(lastState.name, "Absorption did not hold; testing Liquidity Exhaustion Floor.")
-            }
-
+            if (shelf != null && price > shelf + eps) { lastState = MarketState.ABSORPTION_TEST; return wait(lastState.name, if (phfBreak) "PHF breakdown confirmed; testing Dealer Absorption Shelf. Wait for M5 rejection." else "Testing Dealer Absorption Shelf; wait for M5 rejection.") }
+            if (exhaustion != null && price > exhaustion + eps) { lastState = MarketState.EXHAUSTION_TEST; return wait(lastState.name, "Absorption did not hold; testing Liquidity Exhaustion Floor. Wait for M5 rejection.") }
             if (exhaustion != null && price <= exhaustion + eps) {
                 lastState = MarketState.EXHAUSTION_FAILURE
                 val lower = nextLowerZone(z, exhaustion)
-                if (exhaustionBroken && downReaction && lower != null && lower < sell)
-                    return trade(TradeSide.SELL, sell, exhaustion + eps, lower, balance,
-                        MarketState.CONTINUATION,
-                        "Liquidity Exhaustion Floor failed → confirmed downside continuation.")
-                return wait(lastState.name, if (shelfBroken) "Absorption Shelf failed; exhaustion floor under test." else "Exhaustion Floor reached; waiting for failure/reclaim.")
+                if (exhaustionBroken && downReaction && lower != null && lower < sell) return trade(TradeSide.SELL, sell, exhaustion + eps, lower, balance, MarketState.CONTINUATION, "Liquidity Exhaustion Floor failed → confirmed downside continuation; next lower zone.")
+                return wait(lastState.name, if (shelfBroken) "Absorption Shelf failed; exhaustion floor under test." else "Exhaustion Floor reached; waiting for M5 rejection or failure.")
             }
         }
+        if (wall != null && abs(price - wall) <= eps) return wait("WALL TEST", "Immediate Hedge Wall under test; waiting for completed M5 rejection.")
+        if (phfBreak || shelfBroken || exhaustionBroken) { lastState = if (exhaustionBroken) MarketState.CONTINUATION else if (shelfBroken) MarketState.ABSORPTION_FAILURE else MarketState.PHF_BREAK; return wait(lastState.name, "Break detected; waiting for M5 zone confirmation.") }
+        return wait(MarketState.NO_TRADE.name, "No confirmed M5 rejection at a mapped decision zone.")
+    }
 
-        if (wall != null && abs(price - wall) <= eps) {
-            if (downReject && floor != null && floor < sell)
-                return trade(TradeSide.SELL, sell, wall + eps, floor, balance,
-                    MarketState.CONTINUATION,
-                    "Immediate Hedge Wall rejected → Primary Hedge Floor.")
-            return wait("WALL TEST", "Immediate Hedge Wall under test; waiting for rejection.")
+    private fun updateFiveMinuteBar(price: Double, tickTime: Long): FiveMinuteBar? {
+        val millis = if (tickTime in 1L..100_000_000_000L) tickTime * 1000L else tickTime
+        val start = millis - Math.floorMod(millis, 5L * 60L * 1000L)
+        val prior = liveBar
+        return if (prior == null) {
+            liveBar = FiveMinuteBar(start, price, price, price, price); null
+        } else if (start == prior.start) {
+            liveBar = prior.copy(high = max(prior.high, price), low = kotlin.math.min(prior.low, price), close = price); null
+        } else {
+            liveBar = FiveMinuteBar(start, price, price, price, price); prior
         }
+    }
 
-        if (phfBreak || shelfBroken || exhaustionBroken) {
-            lastState = if (exhaustionBroken) MarketState.CONTINUATION else if (shelfBroken) MarketState.ABSORPTION_FAILURE else MarketState.PHF_BREAK
-            return wait(lastState.name, "Break detected; waiting for the next zone confirmation.")
-        }
-
-        return wait(MarketState.NO_TRADE.name, "No confirmed reaction at a mapped decision zone.")
+    private fun detectM5Rejection(bar: FiveMinuteBar, z: Zones): M5Rejection? {
+        val lower = listOfNotNull(
+            z.primaryHedgeFloor?.let { it to "Primary Hedge Floor" },
+            z.dealerAbsorptionShelf?.let { it to "Dealer Absorption Shelf" },
+            z.liquidityExhaustionFloor?.let { it to "Liquidity Exhaustion Floor" }
+        ).filter { (_, level) -> bar.low <= level && bar.high >= level && bar.close > level }
+            .maxByOrNull { (_, level) -> level }
+        if (lower != null) return M5Rejection(TradeSide.BUY, lower.first, lower.second)
+        val upper = listOfNotNull(
+            z.immediateHedgeWall?.let { it to "Immediate Hedge Wall" },
+            z.reclaimGate?.let { it to "Reclaim Gate" },
+            z.upperInventoryCeiling?.let { it to "Upper Inventory Ceiling" }
+        ).filter { (_, level) -> bar.low <= level && bar.high >= level && bar.close < level }
+            .minByOrNull { (_, level) -> level }
+        return upper?.let { M5Rejection(TradeSide.SELL, it.first, it.second) }
     }
 
     private fun wait(state: String, reason: String) =
