@@ -90,14 +90,14 @@ jobs:
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
           grep -q "versionCode='82'" /tmp/pips-release-badging.txt
-          grep -q "versionName='0.2.82'" /tmp/pips-release-badging.txt
+          grep -q "versionName='0.2.83'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.82-81.apk"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.83-81.apk"
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-v0.2.82-build82
-          path: ${{ runner.temp }}/pips-life-0.2.82-81.apk
+          name: pips-life-v0.2.83-build82
+          path: ${{ runner.temp }}/pips-life-0.2.83-81.apk
           if-no-files-found: error
 
   release:
@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
-          test "$version_name" = "0.2.82"
+          test "$version_name" = "0.2.83"
           test "$version_code" = "81"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
@@ -124,7 +124,7 @@ jobs:
       - name: Download signed APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: pips-life-v0.2.82-build82
+          name: pips-life-v0.2.83-build82
           path: release
       - name: Publish GitHub release
         env:
@@ -134,7 +134,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="release/pips-life-0.2.82-81.apk"
+          APK="release/pips-life-0.2.83-81.apk"
           test -s "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
