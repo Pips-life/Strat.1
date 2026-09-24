@@ -188,9 +188,10 @@ def calculate_options_map(rows: Sequence[OptionsRow], spot: float | None,
         lower_candidates = [k for k in put if k < spot]
         upper = max(upper_candidates, key=lambda k: call[k]) if upper_candidates else call_wall
         floor = min(lower_candidates, key=lambda k: abs(k - spot)) if lower_candidates else put_wall
-        walls = [k for k in set([call_wall, put_wall]) if k is not None]
-        if walls:
-            immediate = min(walls, key=lambda k: abs(k - spot))
+        # Immediate Hedge Wall is the nearest opposing wall in the trade direction.
+        opposing = [k for k in (call_wall, put_wall) if k is not None and ((k > spot) if upper is not None and upper > spot else (k < spot))]
+        if opposing:
+            immediate = min(opposing, key=lambda k: abs(k - spot))
         # Reclaim gate is the nearest meaningful upper boundary, distinct from
         # the wall itself: it is the lower edge of the upper inventory zone.
         if upper is not None:
