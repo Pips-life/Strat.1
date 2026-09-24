@@ -1,7 +1,5 @@
 name: Strat.1 Android + Python + Web CI
-# Release pipeline: push-to-main and manual dispatch must build v2.82.
-# Build release trigger verification.
-# v2.82 trigger after Strategy 006 cache/zones update.
+# Release pipeline: push-to-main and manual dispatch build the version in mobile/release.properties.
 
 on:
   push:
@@ -89,15 +87,15 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-release-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
-          grep -q "versionCode='82'" /tmp/pips-release-badging.txt
+          grep -q "versionCode='83'" /tmp/pips-release-badging.txt
           grep -q "versionName='0.2.83'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.83-81.apk"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.83-83.apk"
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-v0.2.83-build82
-          path: ${{ runner.temp }}/pips-life-0.2.83-81.apk
+          name: pips-life-v0.2.83-build83
+          path: ${{ runner.temp }}/pips-life-0.2.83-83.apk
           if-no-files-found: error
 
   release:
@@ -117,14 +115,14 @@ jobs:
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
           test "$version_name" = "0.2.83"
-          test "$version_code" = "81"
+          test "$version_code" = "83"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
       - name: Download signed APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: pips-life-v0.2.83-build82
+          name: pips-life-v0.2.83-build83
           path: release
       - name: Publish GitHub release
         env:
@@ -134,12 +132,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="release/pips-life-0.2.83-81.apk"
+          APK="release/pips-life-0.2.83-83.apk"
           test -s "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
             gh release create "$TAG" "$APK" --title "Pips-life v$VERSION" --generate-notes
           fi
-
-# v2.82 rebuild trigger for Strategy 006 options-file caching and zone display.
