@@ -189,7 +189,7 @@ class TradingEngine(
         val decision = risk.decide(
             side, entry, stop, takeProfit, snapshot.equity, positions.size,
             abs(plan.rewardRisk).coerceAtMost(100.0), dailyLossFraction, tradesToday, consecutiveLosses,
-            tick.lossTickValue, spec.tickSize,
+            tick.lossTickValue, spec.tickSize ?: 0.0,
             riskFractionOverride = 0.10,
             accountBalance = snapshot.balance, freeMargin = snapshot.freeMargin, leverage = snapshot.leverage,
             contractSize = spec.contractSize, brokerMinVolume = spec.minVolume, brokerMaxVolume = spec.maxVolume,
