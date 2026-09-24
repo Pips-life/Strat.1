@@ -334,6 +334,7 @@ private fun strategyLabel(strategy: TradingEngine.StrategyId): String = when (st
     TradingEngine.StrategyId.STRATEGY_003 -> "S003 • SMC"
     TradingEngine.StrategyId.STRATEGY_004 -> "S004 • PRICE ACTION"
     TradingEngine.StrategyId.STRATEGY_005 -> "S005 • WOODIE 4H / 5M"
+    TradingEngine.StrategyId.STRATEGY_006 -> "S006 • OPTIONS FLOW"
 }
 
 private data class StrikeView(
