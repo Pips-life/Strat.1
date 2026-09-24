@@ -1,5 +1,7 @@
 package life.pips.strat1
 
+import life.pips.strat1.data.TradeSide
+
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
