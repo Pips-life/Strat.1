@@ -82,11 +82,6 @@ class Strategy006Engine {
         lastConfirmedBarStart = Long.MIN_VALUE
     }
 
-    /**
-     * Stateful live decision. Every call records the MT5 price, so the engine
-     * can detect PHF breaks, shelf absorption, exhaustion failure/reclaim and
-     * continuation without requiring the caller to know which zone is active.
-     */
     fun plan(
         price: Double, balance: Double, bid: Double, ask: Double,
         rejection: Boolean = false, tickTime: Long = System.currentTimeMillis()
@@ -166,15 +161,15 @@ class Strategy006Engine {
             z.primaryHedgeFloor?.let { it to "Primary Hedge Floor" },
             z.dealerAbsorptionShelf?.let { it to "Dealer Absorption Shelf" },
             z.liquidityExhaustionFloor?.let { it to "Liquidity Exhaustion Floor" }
-        ).filter { (_, level) -> bar.low <= level && bar.high >= level && bar.close > level }
-            .maxByOrNull { (_, level) -> level }
+        ).filter { (level, _) -> bar.low <= level && bar.high >= level && bar.close > level }
+            .maxByOrNull { (level, _) -> level }
         if (lower != null) return M5Rejection(TradeSide.BUY, lower.first, lower.second)
         val upper = listOfNotNull(
             z.immediateHedgeWall?.let { it to "Immediate Hedge Wall" },
             z.reclaimGate?.let { it to "Reclaim Gate" },
             z.upperInventoryCeiling?.let { it to "Upper Inventory Ceiling" }
-        ).filter { (_, level) -> bar.low <= level && bar.high >= level && bar.close < level }
-            .minByOrNull { (_, level) -> level }
+        ).filter { (level, _) -> bar.low <= level && bar.high >= level && bar.close < level }
+            .minByOrNull { (level, _) -> level }
         return upper?.let { M5Rejection(TradeSide.SELL, it.first, it.second) }
     }
 
