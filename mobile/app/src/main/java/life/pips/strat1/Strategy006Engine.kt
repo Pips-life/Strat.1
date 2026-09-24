@@ -42,9 +42,9 @@ class Strategy006Engine {
     data class Map(
         val rows: List<Row>,
         val spot: Double?,
-        val callGex: Map<Double, Double>,
-        val putGex: Map<Double, Double>,
-        val netGex: Map<Double, Double>,
+        val callGex: kotlin.collections.Map<Double, Double>,
+        val putGex: kotlin.collections.Map<Double, Double>,
+        val netGex: kotlin.collections.Map<Double, Double>,
         val totalGex: Double,
         val qof: Double,
         val bias: String,
