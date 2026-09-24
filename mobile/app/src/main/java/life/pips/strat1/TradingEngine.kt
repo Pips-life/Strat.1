@@ -171,6 +171,7 @@ class TradingEngine(
             }
         }
         if (riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions) return
+        if (positions.isNotEmpty()) { onStatus("S006 | ENTRY LOCKED | active batch must be fully closed before a new confirmation"); return }
         if (!safety.canEnter()) { onStatus("S006 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
         // Strategy 006 owns its M5 candle aggregation and rejection confirmation.
         // Do not synthesize rejection from raw ticks here.
@@ -189,13 +190,14 @@ class TradingEngine(
             side, entry, stop, takeProfit, snapshot.equity, positions.size,
             abs(plan.rewardRisk).coerceAtMost(100.0), dailyLossFraction, tradesToday, consecutiveLosses,
             tick.lossTickValue, spec.tickSize,
+            riskFractionOverride = 0.10,
             accountBalance = snapshot.balance, freeMargin = snapshot.freeMargin, leverage = snapshot.leverage,
             contractSize = spec.contractSize, brokerMinVolume = spec.minVolume, brokerMaxVolume = spec.maxVolume,
             brokerVolumeStep = spec.volumeStep ?: 0.0, marginPerVolume = marginPerVolume
         )
         if (!decision.approved) { onStatus("S006 | ENTRY BLOCKED | ${decision.reason}"); return }
         logDecisionOnce("S006-${side}-${fmt(takeProfit)}-${fmt(stop)}", "S006 | decision=${side.name} | entry=${fmt(entry)} | SL=${fmt(stop)} | TP=${fmt(takeProfit)} | RR=${fmt(plan.rewardRisk)} | quantity=${fmt(decision.quantity)} | risk=${fmt(decision.riskAmount)} (${fmt(decision.riskPercent)}%) | margin=${fmt(decision.marginRequired)} | ${decision.reason}")
-        submitBurstAndVerifyEntries(account, saved, symbol, side, decision.quantity, stop, takeProfit, tick, snapshot, true, "S006", onStatus, "S006|$symbol|$side|${fmt(stop)}|${fmt(takeProfit)}|zone-to-zone")
+        submitS006Batch(account, saved, symbol, side, decision.quantity, stop, takeProfit, tick, snapshot, onStatus, "S006|$symbol|$side|${fmt(stop)}|${fmt(takeProfit)}|zone-to-zone")
     }
     private suspend fun execute005(account: MetaAccount, saved: SavedConnection, symbol: String, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
         val plan = strategy005.refresh(account, saved.metaApiToken, symbol, history[symbol]?.toList().orEmpty()).getOrElse {
@@ -361,6 +363,44 @@ class TradingEngine(
         return slots.coerceAtLeast(0) to volume
     }
 
+    private suspend fun submitS006Batch(
+        account: MetaAccount, saved: SavedConnection, symbol: String, side: TradeSide, totalQuantity: Double,
+        stop: Double, target: Double, tick: TickPrice, snapshot: MetaSnapshot, onStatus: (String) -> Unit, signalKey: String
+    ): Boolean {
+        val spec = snapshot.specifications[symbol] ?: return false
+        val minVolume = spec.minVolume
+        val step = spec.volumeStep?.takeIf { it > 0.0 } ?: return false
+        if (!totalQuantity.isFinite() || totalQuantity <= 0.0 || !minVolume.isFinite() || minVolume <= 0.0) return false
+        val maxSlots = 5
+        val possibleSlots = floor(totalQuantity / minVolume + 1e-9).toInt()
+        val slots = minOf(maxSlots, possibleSlots)
+        if (slots < 2) { onStatus("S006 | ENTRY BLOCKED | broker sizing cannot split the 10% batch into multiple positions"); return false }
+        val perPosition = floor((totalQuantity / slots) / step + 1e-9) * step
+        if (!perPosition.isFinite() || perPosition < minVolume) return false
+        val actualTotal = perPosition * slots
+        val entry = if (side == TradeSide.BUY) tick.ask else tick.bid
+        val riskPerVolume = abs(entry - stop) / spec.tickSize * tick.lossTickValue
+        val actualRisk = riskPerVolume * actualTotal
+        val maxBatchRisk = minOf(snapshot.balance, snapshot.equity) * 0.10
+        if (!actualRisk.isFinite() || actualRisk > maxBatchRisk + 1e-9) { onStatus("S006 | ENTRY BLOCKED | batch risk exceeds 10% ceiling"); return false }
+        val stateKey = "S006|$symbol"
+        if (burstState[stateKey] == signalKey) return false
+        burstState[stateKey] = signalKey
+        val riskPct = if (minOf(snapshot.balance, snapshot.equity) > 0.0) actualRisk / minOf(snapshot.balance, snapshot.equity) * 100.0 else 0.0
+        onStatus("S006 | BATCH EXECUTION | entries=$slots | perPosition=${fmt(perPosition)} | totalRisk=${fmt(actualRisk)} (${fmt(riskPct)}%)")
+        val receipts = coroutineScope {
+            (0 until slots).map { async(Dispatchers.IO) { meta.marketOrder(saved.metaApiToken, account, side, symbol, perPosition, stopLoss = stop, takeProfit = target) } }.mapIndexed { index, deferred ->
+                val result = deferred.await()
+                result.onSuccess { r -> onStatus("S006 | BATCH ORDER ${index + 1}/$slots ACK | ${r.orderId.ifBlank { r.positionId }}") }.onFailure { onStatus("S006 | BATCH ORDER ${index + 1}/$slots FAILED | ${it.message ?: "unknown"}") }
+                result
+            }
+        }
+        val successful = receipts.mapNotNull { it.getOrNull() }
+        if (successful.size != slots) { safety.halt("S006 batch submission incomplete: ${successful.size}/$slots"); return false }
+        tradesToday += successful.size
+        onStatus("S006 | BATCH ACTIVE | $slots positions | combined risk <= 10% | no new entry until batch is closed")
+        return true
+    }
     private suspend fun submitBurstAndVerifyEntries(
         account: MetaAccount, saved: SavedConnection, symbol: String, side: TradeSide, volume: Double,
         stop: Double, target: Double?, tick: TickPrice, snapshot: MetaSnapshot, requireTakeProfit: Boolean,
