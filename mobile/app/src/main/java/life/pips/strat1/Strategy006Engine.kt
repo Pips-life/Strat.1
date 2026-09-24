@@ -346,3 +346,5 @@ class Strategy006Engine {
         return out
     }
 }
+
+// v2.80 CI rebuild marker: compile-tested Strategy 006 M5 rejection path.
