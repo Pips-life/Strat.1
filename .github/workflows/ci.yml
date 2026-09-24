@@ -1,7 +1,7 @@
 name: Strat.1 Android + Python + Web CI
-# Release pipeline: push-to-main and manual dispatch must build v2.80.
+# Release pipeline: push-to-main and manual dispatch must build v2.81.
 # Build release trigger verification.
-# v2.80 trigger after TradingEngine compile fix.
+# v2.81 trigger after Strategy 006 cache/zones update.
 
 on:
   push:
@@ -100,15 +100,15 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | tee /tmp/pips-release-badging.txt
           grep -q "package: name='life.pipslife.mobile'" /tmp/pips-release-badging.txt
           grep -q "application-label:'Pips-life'" /tmp/pips-release-badging.txt
-          grep -q "versionCode='80'" /tmp/pips-release-badging.txt
-          grep -q "versionName='0.2.80'" /tmp/pips-release-badging.txt
+          grep -q "versionCode='81'" /tmp/pips-release-badging.txt
+          grep -q "versionName='0.2.81'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.80-80.apk"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.81-81.apk"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-v0.2.80-build80
+          name: pips-life-v0.2.81-build81
           path: ${{ runner.temp }}/pips-life-0.2.80-80.apk
           if-no-files-found: error
 
@@ -129,8 +129,8 @@ jobs:
           set -euo pipefail
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
-          test "$version_name" = "0.2.80"
-          test "$version_code" = "80"
+          test "$version_name" = "0.2.81"
+          test "$version_code" = "81"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
@@ -157,4 +157,4 @@ jobs:
             gh release create "$TAG" "$APK" --title "Pips-life v$VERSION" --generate-notes
           fi
 
-# v2.80 rebuild trigger after TradingEngine coroutine fix.
+# v2.81 rebuild trigger for Strategy 006 options-file caching and zone display.
