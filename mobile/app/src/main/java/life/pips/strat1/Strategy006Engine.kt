@@ -138,8 +138,8 @@ class Strategy006Engine {
         val lowerCandidates = put.keys.filter { it < spot }
         val upper = upperCandidates.maxByOrNull { call[it] ?: 0.0 } ?: callWall
         val floor = lowerCandidates.minByOrNull { abs(it - spot) } ?: putWall
-        val walls = listOfNotNull(callWall, putWall)
-        val immediate = walls.minByOrNull { abs(it - spot) }
+        val opposingWalls = listOfNotNull(callWall, putWall).filter { it > spot || it < spot }.filter { if (upper != null && upper > spot) it > spot else it < spot }
+        val immediate = opposingWalls.minByOrNull { abs(it - spot) }
         val positive = ordered.filterValues { it > 0 }.keys
         val negative = ordered.filterValues { it < 0 }.keys
         val total = net.values.sum()
