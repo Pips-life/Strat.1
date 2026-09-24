@@ -180,9 +180,21 @@ class TradingEngine(
         if (dailyLossFraction >= riskPolicy.maxDailyLoss || tradesToday >= riskPolicy.maxTradesPerDay || consecutiveLosses >= riskPolicy.maxConsecutiveLosses) { onStatus("S006 | ENTRY BLOCKED | GLOBAL DAILY RISK LIMIT"); return }
         val spec = snapshot.specifications[symbol] ?: return
         val entry = plan.entry ?: price
-        val decision = risk.decide(side, entry, stop, takeProfit, snapshot.balance, positions.size, abs(plan.rewardRisk).coerceAtMost(100.0), dailyLossFraction, tradesToday, consecutiveLosses, tick.lossTickValue, spec.tickSize)
+        val minBrokerVolume = spec.minVolume
+        val brokerMarginAtMin = if (minBrokerVolume.isFinite() && minBrokerVolume > 0.0) {
+            meta.calculateMargin(saved.metaApiToken, account, side, symbol, minBrokerVolume, entry).getOrNull()
+        } else null
+        val marginPerVolume = brokerMarginAtMin?.takeIf { it.isFinite() && it > 0.0 }?.let { it / minBrokerVolume }
+        val decision = risk.decide(
+            side, entry, stop, takeProfit, snapshot.equity, positions.size,
+            abs(plan.rewardRisk).coerceAtMost(100.0), dailyLossFraction, tradesToday, consecutiveLosses,
+            tick.lossTickValue, spec.tickSize,
+            accountBalance = snapshot.balance, freeMargin = snapshot.freeMargin, leverage = snapshot.leverage,
+            contractSize = spec.contractSize, brokerMinVolume = spec.minVolume, brokerMaxVolume = spec.maxVolume,
+            brokerVolumeStep = spec.volumeStep, marginPerVolume = marginPerVolume
+        )
         if (!decision.approved) { onStatus("S006 | ENTRY BLOCKED | ${decision.reason}"); return }
-        logDecisionOnce("S006-${side}-${fmt(takeProfit)}-${fmt(stop)}", "S006 | decision=${side.name} | entry=${fmt(entry)} | SL=${fmt(stop)} | TP=${fmt(takeProfit)} | RR=${fmt(plan.rewardRisk)} | risk=${decision.reason}")
+        logDecisionOnce("S006-${side}-${fmt(takeProfit)}-${fmt(stop)}", "S006 | decision=${side.name} | entry=${fmt(entry)} | SL=${fmt(stop)} | TP=${fmt(takeProfit)} | RR=${fmt(plan.rewardRisk)} | quantity=${fmt(decision.quantity)} | risk=${fmt(decision.riskAmount)} (${fmt(decision.riskPercent)}%) | margin=${fmt(decision.marginRequired)} | ${decision.reason}")
         submitBurstAndVerifyEntries(account, saved, symbol, side, decision.quantity, stop, takeProfit, tick, snapshot, true, "S006", onStatus, "S006|$symbol|$side|${fmt(stop)}|${fmt(takeProfit)}|zone-to-zone")
     }
     private suspend fun execute005(account: MetaAccount, saved: SavedConnection, symbol: String, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
