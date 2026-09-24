@@ -103,13 +103,13 @@ jobs:
           grep -q "versionCode='80'" /tmp/pips-release-badging.txt
           grep -q "versionName='0.2.80'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.79-79.apk"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.80-80.apk"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pips-life-v0.2.79-build79
-          path: ${{ runner.temp }}/pips-life-0.2.79-79.apk
+          name: pips-life-v0.2.80-build80
+          path: ${{ runner.temp }}/pips-life-0.2.80-80.apk
           if-no-files-found: error
 
   release:
@@ -129,8 +129,8 @@ jobs:
           set -euo pipefail
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
-          test "$version_name" = "0.2.79"
-          test "$version_code" = "79"
+          test "$version_name" = "0.2.80"
+          test "$version_code" = "80"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
@@ -138,7 +138,7 @@ jobs:
       - name: Download signed APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: pips-life-v0.2.79-build79
+          name: pips-life-v0.2.80-build80
           path: release
 
       - name: Publish GitHub release
@@ -149,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="release/pips-life-0.2.79-79.apk"
+          APK="release/pips-life-0.2.80-80.apk"
           test -s "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
@@ -157,4 +157,4 @@ jobs:
             gh release create "$TAG" "$APK" --title "Pips-life v$VERSION" --generate-notes
           fi
 
-# v2.79 rebuild trigger after TradingEngine coroutine fix.
+# v2.80 rebuild trigger after TradingEngine coroutine fix.
