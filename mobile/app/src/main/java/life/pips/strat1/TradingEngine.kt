@@ -172,14 +172,9 @@ class TradingEngine(
         }
         if (riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions) return
         if (!safety.canEnter()) { onStatus("S006 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
-        val samples = history[symbol]?.toList().orEmpty()
-        val reaction = if (samples.size >= 3) {
-            val a = samples[samples.size - 3].price; val b = samples[samples.size - 2].price; val d = samples.last().price
-            val floor = map.zones.primaryHedgeFloor; val wall = map.zones.immediateHedgeWall
-            (floor != null && abs(b - floor) <= abs(floor) * 0.0008 && d > b && b >= a) ||
-            (wall != null && abs(b - wall) <= abs(wall) * 0.0008 && d < b && b <= a)
-        } else false
-        val plan = strategy006.plan(price, snapshot.balance, tick.bid, tick.ask, reaction)
+        // Strategy 006 owns its M5 candle aggregation and rejection confirmation.
+        // Do not synthesize rejection from raw ticks here.
+        val plan = strategy006.plan(price, snapshot.balance, tick.bid, tick.ask, tickTime = tick.time)
         val side = plan.side ?: return; val stop = plan.stop ?: return; val takeProfit = plan.target ?: return
         if (plan.rewardRisk < riskPolicy.minRewardRisk) { onStatus("S006 | ENTRY BLOCKED | RR ${fmt(plan.rewardRisk)} < ${fmt(riskPolicy.minRewardRisk)}"); return }
         if (dailyLossFraction >= riskPolicy.maxDailyLoss || tradesToday >= riskPolicy.maxTradesPerDay || consecutiveLosses >= riskPolicy.maxConsecutiveLosses) { onStatus("S006 | ENTRY BLOCKED | GLOBAL DAILY RISK LIMIT"); return }
