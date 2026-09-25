@@ -81,6 +81,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
 @Composable private fun StrategyTab(modifier: Modifier, saved: SavedConnection, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, tradeSymbol: String, flashSymbol: String, selected: TradingEngine.StrategyId, running: Boolean, armed: Boolean, status: String, smcPlan: Strategy003Engine.Plan, priceActionPlan: Strategy004Engine.Plan, woodiePlan: Strategy005Engine.Plan, optionsFlow: Strategy006Engine, onSelect: (TradingEngine.StrategyId) -> Unit, onFlashSymbol: (String) -> Unit, onSave: (SavedConnection) -> Unit, onRun: (Boolean) -> Unit, onArm: (Boolean) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var localStatus by remember(status) { mutableStateOf(status) }
     var key by remember(saved.flashAlphaKey) { mutableStateOf(saved.flashAlphaKey) }; var symbol by remember(flashSymbol) { mutableStateOf(flashSymbol) }
     val s006Prefs = remember { context.getSharedPreferences("strategy006_files", android.content.Context.MODE_PRIVATE) }
     var barchartName by remember { mutableStateOf("No Barchart file selected") }
@@ -101,7 +103,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             scope.launch {
-                status = "S006 | READING FILE 1…"
+                localStatus = "S006 | READING FILE 1…"
                 Strategy006FileExtractor.extract(context, it)
                     .onSuccess { result ->
                         val text = result.first
@@ -109,9 +111,9 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         barchartText = text
                         barchartName = name
                         s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).apply()
-                        status = "S006 | FILE 1 LOADED • " + name
+                        localStatus = "S006 | FILE 1 LOADED • " + name
                     }
-                    .onFailure { error -> status = "S006 | FILE 1 ERROR • " + (error.message ?: "Could not read file") }
+                    .onFailure { error -> localStatus = "S006 | FILE 1 ERROR • " + (error.message ?: "Could not read file") }
             }
         }
     }
@@ -166,7 +168,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                 if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
             }
         }
-        item { CardBlock { Text("STATUS", color = Muted, fontSize = 9.sp); Text(status, color = TextMain, fontSize = 10.sp) } }
+        item { CardBlock { Text("STATUS", color = Muted, fontSize = 9.sp); Text(localStatus, color = TextMain, fontSize = 10.sp) } }
     }
 }
 
