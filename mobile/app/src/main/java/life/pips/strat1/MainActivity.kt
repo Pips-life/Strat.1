@@ -99,11 +99,21 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
         }
     }
     val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
-            .onSuccess { text ->
-                barchartText = text; barchartName = uri.lastPathSegment ?: "Barchart file"
-                s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).apply()
-            } }
+        uri?.let {
+            scope.launch {
+                status = "S006 | READING FILE 1…"
+                Strategy006FileExtractor.extract(context, it)
+                    .onSuccess { result ->
+                        val text = result.first
+                        val name = result.second
+                        barchartText = text
+                        barchartName = name
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).apply()
+                        status = "S006 | FILE 1 LOADED • " + name
+                    }
+                    .onFailure { error -> status = "S006 | FILE 1 ERROR • " + (error.message ?: "Could not read file") }
+            }
+        }
     }
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
@@ -125,7 +135,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                     CardBlock {
                         Text("STRATEGY 006 • OPTIONS FLOW", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black)
                         Text("Independent daily options map. Load the two files at London open; live MT5 price reacts to the calculated zones.", color = TextMain, fontSize = 10.sp)
-                        Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD BARCHART OPTIONS FILE") }
+                        Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD FILE 1 • MHT / PDF / SCREENSHOT") }
                         Text(barchartName, color = Muted, fontSize = 9.sp)
                         Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD GREEKS / VOLATILITY CSV") }
                         Text(greeksName, color = Muted, fontSize = 9.sp)
