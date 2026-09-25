@@ -1,6 +1,8 @@
 package life.pips.strat1
 
 import android.os.Bundle
+import java.time.LocalDate
+import java.time.ZoneId
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,17 +82,35 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 @Composable private fun StrategyTab(modifier: Modifier, saved: SavedConnection, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, tradeSymbol: String, flashSymbol: String, selected: TradingEngine.StrategyId, running: Boolean, armed: Boolean, status: String, smcPlan: Strategy003Engine.Plan, priceActionPlan: Strategy004Engine.Plan, woodiePlan: Strategy005Engine.Plan, optionsFlow: Strategy006Engine, onSelect: (TradingEngine.StrategyId) -> Unit, onFlashSymbol: (String) -> Unit, onSave: (SavedConnection) -> Unit, onRun: (Boolean) -> Unit, onArm: (Boolean) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var key by remember(saved.flashAlphaKey) { mutableStateOf(saved.flashAlphaKey) }; var symbol by remember(flashSymbol) { mutableStateOf(flashSymbol) }
+    val s006Prefs = remember { context.getSharedPreferences("strategy006_files", android.content.Context.MODE_PRIVATE) }
     var barchartName by remember { mutableStateOf("No Barchart file selected") }
     var greeksName by remember { mutableStateOf("No Greeks CSV selected") }
     var barchartText by remember { mutableStateOf("") }
     var greeksText by remember { mutableStateOf("") }
+    val s006Today = remember { LocalDate.now(ZoneId.of("Africa/Nairobi")).toString() }
+    LaunchedEffect(Unit) {
+        if (s006Prefs.getString("date", "") == s006Today) {
+            barchartText = s006Prefs.getString("barchart_text", "").orEmpty()
+            greeksText = s006Prefs.getString("greeks_text", "").orEmpty()
+            barchartName = s006Prefs.getString("barchart_name", "Cached Barchart options file").orEmpty()
+            greeksName = s006Prefs.getString("greeks_name", "Cached Greeks / volatility CSV").orEmpty()
+        } else {
+            s006Prefs.edit().clear().apply()
+        }
+    }
     val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
-            .onSuccess { text -> barchartText = text; barchartName = uri.lastPathSegment ?: "Barchart file" } }
+            .onSuccess { text ->
+                barchartText = text; barchartName = uri.lastPathSegment ?: "Barchart file"
+                s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).apply()
+            } }
     }
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
-            .onSuccess { text -> greeksText = text; greeksName = uri.lastPathSegment ?: "Greeks CSV" } }
+            .onSuccess { text ->
+                greeksText = text; greeksName = uri.lastPathSegment ?: "Greeks CSV"
+                s006Prefs.edit().putString("date", s006Today).putString("greeks_text", text).putString("greeks_name", greeksName).apply()
+            } }
     }
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
         item { Header("Strategies", "Each strategy has its own selectable tab and isolated rules") }; item { StrategySelector(selected, onSelect) }; item { Text("MetaApi trading symbol: $tradeSymbol", color = Muted, fontSize = 10.sp) }
@@ -113,15 +133,23 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             optionsFlow.loadFiles(barchartText, greeksText, snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 })
                         }, modifier = Modifier.fillMaxWidth()) { Text("BUILD OPTIONS FLOW MAP") }
                         val m = optionsFlow.currentMap()
-                        Text("MAP: " + if (m == null) "WAITING FOR BOTH FILES" else "READY • QOF " + String.format("%.1f", m.qof) + " • " + m.bias, color = if (m?.valid == true) Green else Muted, fontSize = 10.sp)
+                        Text("MAP: " + if (m == null) "WAITING FOR BOTH FILES" else "CALCULATED • QOF " + String.format("%.1f", m.qof) + " • " + m.bias, color = if (m?.valid == true) Green else Muted, fontSize = 10.sp)
+                        Text("PRICE MAP — calculated from loaded options OI + gamma", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         m?.zones?.let { z ->
-                            Text("Upper Inventory Ceiling: " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Reclaim Gate: " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Immediate Hedge Wall: " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Primary Hedge Floor: " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Call Wall: " + (z.callWall?.let { String.format("%.2f", it) } ?: "—") + " • Put Wall: " + (z.putWall?.let { String.format("%.2f", it) } ?: "—") + " • Gamma Flip: " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("1  Upper Inventory Ceiling: " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("2  Reclaim Gate: " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("3  Immediate Hedge Wall: " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("4  Primary Hedge Floor: " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("5  Call Wall: " + (z.callWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("6  Put Wall: " + (z.putWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("7  Gamma Flip: " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("8  Positive GEX Region: " + (z.positiveGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("9  Negative GEX Region: " + (z.negativeGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("10 Dealer Absorption Shelf: " + (z.dealerAbsorptionShelf?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
+                            Text("11 Liquidity Exhaustion Floor: " + (z.liquidityExhaustionFloor?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
                         }
-                        Text("M5 confirmation: completed candle must trade into a mapped zone and close back across it. Risk cap: 5% balance • Exit: nearest opposing zone.", color = TextMain, fontSize = 9.sp)
+                        Text("FILES: cached locally for this Nairobi trading day — leaving the Strategy screen does not clear them. A new day requires new input.", color = TextMain, fontSize = 9.sp)
+                        Text("M5 confirmation: completed candle must trade into a mapped zone and close back across it. Batch risk: 10% combined • Exit: nearest opposing zone.", color = TextMain, fontSize = 9.sp)
                     }
                 }
                 item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START OPTIONS FLOW") } }
