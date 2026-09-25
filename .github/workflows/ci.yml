@@ -115,7 +115,7 @@ jobs:
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
           test "$version_name" = "0.2.84"
-          test "$version_code" = "83"
+          test "$version_code" = "84"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
