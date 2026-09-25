@@ -6,14 +6,12 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.google.android.gms.tasks.Tasks
-import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -106,7 +104,7 @@ object Strategy006FileExtractor {
     private fun normalizeOcr(raw: String): String {
         val lines = raw.lineSequence()
             .map { it.replace('|', ' ').replace('—', '-').replace('–', '-') }
-            .map { it.replace(Regex("\s+"), " ").trim() }
+            .map { it.replace(Regex("\\s+"), " ").trim() }
             .filter { it.isNotBlank() }
             .toList()
 
