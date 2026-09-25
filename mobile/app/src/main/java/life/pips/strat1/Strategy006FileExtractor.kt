@@ -66,7 +66,7 @@ object Strategy006FileExtractor {
     private fun ocrPdf(context: Context, uri: Uri): String {
         val pfd = context.contentResolver.openFileDescriptor(uri, "r")
             ?: error("Could not open PDF.")
-        pfd.use {
+        return pfd.use {
             PdfRenderer(it).use { renderer ->
                 val out = StringBuilder()
                 for (pageIndex in 0 until renderer.pageCount) {
