@@ -189,7 +189,7 @@ class Strategy006Engine {
         if (rr < 1.35)
             return TradePlan(null, null, null, null, rr, 0.0, "WAIT RR",
                 "Zone-to-zone reward is below 1.35R; no trade.")
-        return TradePlan(side, entry, stop, target, rr, balance * 0.05, state.name, reason)
+        return TradePlan(side, entry, stop, target, rr, balance * 0.10, state.name, reason)
     }
 
     private fun firstAbove(entry: Double, vararg levels: Double?): Double? =
