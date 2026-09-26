@@ -57,9 +57,11 @@ fun HomeDashboard(
         .sortedBy { abs(it.strike - (price ?: it.strike)) }
         .take(5)
     val best = options.maxByOrNull { row -> abs(row.gamma).takeIf { it.isFinite() } ?: 0.0 }
-    val hasFlow = flash != null
-    val dealerLong = flash?.netGex?.let { it.isFinite() && it > 0 } == true
-    val flowBull = flash?.flowDirection?.contains("buy", true) == true || flash?.flowDirection?.contains("bull", true) == true
+    val s002 = engine.strategy002.evaluate(engine.liveSamples(selectedSymbol))
+    val s003 = engine.strategy003.latest()
+    val s004 = engine.strategy004.latest()
+    val s005 = engine.strategy005.latest()
+    val s006 = engine.strategy006.currentMap()
     val confidence = view?.confidence ?: 0
     val side = view?.side
     val openPnl = snapshot?.positions?.sumOf { position -> if (position.profit.isFinite()) position.profit else 0.0 } ?: 0.0
@@ -74,77 +76,22 @@ fun HomeDashboard(
         item { CompactMarketHeader(selectedSymbol, price, strategy, account) }
         item { AccountMetrics(snapshot, openPnl, pnlPct) }
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                EqualPanel(Modifier.weight(1f)) {
-                    Text("MARKET OVERVIEW", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text(price?.let { fmt(it, 2) } ?: "—", color = Text, fontSize = 23.sp, fontWeight = FontWeight.Black)
-                    Text(if (tick != null) "BID ${fmt(tick.bid, 2)}  ASK ${fmt(tick.ask, 2)}" else "WAITING FOR MT5 PRICE", color = if (tick != null) Green else Muted, fontSize = 8.sp)
-                    Text(if (tick != null) "SPREAD ${fmt(tick.ask - tick.bid, 2)}" else "XAUUSD • BROKER", color = Muted, fontSize = 8.sp)
-                }
-                EqualPanel(Modifier.weight(1f)) {
-                    Text("DEALER POSITIONING", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text(if (!hasFlow) "WAITING" else if (dealerLong) "NET LONG" else "NET SHORT", color = if (!hasFlow) Muted else if (dealerLong) Green else Red, fontSize = 17.sp, fontWeight = FontWeight.Black)
-                    Meter(if (hasFlow) if (dealerLong) .68f else .32f else .5f)
-                    Text(if (hasFlow) "GEX ${fmt(flash?.netGex ?: Double.NaN, 0)}" else "GC=F OPTIONS", color = Muted, fontSize = 8.sp)
-                }
-                EqualPanel(Modifier.weight(1f)) {
-                    Text("FLOW SENTIMENT", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text(if (!hasFlow) "WAITING" else if (flowBull) "BULLISH" else flash?.flowDirection?.uppercase()?.ifBlank { "NEUTRAL" } ?: "NEUTRAL", color = if (!hasFlow) Muted else Green, fontSize = 16.sp, fontWeight = FontWeight.Black)
-                    Text(if (hasFlow) "${confidence}% confidence" else "Options Flow", color = Muted, fontSize = 8.sp)
-                    Text("GC=F • FlashAlpha", color = Muted, fontSize = 8.sp)
-                }
+            EqualPanel {
+                Text("MARKET OVERVIEW", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(price?.let { fmt(it, 2) } ?: "—", color = Text, fontSize = 23.sp, fontWeight = FontWeight.Black)
+                Text(if (tick != null) "BID " + fmt(tick.bid, 2) + "  ASK " + fmt(tick.ask, 2) + "  SPREAD " + fmt(tick.ask - tick.bid, 2) else "WAITING FOR MT5 PRICE", color = if (tick != null) Green else Muted, fontSize = 8.sp)
             }
         }
         item {
             EqualPanel {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("OPTIONS FLOW — GREEKS CONFLUENCE", color = Text, fontSize = 15.sp, fontWeight = FontWeight.Black)
-                        Text("XAUUSD execution • GC=F options intelligence", color = Muted, fontSize = 9.sp)
-                    }
-                    Pill(if (best != null) "ENTRY ${fmt(best.strike, 2)}" else "ENTRY —", Cyan)
-                    Spacer(Modifier.width(5.dp))
-                    Pill("${if (best != null) 6 else 0}/6", Green)
-                }
-                Spacer(Modifier.height(5.dp))
-                StrikeHeader()
-                if (options.isEmpty()) {
-                    Text("No permitted GC=F options snapshot available. Values are not fabricated.", color = Muted, fontSize = 9.sp, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp), textAlign = TextAlign.Center)
-                } else {
-                    options.forEachIndexed { index, row -> StrikeRow(row, index == 0) }
-                }
-            }
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                EqualPanel(Modifier.weight(1f)) {
-                    Text("GREEK TRENDS", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text("Entry ${best?.strike?.let { fmt(it, 2) } ?: "—"}", color = Muted, fontSize = 8.sp)
-                    GreekBars(best)
-                }
-                EqualPanel(Modifier.weight(1f)) {
-                    Text("KEY LEVELS", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Level("GAMMA FLIP", flash?.gammaFlip)
-                    Level("CALL WALL", flash?.callWall)
-                    Level("PUT WALL", flash?.putWall)
-                    Level("0DTE MAGNET", flash?.zeroDteMagnet)
-                }
-                EqualPanel(Modifier.weight(1f)) {
-                    Text("TRADE PLAN", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text(when (side) { TradeSide.BUY -> "LONG (BUY)"; TradeSide.SELL -> "SHORT (SELL)"; null -> "WAIT" }, color = when (side) { TradeSide.BUY -> Green; TradeSide.SELL -> Red; null -> Cyan }, fontSize = 16.sp, fontWeight = FontWeight.Black)
-                    Text("Entry  ${view?.entry?.let { fmt(it, 2) } ?: "—"}", color = Text, fontSize = 9.sp)
-                    Text("SL  ${view?.stop?.let { fmt(it, 2) } ?: "—"}", color = Muted, fontSize = 9.sp)
-                    if (strategy == TradingEngine.StrategyId.STRATEGY_001) {
-                        Text("TP  ${view?.exit?.let { fmt(it, 2) } ?: "—"}", color = Cyan, fontSize = 9.sp)
-                        Text("Exit  GEX exit zone", color = Muted, fontSize = 8.sp)
-                    } else if (strategy == TradingEngine.StrategyId.STRATEGY_005) {
-                        Text("TP  ${view?.exit?.let { fmt(it, 2) } ?: "—"}", color = Cyan, fontSize = 9.sp)
-                        Text("Exit  4H Woodie PP", color = Muted, fontSize = 8.sp)
-                    } else {
-                        Text("TP  NONE", color = Muted, fontSize = 9.sp)
-                        Text("Exit  strategy-managed trailing/reversal", color = Cyan, fontSize = 8.sp)
-                    }
-                    Text("Positions ${snapshot?.positions?.size ?: 0}", color = Muted, fontSize = 9.sp)
+                Text(strategyLabel(strategy) + " • ENGINE ACTIVITY", color = Text, fontSize = 15.sp, fontWeight = FontWeight.Black)
+                when (strategy) {
+                    TradingEngine.StrategyId.STRATEGY_001 -> { Text("GEX / QOF • " + (flash?.flowDirection?.uppercase() ?: "WAITING"), color = Green, fontSize = 10.sp); Text("Entry " + (view?.entry?.let { fmt(it, 2) } ?: "—") + " • Exit " + (view?.exit?.let { fmt(it, 2) } ?: "—") + " • SL " + (view?.stop?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp) }
+                    TradingEngine.StrategyId.STRATEGY_002 -> { Text("TICK VELOCITY • " + (s002.side?.name ?: "WAIT") + " • " + fmt(s002.velocity, 4), color = Green, fontSize = 10.sp); Text("Entry " + (s002.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s002.stop?.let { fmt(it, 2) } ?: "—") + " • " + s002.reason, color = Muted, fontSize = 9.sp) }
+                    TradingEngine.StrategyId.STRATEGY_003 -> { Text("HTF " + s003.h1Bias.name + " • 15M " + s003.m15Bias.name + " • 5M " + s003.m5Bias.name + " • 1M " + s003.m1Bias.name, color = Green, fontSize = 10.sp); Text(s003.bos + " • " + s003.liquidity + " • " + s003.fvg + " • " + s003.orderBlock, color = Text, fontSize = 9.sp); Text("Entry " + (s003.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s003.stop?.let { fmt(it, 2) } ?: "—") + " • " + s003.confidence + "%", color = Muted, fontSize = 9.sp) }
+                    TradingEngine.StrategyId.STRATEGY_004 -> { Text("15M " + s004.contextBias.name + " • 5M " + s004.setupState.name + " • " + s004.bos, color = Green, fontSize = 10.sp); Text(s004.sweptLiquidity + " • " + s004.targetLiquidity, color = Text, fontSize = 9.sp); Text("Entry " + (s004.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s004.stop?.let { fmt(it, 2) } ?: "—") + " • TP " + (s004.target?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 9.sp) }
+                    TradingEngine.StrategyId.STRATEGY_005 -> { val l = s005.levels; Text("4H WOODIE • PP " + (l?.pp?.let { fmt(it, 2) } ?: "—") + " • R1 " + (l?.r1?.let { fmt(it, 2) } ?: "—") + " • S1 " + (l?.s1?.let { fmt(it, 2) } ?: "—"), color = Green, fontSize = 10.sp); Text("Trigger " + s005.trigger.ifBlank { "WAIT" } + " • Entry " + (s005.entry?.let { fmt(it, 2) } ?: "—") + " • PP exit " + (s005.target?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp); Text("SL " + (s005.stop?.let { fmt(it, 2) } ?: "—") + " • RR " + fmt(s005.rewardRisk, 2), color = Muted, fontSize = 9.sp) }
+                    TradingEngine.StrategyId.STRATEGY_006 -> { val z = s006?.zones; Text("QOF " + (s006?.qof?.let { fmt(it, 1) } ?: "—") + " • " + (s006?.bias ?: "NO MAP"), color = Green, fontSize = 10.sp); Text("PHF " + (z?.primaryHedgeFloor?.let { fmt(it, 2) } ?: "—") + " • Absorption " + (z?.dealerAbsorptionShelf?.let { fmt(it, 2) } ?: "—") + " • Exhaustion " + (z?.liquidityExhaustionFloor?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp); Text("Upper " + (z?.upperInventoryCeiling?.let { fmt(it, 2) } ?: "—") + " • Reclaim " + (z?.reclaimGate?.let { fmt(it, 2) } ?: "—") + " • IHW " + (z?.immediateHedgeWall?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 9.sp); Text("Batch positions " + (snapshot?.positions?.size ?: 0) + " • 10% combined risk • nearest opposing zone exit", color = Muted, fontSize = 9.sp) }
                 }
             }
         }
