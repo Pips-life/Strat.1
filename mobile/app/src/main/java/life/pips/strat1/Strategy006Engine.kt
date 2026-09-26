@@ -4,6 +4,9 @@ import life.pips.strat1.data.TradeSide
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -139,6 +142,30 @@ class Strategy006Engine {
         return ZoneStatus(likely?.first, likely?.second, likely?.third, lastReactionZoneName, lastReactionZone, exit?.first, exit?.second)
     }
 
+    /** S006 file-first entry point: GC time is read from the FIRST supplied file. */
+    fun loadFiles(
+        barchartText: String,
+        greeksText: String,
+        gcPrice: Double?,
+        xauSpotPrice: Double?,
+        xauTimestampMillis: Long,
+        gcSourceTimezone: String = "America/New_York",
+        xauSourceTimezone: String = "Africa/Nairobi",
+        toleranceMillis: Long = 1_000L
+    ): Map {
+        val gcTimestamp = extractGcTimestampMillis(barchartText, gcSourceTimezone)
+        if (gcTimestamp == null) {
+            val rows = (parseText(barchartText) + parseText(greeksText))
+                .filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
+            val invalid = calculate(rows, null)
+            current = invalid.copy(spot = xauSpotPrice,
+                warnings = invalid.warnings + "GC timestamp could not be read from the first S006 file; no basis mapping performed.")
+            return current!!
+        }
+        return loadFiles(barchartText, greeksText, gcPrice, gcTimestamp, xauSpotPrice, xauTimestampMillis,
+            gcSourceTimezone, xauSourceTimezone, toleranceMillis)
+    }
+
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
         // Backward-compatible entry point. New callers should use the timestamped overload.
         val now = System.currentTimeMillis()
@@ -207,6 +234,38 @@ class Strategy006Engine {
         lastReactionZoneName = null
         lastReactionZone = null
         return mapped
+    }
+
+    /** Read the GC observation timestamp from CSV, PDF-extracted text, or OCR text. */
+    private fun extractGcTimestampMillis(text: String, sourceTimezone: String): Long? {
+        if (text.isBlank()) return null
+        val patterns = listOf(
+            Regex("""(?i)(?:last\\s+(?:trade|quote)|quote|as\\s+of|timestamp|date|time)\\D{0,40}(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}[ T]+\\d{1,2}:\\d{2}(?::\\d{2})?(?:\\s*[AP]M)?)"""),
+            Regex("""\\b(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}[ T]+\\d{1,2}:\\d{2}(?::\\d{2})?(?:\\s*[AP]M)?)\\b"""),
+            Regex("""\\b(\\d{1,2}[-/]\\d{1,2}[-/]\\d{4}[ T]+\\d{1,2}:\\d{2}(?::\\d{2})?(?:\\s*[AP]M)?)\\b"""),
+            Regex("""(?i)\\b([A-Z]{3}\\s+\\d{1,2},\\s+\\d{4}\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\s*[AP]M)\\b""")
+        )
+        for (pattern in patterns) {
+            val m = pattern.find(text) ?: continue
+            parseLocalTimestamp(m.groupValues[1].trim(), sourceTimezone)?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseLocalTimestamp(raw: String, sourceTimezone: String): Long? {
+        val formats = listOf(
+            "uuuu-MM-dd HH:mm:ss", "uuuu-MM-dd HH:mm", "uuuu/MM/dd HH:mm:ss", "uuuu/MM/dd HH:mm",
+            "MM/dd/uuuu HH:mm:ss", "MM/dd/uuuu HH:mm", "MM-dd-uuuu HH:mm:ss", "MM-dd-uuuu HH:mm",
+            "MM/dd/uuuu h:mm a", "MM-dd-uuuu h:mm a", "MMM d, uuuu h:mm a",
+            "MMM d, uuuu HH:mm:ss", "MMM d, uuuu HH:mm"
+        )
+        for (pattern in formats) {
+            try {
+                val local = LocalDateTime.parse(raw.replace(Regex("\\s+"), " "), DateTimeFormatter.ofPattern(pattern, Locale.US))
+                return local.atZone(ZoneId.of(sourceTimezone)).toInstant().toEpochMilli()
+            } catch (_: DateTimeParseException) { }
+        }
+        return null
     }
 
     fun mapGcLevelToXau(gcLevel: Double, gcPrice: Double, xauSpotPrice: Double): Double =
@@ -488,4 +547,4 @@ class Strategy006Engine {
     }
 }
 
-// S006 GC→XAUUSD timestamped basis mapping integrated; M5 rejection path retained.
+// S006 GC→XAUUSD basis mapping + first-file GC timestamp extraction integrated; M5 rejection path retained.
