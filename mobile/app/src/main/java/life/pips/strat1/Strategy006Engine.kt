@@ -53,9 +53,9 @@ class Strategy006Engine {
     private data class FiveMinuteBar(val start: Long, val open: Double, val high: Double, val low: Double, val close: Double)
     private data class M5Rejection(val side: TradeSide, val zone: Double, val label: String)
     private var liveBar: FiveMinuteBar? = null
-    private var lastConfirmedBarStart: Long = Long.MIN_VALUE
+    private var lastConfirmedBarStart: Long = Long.MIN_VALUE\n    private var lastReactionZoneName: String? = null\n    private var lastReactionZone: Double? = null
 
-    fun currentMap(): Map? = current
+    fun currentMap(): Map? = current\n\n    fun zoneStatus(price: Double): ZoneStatus {\n        val z = current?.zones ?: return ZoneStatus(null, null, null, lastReactionZoneName, lastReactionZone, null, null)\n        val lower = listOfNotNull(\n            z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },\n            z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },\n            z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it },\n            z.putWall?.let { "Put Wall" to it }\n        ).filter { it.second < price }.minByOrNull { price - it.second }\n        val upper = listOfNotNull(\n            z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },\n            z.reclaimGate?.let { "Reclaim Gate" to it },\n            z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },\n            z.callWall?.let { "Call Wall" to it }\n        ).filter { it.second > price }.minByOrNull { it.second - price }\n        val likely = listOfNotNull(\n            lower?.let { Triple(it.first, it.second, TradeSide.BUY) },\n            upper?.let { Triple(it.first, it.second, TradeSide.SELL) }\n        ).minByOrNull { abs(it.second - price) }\n        val exit = when (likely?.third) {\n            TradeSide.BUY -> upper\n            TradeSide.SELL -> lower\n            else -> null\n        }\n        return ZoneStatus(likely?.first, likely?.second, likely?.third, lastReactionZoneName, lastReactionZone, exit?.first, exit?.second)\n    }
 
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
         val rows = (parseText(barchartText) + parseText(greeksText))
