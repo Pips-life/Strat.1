@@ -115,9 +115,11 @@ fun HomeDashboard(
                     Text(strategyLabel(strategy), color = if (running) Green else Text, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     Text(" • XAUUSD • ${if (armed) "LIVE ARMED" else if (running) "RUNNING" else "STOPPED"}", color = Muted, fontSize = 8.sp)
                     Spacer(Modifier.weight(1f))
-                    Text(if (flash != null) "FlashAlpha LIVE" else "FlashAlpha WAITING", color = if (flash != null) Green else Muted, fontSize = 8.sp)
+                    if (strategy == TradingEngine.StrategyId.STRATEGY_001) {
+                        Text(if (flash != null) "FlashAlpha LIVE" else "FlashAlpha WAITING", color = if (flash != null) Green else Muted, fontSize = 8.sp)
+                    }
                 }
-                Text("Direct MetaApi / MT5 • FlashAlpha GC=F • $status", color = Muted, fontSize = 8.sp)
+                Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "Direct MetaApi / MT5 • FlashAlpha GC=F • $status" else "Direct MetaApi / MT5 • $status", color = Muted, fontSize = 8.sp)
             }
         }
     }
