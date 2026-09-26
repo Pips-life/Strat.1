@@ -16,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.ImageBitmap
@@ -33,7 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val Bg = Color.Transparent
-private val Panel = Color(0xFF0C1422)
+private val Panel = Color(0xFF0C1422).copy(alpha = .80f)
 private val TextMain = Color(0xFFF4F7FB)
 private val Muted = Color(0xFF8EA2BB)
 private val Cyan = Color(0xFF27D8FF)
@@ -63,7 +64,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     }
     MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Panel, primary = Cyan, secondary = Green, error = Red)) {
         Box(Modifier.fillMaxSize()) {
-            Image(bitmap = ImageBitmap.imageResource(id = R.drawable.pipslife_ocean_background), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = androidx.compose.ui.graphics.FilterQuality.High, colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(floatArrayOf(1.08f, 0f, 0f, 0f, -6f, 0f, 1.08f, 0f, 0f, -6f, 0f, 0f, 1.08f, 0f, -6f, 0f, 0f, 0f, 1f, 0f))))
+            Image(bitmap = ImageBitmap.imageResource(id = R.drawable.pipslife_ocean_background), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = androidx.compose.ui.graphics.FilterQuality.High)
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .08f), Color.Black.copy(alpha = .02f), Color.Black.copy(alpha = .16f)))))
             Scaffold(containerColor = Color.Transparent, bottomBar = { NavigationBar(containerColor = Color(0xFF08111D), tonalElevation = 0.dp, windowInsets = WindowInsets(0)) { listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH", Tab.UPDATE to "UPDATE").forEach { (t, label) -> NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 7.sp) }) } } }) { pad ->
                 when (tab) {
                     Tab.HOME -> HomeDashboard(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, status, engine, selectedSymbol, onStartStop = { running = it; if (!it) armed = false })
