@@ -1,6 +1,9 @@
 package life.pips.strat1
 
 import life.pips.strat1.data.TradeSide
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -52,6 +55,51 @@ class Strategy006Engine {
         val possibleExitName: String?, val possibleExit: Double?
     )
 
+    /** GC -> XAUUSD coordinate conversion using a same-instant basis. */
+    data class PriceTick(val price: Double, val timestampMillis: Long, val sourceTimezone: String = "UTC")
+    data class BasisMapping(
+        val gcPrice: Double, val xauPrice: Double, val basis: Double,
+        val gcTimestampUtc: Long, val xauTimestampUtc: Long,
+        val matchDeltaMillis: Long, val sourceTimezone: String,
+        val valid: Boolean, val warning: String? = null
+    ) {
+        fun mapGcLevelToXau(gcLevel: Double): Double = gcLevel - basis
+    }
+
+    private fun utcMillis(timestampMillis: Long, sourceTimezone: String): Long {
+        require(timestampMillis > 0L) { "Timestamp must be positive." }
+        ZonedDateTime.ofInstant(Instant.ofEpochMilli(timestampMillis), ZoneId.of(sourceTimezone))
+        return timestampMillis
+    }
+
+    private fun buildBasisMapping(gc: PriceTick, xau: PriceTick, toleranceMillis: Long): BasisMapping {
+        require(gc.price > 0.0 && xau.price > 0.0) { "GC and XAUUSD prices must be positive." }
+        require(toleranceMillis >= 0L) { "Timestamp tolerance cannot be negative." }
+        val gcUtc = utcMillis(gc.timestampMillis, gc.sourceTimezone)
+        val xauUtc = utcMillis(xau.timestampMillis, xau.sourceTimezone)
+        val delta = abs(gcUtc - xauUtc)
+        if (delta > toleranceMillis) {
+            return BasisMapping(gc.price, xau.price, 0.0, gcUtc, xauUtc, delta, gc.sourceTimezone, false,
+                "No same-instant XAUUSD match within " + toleranceMillis + "ms (delta=" + delta + "ms).")
+        }
+        return BasisMapping(gc.price, xau.price, gc.price - xau.price, gcUtc, xauUtc, delta, gc.sourceTimezone, true)
+    }
+
+    private fun mapZonesToXau(z: Zones, basis: Double): Zones =
+        Zones(
+            z.upperInventoryCeiling?.let { it - basis },
+            z.reclaimGate?.let { it - basis },
+            z.immediateHedgeWall?.let { it - basis },
+            z.primaryHedgeFloor?.let { it - basis },
+            z.callWall?.let { it - basis },
+            z.putWall?.let { it - basis },
+            z.gammaFlip?.let { it - basis },
+            z.positiveGexRegion?.let { (a, b) -> Pair(a - basis, b - basis) },
+            z.negativeGexRegion?.let { (a, b) -> Pair(a - basis, b - basis) },
+            z.dealerAbsorptionShelf?.let { it - basis },
+            z.liquidityExhaustionFloor?.let { it - basis }
+        )
+
     private var current: Map? = null
     private var lastPrice = Double.NaN
     private var lastState = MarketState.NO_TRADE
@@ -92,20 +140,77 @@ class Strategy006Engine {
     }
 
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
+        // Backward-compatible entry point. New callers should use the timestamped overload.
+        val now = System.currentTimeMillis()
+        return loadFiles(barchartText, greeksText, spot, now, spot, now, "UTC", "UTC", 0L)
+    }
+
+    /**
+     * Canonical S006 loader: calculate GEX/QOF on GC, then translate every
+     * price-coordinate zone to XAUUSD using the same-instant cross-market basis.
+     */
+    fun loadFiles(
+        barchartText: String,
+        greeksText: String,
+        gcPrice: Double?,
+        gcTimestampMillis: Long,
+        xauSpotPrice: Double?,
+        xauTimestampMillis: Long,
+        gcSourceTimezone: String = "UTC",
+        xauSourceTimezone: String = "Africa/Nairobi",
+        toleranceMillis: Long = 1_000L
+    ): Map {
         val rows = (parseText(barchartText) + parseText(greeksText))
             .filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
             .groupBy { Triple(it.strike, it.type, it.gamma) }
             .values.mapNotNull { it.maxByOrNull { row -> row.oi + row.volume } }
             .sortedBy { it.strike }
-        val map = calculate(rows, spot)
-        current = map
+
+        if (gcPrice == null || gcPrice <= 0.0 || xauSpotPrice == null || xauSpotPrice <= 0.0) {
+            val invalid = calculate(rows, null)
+            current = invalid.copy(spot = xauSpotPrice,
+                warnings = invalid.warnings + "GC/XAUUSD timestamped prices are required for S006 level mapping.")
+            return current!!
+        }
+
+        val mapping = buildBasisMapping(
+            PriceTick(gcPrice, gcTimestampMillis, gcSourceTimezone),
+            PriceTick(xauSpotPrice, xauTimestampMillis, xauSourceTimezone),
+            toleranceMillis
+        )
+        if (!mapping.valid) {
+            val invalid = calculate(rows, null)
+            current = invalid.copy(spot = xauSpotPrice,
+                warnings = invalid.warnings + mapping.warning.orEmpty())
+            return current!!
+        }
+
+        // Keep options math on native GC. Only resulting price-coordinate zones
+        // are translated, so all downstream S006 logic consumes XAUUSD levels.
+        val gcMap = calculate(rows, gcPrice)
+        val mapped = gcMap.copy(
+            spot = xauSpotPrice,
+            zones = mapZonesToXau(gcMap.zones, mapping.basis),
+            warnings = gcMap.warnings +
+                "GC→XAUUSD basis=" + mapping.basis +
+                "; GC UTC=" + Instant.ofEpochMilli(mapping.gcTimestampUtc) +
+                "; XAUUSD UTC=" + Instant.ofEpochMilli(mapping.xauTimestampUtc) +
+                "; matchDeltaMs=" + mapping.matchDeltaMillis +
+                "; sourceTimezone=" + mapping.sourceTimezone
+        )
+        current = mapped
         lastPrice = Double.NaN
         lastState = MarketState.NO_TRADE
         priceHistory.clear()
         liveBar = null
         lastConfirmedBarStart = Long.MIN_VALUE
-        return map
+        lastReactionZoneName = null
+        lastReactionZone = null
+        return mapped
     }
+
+    fun mapGcLevelToXau(gcLevel: Double, gcPrice: Double, xauSpotPrice: Double): Double =
+        gcLevel - (gcPrice - xauSpotPrice)
 
     fun clear() {
         current = null
@@ -383,4 +488,4 @@ class Strategy006Engine {
     }
 }
 
-// v2.80 CI rebuild marker: compile-tested Strategy 006 M5 rejection path.
+// S006 GC→XAUUSD timestamped basis mapping integrated; M5 rejection path retained.
