@@ -218,12 +218,13 @@ class Strategy006Engine {
         val mapped = gcMap.copy(
             spot = xauSpotPrice,
             zones = mapZonesToXau(gcMap.zones, mapping.basis),
-            warnings = gcMap.warnings +
+            warnings = gcMap.warnings + listOf(
                 "GC→XAUUSD basis=" + mapping.basis +
-                "; GC UTC=" + Instant.ofEpochMilli(mapping.gcTimestampUtc) +
-                "; XAUUSD UTC=" + Instant.ofEpochMilli(mapping.xauTimestampUtc) +
-                "; matchDeltaMs=" + mapping.matchDeltaMillis +
-                "; sourceTimezone=" + mapping.sourceTimezone
+                    "; GC UTC=" + Instant.ofEpochMilli(mapping.gcTimestampUtc) +
+                    "; XAUUSD UTC=" + Instant.ofEpochMilli(mapping.xauTimestampUtc) +
+                    "; matchDeltaMs=" + mapping.matchDeltaMillis +
+                    "; sourceTimezone=" + mapping.sourceTimezone
+            )
         )
         current = mapped
         lastPrice = Double.NaN
