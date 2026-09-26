@@ -46,6 +46,12 @@ class Strategy006Engine {
         val state: String, val reason: String
     )
 
+    data class ZoneStatus(
+        val likelyZoneName: String?, val likelyZone: Double?, val likelySide: TradeSide?,
+        val reactedZoneName: String?, val reactedZone: Double?,
+        val possibleExitName: String?, val possibleExit: Double?
+    )
+
     private var current: Map? = null
     private var lastPrice = Double.NaN
     private var lastState = MarketState.NO_TRADE
@@ -53,9 +59,37 @@ class Strategy006Engine {
     private data class FiveMinuteBar(val start: Long, val open: Double, val high: Double, val low: Double, val close: Double)
     private data class M5Rejection(val side: TradeSide, val zone: Double, val label: String)
     private var liveBar: FiveMinuteBar? = null
-    private var lastConfirmedBarStart: Long = Long.MIN_VALUE\n    private var lastReactionZoneName: String? = null\n    private var lastReactionZone: Double? = null
+    private var lastConfirmedBarStart: Long = Long.MIN_VALUE
+    private var lastReactionZoneName: String? = null
+    private var lastReactionZone: Double? = null
 
-    fun currentMap(): Map? = current\n\n    fun zoneStatus(price: Double): ZoneStatus {\n        val z = current?.zones ?: return ZoneStatus(null, null, null, lastReactionZoneName, lastReactionZone, null, null)\n        val lower = listOfNotNull(\n            z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },\n            z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },\n            z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it },\n            z.putWall?.let { "Put Wall" to it }\n        ).filter { it.second < price }.minByOrNull { price - it.second }\n        val upper = listOfNotNull(\n            z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },\n            z.reclaimGate?.let { "Reclaim Gate" to it },\n            z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },\n            z.callWall?.let { "Call Wall" to it }\n        ).filter { it.second > price }.minByOrNull { it.second - price }\n        val likely = listOfNotNull(\n            lower?.let { Triple(it.first, it.second, TradeSide.BUY) },\n            upper?.let { Triple(it.first, it.second, TradeSide.SELL) }\n        ).minByOrNull { abs(it.second - price) }\n        val exit = when (likely?.third) {\n            TradeSide.BUY -> upper\n            TradeSide.SELL -> lower\n            else -> null\n        }\n        return ZoneStatus(likely?.first, likely?.second, likely?.third, lastReactionZoneName, lastReactionZone, exit?.first, exit?.second)\n    }
+    fun currentMap(): Map? = current
+
+    fun zoneStatus(price: Double): ZoneStatus {
+        val z = current?.zones ?: return ZoneStatus(null, null, null, lastReactionZoneName, lastReactionZone, null, null)
+        val lower = listOfNotNull(
+            z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },
+            z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },
+            z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it },
+            z.putWall?.let { "Put Wall" to it }
+        ).filter { it.second < price }.minByOrNull { price - it.second }
+        val upper = listOfNotNull(
+            z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },
+            z.reclaimGate?.let { "Reclaim Gate" to it },
+            z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },
+            z.callWall?.let { "Call Wall" to it }
+        ).filter { it.second > price }.minByOrNull { it.second - price }
+        val likely = listOfNotNull(
+            lower?.let { Triple(it.first, it.second, TradeSide.BUY) },
+            upper?.let { Triple(it.first, it.second, TradeSide.SELL) }
+        ).minByOrNull { abs(it.second - price) }
+        val exit = when (likely?.third) {
+            TradeSide.BUY -> upper
+            TradeSide.SELL -> lower
+            else -> null
+        }
+        return ZoneStatus(likely?.first, likely?.second, likely?.third, lastReactionZoneName, lastReactionZone, exit?.first, exit?.second)
+    }
 
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
         val rows = (parseText(barchartText) + parseText(greeksText))
@@ -99,6 +133,8 @@ class Strategy006Engine {
 
         if (m5Rejection != null && closedBar != null && closedBar.start != lastConfirmedBarStart) {
             lastConfirmedBarStart = closedBar.start
+            lastReactionZoneName = m5Rejection.label
+            lastReactionZone = m5Rejection.zone
             when (m5Rejection.side) {
                 TradeSide.BUY -> {
                     val target = firstAbove(buy, z.immediateHedgeWall, z.reclaimGate, z.upperInventoryCeiling)
