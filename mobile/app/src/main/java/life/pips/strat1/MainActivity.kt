@@ -46,13 +46,13 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
 @Composable private fun PipsLifeApp() {
     val context = androidx.compose.ui.platform.LocalContext.current; val scope = rememberCoroutineScope(); val meta = remember { DirectMetaApiClient() }; val flash = remember { FlashAlphaClient() }; val engine = remember { TradingEngine(meta) }
-    var tab by remember { mutableStateOf(Tab.HOME) }; var saved by remember { mutableStateOf(SavedConnection("", "", "", "", "", "", "XAUUSD,NAS100,EURUSD,GBPUSD,US30")) }; var account by remember { mutableStateOf<MetaAccount?>(null) }; var snapshot by remember { mutableStateOf<MetaSnapshot?>(null) }; var flashData by remember { mutableStateOf<FlashAlphaSnapshot?>(null) }; var selectedStrategy by remember { mutableStateOf(TradingEngine.StrategyId.STRATEGY_001) }; var selectedSymbol by remember { mutableStateOf("XAUUSD") }; var flashSymbol by remember { mutableStateOf("GC=F") }; var running by remember { mutableStateOf(false) }; var armed by remember { mutableStateOf(false) }; var status by remember { mutableStateOf("Ready — direct MetaApi + FlashAlpha") }; var busy by remember { mutableStateOf(false) }; var lastFlashPull by remember { mutableLongStateOf(0L) }
+    var tab by remember { mutableStateOf(Tab.HOME) }; var saved by remember { mutableStateOf(SavedConnection("", "", "", "", "", "", "XAUUSD,NAS100,EURUSD,GBPUSD,US30")) }; var account by remember { mutableStateOf<MetaAccount?>(null) }; var snapshot by remember { mutableStateOf<MetaSnapshot?>(null) }; val s006PriceHistory = remember { mutableStateListOf<Pair<Long, Double>>() }; var flashData by remember { mutableStateOf<FlashAlphaSnapshot?>(null) }; var selectedStrategy by remember { mutableStateOf(TradingEngine.StrategyId.STRATEGY_001) }; var selectedSymbol by remember { mutableStateOf("XAUUSD") }; var flashSymbol by remember { mutableStateOf("GC=F") }; var running by remember { mutableStateOf(false) }; var armed by remember { mutableStateOf(false) }; var status by remember { mutableStateOf("Ready — direct MetaApi + FlashAlpha") }; var busy by remember { mutableStateOf(false) }; var lastFlashPull by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) { saved = context.loadSavedConnection(); selectedSymbol = saved.watchlist.split(',').firstOrNull()?.trim().orEmpty().ifBlank { "XAUUSD" }; if (saved.accountId.isNotBlank() && saved.metaApiToken.isNotBlank()) meta.connectExisting(saved.metaApiToken, saved.accountId).onSuccess { account = it }.onFailure { status = it.message ?: "MetaApi connection failed" } }
     LaunchedEffect(account, running, armed, selectedSymbol, flashSymbol, saved.flashAlphaKey, selectedStrategy) {
         val a = account ?: return@LaunchedEffect
         while (true) {
             val now = System.currentTimeMillis(); val symbols = saved.watchlist.split(',').map { it.trim() }.filter { it.isNotBlank() }
-            meta.refresh(saved.metaApiToken, a, symbols).onSuccess { s -> snapshot = s; if (!running) status = "MetaApi ${s.account.connectionStatus} • live quote monitor" }.onFailure { if (!running) status = it.message ?: "MetaApi refresh failed" }
+            meta.refresh(saved.metaApiToken, a, symbols).onSuccess { s -> snapshot = s; if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_006) { val q = s.prices[selectedSymbol]; if (q != null) { val p = (q.bid + q.ask) / 2.0; if (p.isFinite() && p > 0.0) { s006PriceHistory.add(System.currentTimeMillis() to p); while (s006PriceHistory.size > 240) s006PriceHistory.removeAt(0) } } }; if (!running) status = "MetaApi ${s.account.connectionStatus} • live quote monitor" }.onFailure { if (!running) status = it.message ?: "MetaApi refresh failed" }
             if (saved.flashAlphaKey.isNotBlank() && (flashData == null || now - lastFlashPull >= 2 * 60 * 60 * 1000L)) { lastFlashPull = now; flash.snapshot(saved.flashAlphaKey, flashSymbol).onSuccess { flashData = it; status = "FlashAlpha GC=F snapshot received" }.onFailure { if (running && selectedStrategy == TradingEngine.StrategyId.STRATEGY_001) status = it.message ?: "FlashAlpha unavailable" } }
             if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_003) engine.strategy003.refresh(a, saved.metaApiToken, selectedSymbol).onFailure { if (!running) status = it.message ?: "SMC candle data unavailable" }
             if (selectedStrategy == TradingEngine.StrategyId.STRATEGY_004) engine.strategy004.refresh(a, saved.metaApiToken, selectedSymbol)
@@ -68,7 +68,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                 when (tab) {
                     Tab.HOME -> HomeDashboard(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, status, engine, selectedSymbol, onStartStop = { running = it; if (!it) armed = false })
                     Tab.METAAPI -> MetaApiTab(Modifier.padding(pad), saved, account, busy, status, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onConnect = { value -> busy = true; scope.launch { val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId) else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server); result.onSuccess { a2 -> account = a2; saved = value.copy(accountId = a2.id); context.saveConnection(saved); status = "CONNECTED — ${a2.login} / ${a2.server}" }.onFailure { status = it.message ?: "Connection failed" }; busy = false } })
-                    Tab.STRATEGY -> StrategyTab(Modifier.padding(pad), saved, account, snapshot, flashData, selectedSymbol, flashSymbol, selectedStrategy, running, armed, status, engine.strategy003.latest(), engine.strategy004.latest(), engine.strategy005.latest(), engine.strategy006, onSelect = { selectedStrategy = it; running = false; armed = false }, onFlashSymbol = { flashSymbol = it }, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onRun = { running = it; if (!it) armed = false }, onArm = { armed = it })
+                    Tab.STRATEGY -> StrategyTab(Modifier.padding(pad), saved, account, snapshot, flashData, selectedSymbol, flashSymbol, selectedStrategy, running, armed, status, engine.strategy003.latest(), engine.strategy004.latest(), engine.strategy005.latest(), engine.strategy006, s006PriceHistory, onSelect = { selectedStrategy = it; running = false; armed = false }, onFlashSymbol = { flashSymbol = it }, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onRun = { running = it; if (!it) armed = false }, onArm = { armed = it })
                     Tab.WATCHLIST -> WatchlistTab(Modifier.padding(pad), saved, snapshot, selectedSymbol) { value -> selectedSymbol = value.split(',').firstOrNull()?.trim().orEmpty().ifBlank { selectedSymbol }; saved = saved.copy(watchlist = value); scope.launch { context.saveConnection(saved) } }
                     Tab.UPDATE -> LazyColumn(Modifier.padding(pad).fillMaxSize().padding(horizontal = 12.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { item { Header("App Update", "Release updater — download only when a newer signed release exists") }; item { AppUpdateCard() }; item { CardBlock { Text("CURRENT RELEASE", color = Muted, fontSize = 9.sp); Text("v${BuildConfig.VERSION_NAME} • build ${BuildConfig.VERSION_CODE}", color = TextMain, fontWeight = FontWeight.Bold); Text("Updates install over the existing Pips-life app when the package is signed with the same release key.", color = Muted, fontSize = 9.sp) } } }
                 }
@@ -84,7 +84,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) { item { Header("MetaApi Connection", "Direct account provisioning + direct trade API") }; item { Field("MetaApi auth token", token, { token = it }, true) }; item { Field("Existing MetaApi account ID (optional)", accountId, { accountId = it }) }; item { Field("MT5 login", login, { login = it }) }; item { Field("MT5 password", password, { password = it }, true) }; item { Field("MT5 server", server, { server = it }) }; item { Text("Credentials are encrypted locally with Android Keystore. No Pips-life trading backend is used.", color = Muted, fontSize = 9.sp) }; item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { Button(onClick = { onSave(SavedConnection(token, accountId, login, password, server, saved.flashAlphaKey, saved.watchlist)) }, modifier = Modifier.weight(1f)) { Text("SAVE") }; Button(enabled = !busy && token.isNotBlank(), onClick = { onConnect(SavedConnection(token, accountId, login, password, server, saved.flashAlphaKey, saved.watchlist)) }, modifier = Modifier.weight(1f)) { Text(if (busy) "CONNECTING…" else "CONNECT") } } }; item { CardBlock { Text(status, color = if (account != null) Green else Muted); account?.let { Text("${it.login} • ${it.server} • ${it.region}", color = TextMain, fontWeight = FontWeight.Bold) } } } }
 }
 
-@Composable private fun StrategyTab(modifier: Modifier, saved: SavedConnection, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, tradeSymbol: String, flashSymbol: String, selected: TradingEngine.StrategyId, running: Boolean, armed: Boolean, status: String, smcPlan: Strategy003Engine.Plan, priceActionPlan: Strategy004Engine.Plan, woodiePlan: Strategy005Engine.Plan, optionsFlow: Strategy006Engine, onSelect: (TradingEngine.StrategyId) -> Unit, onFlashSymbol: (String) -> Unit, onSave: (SavedConnection) -> Unit, onRun: (Boolean) -> Unit, onArm: (Boolean) -> Unit) {
+@Composable private fun StrategyTab(modifier: Modifier, saved: SavedConnection, account: MetaAccount?, snapshot: MetaSnapshot?, flash: FlashAlphaSnapshot?, tradeSymbol: String, flashSymbol: String, selected: TradingEngine.StrategyId, running: Boolean, armed: Boolean, status: String, smcPlan: Strategy003Engine.Plan, priceActionPlan: Strategy004Engine.Plan, woodiePlan: Strategy005Engine.Plan, optionsFlow: Strategy006Engine, s006PriceHistory: List<Pair<Long, Double>>, onSelect: (TradingEngine.StrategyId) -> Unit, onFlashSymbol: (String) -> Unit, onSave: (SavedConnection) -> Unit, onRun: (Boolean) -> Unit, onArm: (Boolean) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var localStatus by remember(status) { mutableStateOf(status) }
@@ -155,7 +155,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("MAP: " + if (m == null) "WAITING FOR BOTH FILES" else "CALCULATED • QOF " + String.format("%.1f", m.qof) + " • " + m.bias, color = if (m?.valid == true) Green else Muted, fontSize = 10.sp)
                         Text("LIVE PRICE POSITION MAP", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         if (m?.valid == true && livePrice != null) {
-                            S006ZoneMap(m.zones, livePrice, zoneStatus)
+                            S006ZoneMap(m.zones, livePrice, zoneStatus, s006PriceHistory)
                             CardBlock {
                                 Text("BOT REACTION MONITOR", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 Text("LIKELY REACTION: " + (zoneStatus?.likelyZoneName ?: "—") + " @ " + (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") + " • " + (zoneStatus?.likelySide?.name ?: "WAIT"), color = if (zoneStatus?.likelySide == life.pips.strat1.data.TradeSide.BUY) Green else if (zoneStatus?.likelySide == life.pips.strat1.data.TradeSide.SELL) Red else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -186,7 +186,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 }
 
 @Composable
-private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strategy006Engine.ZoneStatus?) {
+private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strategy006Engine.ZoneStatus?, history: List<Pair<Long, Double>>) {
     val levels = listOfNotNull(
         z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },
         z.reclaimGate?.let { "Reclaim Gate" to it },
@@ -198,34 +198,51 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
         z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },
         z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it }
     )
+    val recent = history.takeLast(180).filter { it.second.isFinite() && it.second > 0.0 }
     val regionLevels = listOfNotNull(z.positiveGexRegion, z.negativeGexRegion).flatMap { listOf(it.first, it.second) }
-    val minP = (levels.map { it.second } + regionLevels + spot).minOrNull() ?: spot
-    val maxP = (levels.map { it.second } + regionLevels + spot).maxOrNull() ?: spot
+    val chartPrices = recent.map { it.second } + levels.map { it.second } + regionLevels + spot
+    val minP = chartPrices.minOrNull() ?: spot
+    val maxP = chartPrices.maxOrNull() ?: spot
     val span = (maxP - minP).coerceAtLeast(1.0)
     CardBlock {
-        Text("ZONE POSITION • LIVE PRICE " + String.format("%.2f", spot), color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        Box(Modifier.fillMaxWidth().height(360.dp)) {
+        Text("S006 LIVE XAUUSD • ZONES + PRICE", color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxWidth().height(380.dp)) {
             Canvas(Modifier.fillMaxSize()) {
-                fun y(price: Double): Float = ((maxP - price) / span * (size.height - 20f) + 10f).toFloat()
-                z.positiveGexRegion?.let { val top = y(it.second); val bottom = y(it.first); drawRect(Cyan.copy(alpha = 0.08f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
-                z.negativeGexRegion?.let { val top = y(it.second); val bottom = y(it.first); drawRect(Red.copy(alpha = 0.08f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
-                val paint = android.graphics.Paint().apply { isAntiAlias = true; textSize = 24f }
-                drawLine(Muted, Offset(0f, y(spot)), Offset(size.width, y(spot)), 3f)
-                paint.color = android.graphics.Color.WHITE
-                drawContext.canvas.nativeCanvas.drawText("LIVE " + String.format("%.2f", spot), 8f, y(spot) - 6f, paint)
+                val topPad = 18f
+                val bottomPad = 24f
+                val plotHeight = (size.height - topPad - bottomPad).coerceAtLeast(1f)
+                fun y(price: Double): Float = topPad + ((maxP - price) / span).toFloat() * plotHeight
+                z.positiveGexRegion?.let { val top = y(maxOf(it.first, it.second)); val bottom = y(minOf(it.first, it.second)); drawRect(Cyan.copy(alpha = 0.07f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
+                z.negativeGexRegion?.let { val top = y(maxOf(it.first, it.second)); val bottom = y(minOf(it.first, it.second)); drawRect(Red.copy(alpha = 0.07f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
+                val paint = android.graphics.Paint().apply { isAntiAlias = true }
                 levels.distinctBy { it.second }.forEach { (name, price) ->
                     val yy = y(price)
                     val highlighted = name == status?.likelyZoneName
                     val reacted = name == status?.reactedZoneName
                     val lineColor = when { highlighted -> Cyan; reacted -> Green; name.contains("Wall") || name.contains("Ceiling") -> Red; else -> Muted }
-                    drawLine(lineColor, Offset(0f, yy), Offset(size.width, yy), if (highlighted || reacted) 4f else 2f)
+                    drawLine(lineColor, Offset(0f, yy), Offset(size.width, yy), if (highlighted || reacted) 3.5f else 1.5f)
                     paint.color = lineColor.toArgb()
-                    paint.textSize = if (highlighted || reacted) 26f else 21f
-                    drawContext.canvas.nativeCanvas.drawText(name + "  " + String.format("%.2f", price), 8f, yy - 5f, paint)
+                    paint.textSize = if (highlighted || reacted) 22f else 18f
+                    drawContext.canvas.nativeCanvas.drawText(name + "  " + String.format("%.2f", price), 8f, (yy - 5f).coerceAtLeast(16f), paint)
                 }
+                if (recent.size >= 2) {
+                    val minT = recent.first().first.toDouble()
+                    val maxT = recent.last().first.toDouble().coerceAtLeast(minT + 1.0)
+                    val path = androidx.compose.ui.graphics.Path()
+                    recent.forEachIndexed { index, point -> val x = ((point.first - minT) / (maxT - minT)).toFloat() * size.width; val yy = y(point.second); if (index == 0) path.moveTo(x, yy) else path.lineTo(x, yy) }
+                    drawPath(path, color = Cyan, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+                }
+                val liveY = y(spot)
+                drawLine(Green, Offset(0f, liveY), Offset(size.width, liveY), 3f)
+                paint.color = android.graphics.Color.WHITE
+                paint.textSize = 23f
+                drawContext.canvas.nativeCanvas.drawText("LIVE " + String.format("%.2f", spot), 8f, (liveY - 7f).coerceAtLeast(16f), paint)
+                paint.color = Muted.toArgb()
+                paint.textSize = 16f
+                drawContext.canvas.nativeCanvas.drawText("1s ticks • last " + recent.size + " points", 8f, size.height - 5f, paint)
             }
         }
-        Text("Cyan = next likely reaction • Green = last confirmed reaction • shaded bands = GEX regions", color = Muted, fontSize = 8.sp)
+        Text("Live line = MetaApi XAUUSD mid-price • Cyan = next reaction • Green = confirmed reaction • shaded bands = GEX regions", color = Muted, fontSize = 8.sp)
     }
 }
 
