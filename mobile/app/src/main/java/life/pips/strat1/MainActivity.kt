@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
@@ -145,20 +148,28 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             optionsFlow.loadFiles(barchartText, greeksText, snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 })
                         }, modifier = Modifier.fillMaxWidth()) { Text("BUILD OPTIONS FLOW MAP") }
                         val m = optionsFlow.currentMap()
+                        val livePrice = snapshot?.prices?.get(tradeSymbol)?.let { (it.bid + it.ask) / 2.0 }
+                        val zoneStatus = livePrice?.let { optionsFlow.zoneStatus(it) }
                         Text("MAP: " + if (m == null) "WAITING FOR BOTH FILES" else "CALCULATED • QOF " + String.format("%.1f", m.qof) + " • " + m.bias, color = if (m?.valid == true) Green else Muted, fontSize = 10.sp)
-                        Text("PRICE MAP — calculated from loaded options OI + gamma", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("LIVE PRICE POSITION MAP", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        if (m?.valid == true && livePrice != null) {
+                            S006ZoneMap(m.zones, livePrice, zoneStatus)
+                            CardBlock {
+                                Text("BOT REACTION MONITOR", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("LIKELY REACTION: " + (zoneStatus?.likelyZoneName ?: "—") + " @ " + (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") + " • " + (zoneStatus?.likelySide?.name ?: "WAIT"), color = if (zoneStatus?.likelySide == life.pips.strat1.data.TradeSide.BUY) Green else if (zoneStatus?.likelySide == life.pips.strat1.data.TradeSide.SELL) Red else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text("REACTED FROM: " + (zoneStatus?.reactedZoneName ?: "No confirmed reaction yet") + (zoneStatus?.reactedZone?.let { " @ " + String.format("%.2f", it) } ?: ""), color = TextMain, fontSize = 9.sp)
+                                Text("POSSIBLE EXIT: " + (zoneStatus?.possibleExitName ?: "—") + (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""), color = TextMain, fontSize = 9.sp)
+                            }
+                        } else {
+                            Text("Load both files and build the map, then connect live MT5 price to see zone position and reaction state.", color = Muted, fontSize = 9.sp)
+                        }
+                        Text("ALL CALCULATED ZONES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         m?.zones?.let { z ->
-                            Text("1  Upper Inventory Ceiling: " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("2  Reclaim Gate: " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("3  Immediate Hedge Wall: " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("4  Primary Hedge Floor: " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("5  Call Wall: " + (z.callWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("6  Put Wall: " + (z.putWall?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("7  Gamma Flip: " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("8  Positive GEX Region: " + (z.positiveGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("9  Negative GEX Region: " + (z.negativeGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("10 Dealer Absorption Shelf: " + (z.dealerAbsorptionShelf?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
-                            Text("11 Liquidity Exhaustion Floor: " + (z.liquidityExhaustionFloor?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
+                            Text("Upper Inventory Ceiling " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—") + " • Reclaim Gate " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("Immediate Hedge Wall " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—") + " • Primary Hedge Floor " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("Call Wall " + (z.callWall?.let { String.format("%.2f", it) } ?: "—") + " • Put Wall " + (z.putWall?.let { String.format("%.2f", it) } ?: "—") + " • Gamma Flip " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("Positive GEX " + (z.positiveGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—") + " • Negative GEX " + (z.negativeGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("Dealer Absorption Shelf " + (z.dealerAbsorptionShelf?.let { String.format("%.2f", it) } ?: "—") + " • Liquidity Exhaustion Floor " + (z.liquidityExhaustionFloor?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
                         }
                         Text("FILES: cached locally for this Nairobi trading day — leaving the Strategy screen does not clear them. A new day requires new input.", color = TextMain, fontSize = 9.sp)
                         Text("M5 confirmation: completed candle must trade into a mapped zone and close back across it. Batch risk: 10% combined • Exit: nearest opposing zone.", color = TextMain, fontSize = 9.sp)
@@ -169,6 +180,50 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             }
         }
         item { CardBlock { Text("STATUS", color = Muted, fontSize = 9.sp); Text(localStatus, color = TextMain, fontSize = 10.sp) } }
+    }
+}
+
+@Composable
+private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strategy006Engine.ZoneStatus?) {
+    val levels = listOfNotNull(
+        z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },
+        z.reclaimGate?.let { "Reclaim Gate" to it },
+        z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },
+        z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },
+        z.callWall?.let { "Call Wall" to it },
+        z.putWall?.let { "Put Wall" to it },
+        z.gammaFlip?.let { "Gamma Flip" to it },
+        z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },
+        z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it }
+    )
+    val regionLevels = listOfNotNull(z.positiveGexRegion, z.negativeGexRegion).flatMap { listOf(it.first, it.second) }
+    val minP = (levels.map { it.second } + regionLevels + spot).minOrNull() ?: spot
+    val maxP = (levels.map { it.second } + regionLevels + spot).maxOrNull() ?: spot
+    val span = (maxP - minP).coerceAtLeast(1.0)
+    CardBlock {
+        Text("ZONE POSITION • LIVE PRICE " + String.format("%.2f", spot), color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxWidth().height(360.dp)) {
+            Canvas(Modifier.fillMaxSize()) {
+                fun y(price: Double): Float = ((maxP - price) / span * (size.height - 20f) + 10f).toFloat()
+                z.positiveGexRegion?.let { val top = y(it.second); val bottom = y(it.first); drawRect(Cyan.copy(alpha = 0.08f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
+                z.negativeGexRegion?.let { val top = y(it.second); val bottom = y(it.first); drawRect(Red.copy(alpha = 0.08f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
+                val paint = android.graphics.Paint().apply { isAntiAlias = true; textSize = 24f }
+                drawLine(Muted, Offset(0f, y(spot)), Offset(size.width, y(spot)), 3f)
+                paint.color = android.graphics.Color.WHITE
+                drawContext.canvas.nativeCanvas.drawText("LIVE " + String.format("%.2f", spot), 8f, y(spot) - 6f, paint)
+                levels.distinctBy { it.second }.forEach { (name, price) ->
+                    val yy = y(price)
+                    val highlighted = name == status?.likelyZoneName
+                    val reacted = name == status?.reactedZoneName
+                    val lineColor = when { highlighted -> Cyan; reacted -> Green; name.contains("Wall") || name.contains("Ceiling") -> Red; else -> Muted }
+                    drawLine(lineColor, Offset(0f, yy), Offset(size.width, yy), if (highlighted || reacted) 4f else 2f)
+                    paint.color = lineColor.toArgb()
+                    paint.textSize = if (highlighted || reacted) 26f else 21f
+                    drawContext.canvas.nativeCanvas.drawText(name + "  " + String.format("%.2f", price), 8f, yy - 5f, paint)
+                }
+            }
+        }
+        Text("Cyan = next likely reaction • Green = last confirmed reaction • shaded bands = GEX regions", color = Muted, fontSize = 8.sp)
     }
 }
 
