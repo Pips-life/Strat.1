@@ -18,8 +18,8 @@ import life.pips.strat1.data.*
 import kotlin.math.abs
 
 private val Bg = Color.Transparent
-private val Panel = Color(0xFF071727).copy(alpha = .76f)
-private val Panel2 = Color(0xFF0A1D31).copy(alpha = .82f)
+private val Panel = Color(0xFF071727).copy(alpha = .72f)
+private val Panel2 = Color(0xFF0A1D31).copy(alpha = .78f)
 private val Text = Color(0xFFF3F7FF)
 private val Muted = Color(0xFF91A8C5)
 private val Cyan = Color(0xFF23D8FF)
@@ -69,8 +69,8 @@ fun HomeDashboard(
 
     LazyColumn(
         modifier = modifier.fillMaxSize().background(Bg),
-        contentPadding = PaddingValues(start = 6.dp, end = 6.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        contentPadding = PaddingValues(start = 7.dp, end = 7.dp, top = 2.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         item { TopBrand(account, running, onStartStop) }
         item { CompactMarketHeader(selectedSymbol, price, strategy, account) }
@@ -189,7 +189,7 @@ private fun ksh(value: Double?): String = value?.takeIf { it.isFinite() }?.let {
 
 @Composable
 private fun EqualPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Surface(modifier = modifier.fillMaxWidth(), color = Panel, shape = RoundedCornerShape(6.dp)) {
+    Surface(modifier = modifier.fillMaxWidth(), color = Panel, shape = RoundedCornerShape(8.dp), tonalElevation = 0.dp) {
         Column(Modifier.padding(horizontal = 7.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
     }
 }
