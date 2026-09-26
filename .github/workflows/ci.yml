@@ -90,12 +90,12 @@ jobs:
           grep -q "versionCode='88'" /tmp/pips-release-badging.txt
           grep -q "versionName='0.2.88'" /tmp/pips-release-badging.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.88-87.apk"
+          cp "$APK" "$RUNNER_TEMP/pips-life-0.2.88-88.apk"
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: pips-life-v0.2.88-build88
-          path: ${{ runner.temp }}/pips-life-0.2.88-87.apk
+          path: ${{ runner.temp }}/pips-life-0.2.88-88.apk
           if-no-files-found: error
 
   release:
@@ -115,7 +115,7 @@ jobs:
           version_name="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
           version_code="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
           test "$version_name" = "0.2.88"
-          test "$version_code" = "87"
+          test "$version_code" = "88"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
           echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "tag=v$version_name" >> "$GITHUB_OUTPUT"
@@ -132,7 +132,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="release/pips-life-0.2.88-87.apk"
+          APK="release/pips-life-0.2.88-88.apk"
           test -s "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
