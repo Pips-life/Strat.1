@@ -64,7 +64,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     MaterialTheme(colorScheme = darkColorScheme(background = Bg, surface = Panel, primary = Cyan, secondary = Green, error = Red)) {
         Box(Modifier.fillMaxSize()) {
             Image(bitmap = ImageBitmap.imageResource(id = R.drawable.pipslife_ocean_background), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = androidx.compose.ui.graphics.FilterQuality.High, colorFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(floatArrayOf(1.08f, 0f, 0f, 0f, -6f, 0f, 1.08f, 0f, 0f, -6f, 0f, 0f, 1.08f, 0f, -6f, 0f, 0f, 0f, 1f, 0f))))
-            Scaffold(containerColor = Color.Transparent, bottomBar = { NavigationBar(containerColor = Color(0xFF08111D), tonalElevation = 0.dp) { listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH", Tab.UPDATE to "UPDATE").forEach { (t, label) -> NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 7.sp) }) } } }) { pad ->
+            Scaffold(containerColor = Color.Transparent, bottomBar = { NavigationBar(containerColor = Color(0xFF08111D), tonalElevation = 0.dp, windowInsets = WindowInsets(0)) { listOf(Tab.HOME to "HOME", Tab.METAAPI to "METAAPI", Tab.STRATEGY to "STRATEGY", Tab.WATCHLIST to "WATCH", Tab.UPDATE to "UPDATE").forEach { (t, label) -> NavigationBarItem(selected = tab == t, onClick = { tab = t }, icon = {}, label = { Text(label, fontSize = 7.sp) }) } } }) { pad ->
                 when (tab) {
                     Tab.HOME -> HomeDashboard(Modifier.padding(pad), account, snapshot, flashData, selectedStrategy, running, armed, status, engine, selectedSymbol, onStartStop = { running = it; if (!it) armed = false })
                     Tab.METAAPI -> MetaApiTab(Modifier.padding(pad), saved, account, busy, status, onSave = { value -> saved = value; scope.launch { context.saveConnection(value) } }, onConnect = { value -> busy = true; scope.launch { val result = if (value.accountId.isNotBlank()) meta.connectExisting(value.metaApiToken, value.accountId) else meta.createAndDeploy(value.metaApiToken, value.login, value.password, value.server); result.onSuccess { a2 -> account = a2; saved = value.copy(accountId = a2.id); context.saveConnection(saved); status = "CONNECTED — ${a2.login} / ${a2.server}" }.onFailure { status = it.message ?: "Connection failed" }; busy = false } })
@@ -156,6 +156,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
                         val m = optionsFlow.currentMap()
                         val livePrice = snapshot?.prices?.get(tradeSymbol)?.let { (it.bid + it.ask) / 2.0 }
+                        val chartPrice = livePrice ?: m?.spot
                         val zoneStatus = livePrice?.let { optionsFlow.zoneStatus(it) }
 
                         Text(
@@ -167,8 +168,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             fontWeight = FontWeight.Bold
                         )
 
-                        if (m?.valid == true && livePrice != null) {
-                            S006ZoneMap(m.zones, livePrice, zoneStatus, s006PriceHistory)
+                        if (m?.valid == true && chartPrice != null) {
+                            S006ZoneMap(m.zones, chartPrice, zoneStatus, s006PriceHistory)
                             CardBlock {
                                 Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 Text(
@@ -263,7 +264,11 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                     drawLine(lineColor, Offset(0f, yy), Offset(size.width, yy), if (highlighted || reacted) 3.5f else 1.5f)
                     paint.color = lineColor.toArgb()
                     paint.textSize = if (highlighted || reacted) 22f else 18f
-                    drawContext.canvas.nativeCanvas.drawText(name + "  " + String.format("%.2f", price), 8f, (yy - 5f).coerceAtLeast(16f), paint)
+                    drawContext.canvas.nativeCanvas.drawText(name, 8f, (yy - 6f).coerceAtLeast(16f), paint)
+                    paint.textSize = if (highlighted || reacted) 22f else 18f
+                    val priceText = String.format("%.2f", price)
+                    val priceWidth = paint.measureText(priceText)
+                    drawContext.canvas.nativeCanvas.drawText(priceText, size.width - priceWidth - 8f, (yy - 6f).coerceAtLeast(16f), paint)
                 }
                 if (recent.size >= 2) {
                     val minT = recent.first().first.toDouble()
