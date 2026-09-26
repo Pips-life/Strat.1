@@ -137,44 +137,84 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             TradingEngine.StrategyId.STRATEGY_003 -> { item { CardBlock { Text("STRATEGY 003 • SMART MONEY CONCEPTS", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black); Text("Reads 1H, 15M, 5M and 1M market structure; execution is locked to the 5M timeframe.", color = TextMain, fontSize = 10.sp); Text("HTF ${smcPlan.h1Bias.name}  •  15M ${smcPlan.m15Bias.name}  •  5M ${smcPlan.m5Bias.name}  •  1M ${smcPlan.m1Bias.name}", color = Green, fontSize = 10.sp); Text("${smcPlan.bos} • ${smcPlan.liquidity} • ${smcPlan.fvg} • ${smcPlan.orderBlock} • ${smcPlan.premiumDiscount}", color = Muted, fontSize = 9.sp); Text("${smcPlan.confidence}% • ${smcPlan.reason}", color = Muted, fontSize = 9.sp) } }; item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START 5M SMC") } }; if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } } }
             TradingEngine.StrategyId.STRATEGY_004 -> { item { CardBlock { Text("STRATEGY 004 • PURE PRICE ACTION", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black); Text("15M context → 5M liquidity sweep, rejection and displacement → 1M BOS execution. OHLC only.", color = TextMain, fontSize = 10.sp); Text("15M ${priceActionPlan.contextBias.name} • 5M ${priceActionPlan.setupState.name} • ${priceActionPlan.bos}", color = Green, fontSize = 10.sp); Text("${priceActionPlan.sweptLiquidity} • ${priceActionPlan.targetLiquidity}", color = Muted, fontSize = 9.sp); Text("Entry ${priceActionPlan.entry ?: "—"} • SL ${priceActionPlan.stop ?: "—"} • TP ${priceActionPlan.target ?: "—"}", color = Muted, fontSize = 9.sp); Text("${priceActionPlan.confidence}% • ${priceActionPlan.reason}", color = Muted, fontSize = 9.sp) } }; item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START PURE PRICE ACTION") } }; if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } } }
             TradingEngine.StrategyId.STRATEGY_005 -> { item { CardBlock { Text("STRATEGY 005 • WOODIE 4H / 5M PRICE ACTION", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black); Text("Previous completed 4H Woodie pivots → 5M rejection entries at S1/S2 or R1/R2 → exit at 4H PP. MetaApi stream supplies live ticks; no S001–S004 logic is used.", color = TextMain, fontSize = 10.sp); Text("PP ${woodiePlan.levels?.pp?.let { String.format("%.2f", it) } ?: "—"} • R1 ${woodiePlan.levels?.r1?.let { String.format("%.2f", it) } ?: "—"} • S1 ${woodiePlan.levels?.s1?.let { String.format("%.2f", it) } ?: "—"}", color = Green, fontSize = 10.sp); Text("Trigger ${woodiePlan.trigger.ifBlank { "WAIT" }} • Entry ${woodiePlan.entry?.let { String.format("%.2f", it) } ?: "—"} • SL ${woodiePlan.stop?.let { String.format("%.2f", it) } ?: "—"} • PP exit ${woodiePlan.target?.let { String.format("%.2f", it) } ?: "—"}", color = Muted, fontSize = 9.sp); Text("Risk cap: 5% of account balance • RR ${String.format("%.2f", woodiePlan.rewardRisk)} • ${woodiePlan.reason}", color = Muted, fontSize = 9.sp) } }; item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START WOODIE 4H / 5M") } }; if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } } }
+
             TradingEngine.StrategyId.STRATEGY_006 -> {
                 item {
+                    var showAdvanced by remember { mutableStateOf(false) }
                     CardBlock {
                         Text("STRATEGY 006 • OPTIONS FLOW", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black)
-                        Text("Independent daily options map. Load the two files at London open; live MT5 price reacts to the calculated zones.", color = TextMain, fontSize = 10.sp)
-                        Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD FILE 1 • MHT / PDF / SCREENSHOT") }
-                        Text(barchartName, color = Muted, fontSize = 9.sp)
-                        Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD GREEKS / VOLATILITY CSV") }
-                        Text(greeksName, color = Muted, fontSize = 9.sp)
+                        Text("Daily options map • live XAUUSD reaction", color = Muted, fontSize = 10.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD FILE 1") }
+                            Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.weight(1f)) { Text("LOAD GREEKS") }
+                        }
+                        Text("File 1: "+barchartName, color = Muted, fontSize = 8.sp)
+                        Text("Greeks: "+greeksName, color = Muted, fontSize = 8.sp)
                         Button(enabled = barchartText.isNotBlank() && greeksText.isNotBlank(), onClick = {
                             optionsFlow.loadFiles(barchartText, greeksText, snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 })
                         }, modifier = Modifier.fillMaxWidth()) { Text("BUILD OPTIONS FLOW MAP") }
+
                         val m = optionsFlow.currentMap()
                         val livePrice = snapshot?.prices?.get(tradeSymbol)?.let { (it.bid + it.ask) / 2.0 }
                         val zoneStatus = livePrice?.let { optionsFlow.zoneStatus(it) }
-                        Text("MAP: " + if (m == null) "WAITING FOR BOTH FILES" else "CALCULATED • QOF " + String.format("%.1f", m.qof) + " • " + m.bias, color = if (m?.valid == true) Green else Muted, fontSize = 10.sp)
-                        Text("LIVE PRICE POSITION MAP", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+
+                        Text(
+                            "QOF " + (m?.qof?.let { String.format("%.1f", it) } ?: "—") +
+                                " • " + (m?.bias ?: "WAITING") +
+                                " • XAUUSD " + (livePrice?.let { String.format("%.2f", it) } ?: "—"),
+                            color = if (m?.valid == true) Green else Muted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
                         if (m?.valid == true && livePrice != null) {
                             S006ZoneMap(m.zones, livePrice, zoneStatus, s006PriceHistory)
                             CardBlock {
-                                Text("BOT REACTION MONITOR", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text("LIKELY REACTION: " + (zoneStatus?.likelyZoneName ?: "—") + " @ " + (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") + " • " + (zoneStatus?.likelySide?.name ?: "WAIT"), color = if (zoneStatus?.likelySide == life.pips.strat1.data.TradeSide.BUY) Green else if (zoneStatus?.likelySide == life.pips.strat1.data.TradeSide.SELL) Red else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                                Text("REACTED FROM: " + (zoneStatus?.reactedZoneName ?: "No confirmed reaction yet") + (zoneStatus?.reactedZone?.let { " @ " + String.format("%.2f", it) } ?: ""), color = TextMain, fontSize = 9.sp)
-                                Text("POSSIBLE EXIT: " + (zoneStatus?.possibleExitName ?: "—") + (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""), color = TextMain, fontSize = 9.sp)
+                                Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    (zoneStatus?.likelyZoneName ?: "NO ACTIVE ZONE") +
+                                        " • " + (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") +
+                                        " • " + (zoneStatus?.likelySide?.name ?: "WAIT"),
+                                    color = when (zoneStatus?.likelySide) {
+                                        life.pips.strat1.data.TradeSide.BUY -> Green
+                                        life.pips.strat1.data.TradeSide.SELL -> Red
+                                        else -> Muted
+                                    },
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                                Text(
+                                    "Confirmed: " + (zoneStatus?.reactedZoneName ?: "none") +
+                                        (zoneStatus?.reactedZone?.let { " @ " + String.format("%.2f", it) } ?: ""),
+                                    color = Green,
+                                    fontSize = 9.sp
+                                )
+                                Text(
+                                    "Possible exit: " + (zoneStatus?.possibleExitName ?: "—") +
+                                        (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""),
+                                    color = Muted,
+                                    fontSize = 9.sp
+                                )
                             }
                         } else {
-                            Text("Load both files and build the map, then connect live MT5 price to see zone position and reaction state.", color = Muted, fontSize = 9.sp)
+                            Text("Load both files and build the map to activate live mapped-zone tracking.", color = Muted, fontSize = 9.sp)
                         }
-                        Text("ALL CALCULATED ZONES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        m?.zones?.let { z ->
-                            Text("Upper Inventory Ceiling " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—") + " • Reclaim Gate " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Immediate Hedge Wall " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—") + " • Primary Hedge Floor " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Call Wall " + (z.callWall?.let { String.format("%.2f", it) } ?: "—") + " • Put Wall " + (z.putWall?.let { String.format("%.2f", it) } ?: "—") + " • Gamma Flip " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Positive GEX " + (z.positiveGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—") + " • Negative GEX " + (z.negativeGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
-                            Text("Dealer Absorption Shelf " + (z.dealerAbsorptionShelf?.let { String.format("%.2f", it) } ?: "—") + " • Liquidity Exhaustion Floor " + (z.liquidityExhaustionFloor?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
+
+                        TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (showAdvanced) "HIDE ADVANCED DATA ▲" else "SHOW ADVANCED DATA ▼", fontSize = 9.sp)
                         }
-                        Text("FILES: cached locally for this Nairobi trading day — leaving the Strategy screen does not clear them. A new day requires new input.", color = TextMain, fontSize = 9.sp)
-                        Text("M5 confirmation: completed candle must trade into a mapped zone and close back across it. Batch risk: 10% combined • Exit: nearest opposing zone.", color = TextMain, fontSize = 9.sp)
+                        if (showAdvanced) {
+                            Text("MAPPED ZONES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            m?.zones?.let { z ->
+                                Text("Upper Ceiling " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—") + " • Reclaim " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                                Text("Immediate Wall " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—") + " • Primary Floor " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                                Text("Call Wall " + (z.callWall?.let { String.format("%.2f", it) } ?: "—") + " • Put Wall " + (z.putWall?.let { String.format("%.2f", it) } ?: "—") + " • Gamma Flip " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                                Text("Positive GEX " + (z.positiveGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—") + " • Negative GEX " + (z.negativeGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
+                                Text("Absorption " + (z.dealerAbsorptionShelf?.let { String.format("%.2f", it) } ?: "—") + " • Exhaustion " + (z.liquidityExhaustionFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            }
+                            Text("FILES • cached for the Nairobi trading day", color = Muted, fontSize = 8.sp)
+                            Text("M5 confirmation • completed candle must reject a mapped zone • risk cap 10%", color = Muted, fontSize = 8.sp)
+                        }
                     }
                 }
                 item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START OPTIONS FLOW") } }
