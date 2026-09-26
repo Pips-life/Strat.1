@@ -69,7 +69,7 @@ fun HomeDashboard(
 
     LazyColumn(
         modifier = modifier.fillMaxSize().background(Bg),
-        contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 18.dp),
+        contentPadding = PaddingValues(start = 6.dp, end = 6.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         item { TopBrand(account, running, onStartStop) }
@@ -95,14 +95,16 @@ fun HomeDashboard(
                 }
             }
         }
-        item {
-            EqualPanel {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("REAL-TIME OPTIONS FLOW", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(5.dp))
-                    Text("GC=F • top strikes", color = Muted, fontSize = 8.sp)
+        if (strategy == TradingEngine.StrategyId.STRATEGY_001) {
+            item {
+                EqualPanel {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("REAL-TIME OPTIONS FLOW", color = Text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(5.dp))
+                        Text("GC=F • S001 only", color = Muted, fontSize = 8.sp)
+                    }
+                    FlowTable(options)
                 }
-                FlowTable(options)
             }
         }
         item {
@@ -123,7 +125,7 @@ fun HomeDashboard(
 
 @Composable
 private fun TopBrand(account: MetaAccount?, running: Boolean, onStartStop: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 1.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Pips-life", color = Text, fontSize = 25.sp, fontWeight = FontWeight.Black)
             Text("life changing pips", color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -141,7 +143,7 @@ private fun TopBrand(account: MetaAccount?, running: Boolean, onStartStop: (Bool
 
 @Composable
 private fun CompactMarketHeader(symbol: String, price: Double?, strategy: TradingEngine.StrategyId, account: MetaAccount?) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(symbol, color = Text, fontSize = 22.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.width(6.dp))
@@ -186,7 +188,7 @@ private fun ksh(value: Double?): String = value?.takeIf { it.isFinite() }?.let {
 @Composable
 private fun EqualPanel(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Surface(modifier = modifier.fillMaxWidth(), color = Panel, shape = RoundedCornerShape(6.dp)) {
-        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(3.dp), content = content)
+        Column(Modifier.padding(horizontal = 7.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
     }
 }
 
