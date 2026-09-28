@@ -112,7 +112,7 @@ object Strategy006FileExtractor {
          */
         val spotMatch = Regex("""(?i)\\bspot\\s*(?:price)?\\s*[:=\\-]?\\s*([0-9]+(?:\\.[0-9]+)?)\\b""").find(raw)
         val tablePart = spotMatch?.let { raw.substring(0, it.range.first) } ?: raw
-        val numeric = Regex("""(?<![A-Za-z])[-+]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?%?""")
+        val numeric = Regex("""(?<![A-Za-z])[-+]?\\d+(?:,\\d{3})*(?:\\.\\d+)?%?""")
             .findAll(tablePart)
             .map { it.value.replace(",", "").replace("%", "") }
             .toList()
