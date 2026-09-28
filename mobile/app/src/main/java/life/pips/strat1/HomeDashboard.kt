@@ -95,6 +95,9 @@ fun HomeDashboard(
                 }
             }
         }
+        if (strategy == TradingEngine.StrategyId.STRATEGY_006 && s006?.valid == true) {
+            item { S006HomeZoneTable(s006.zones, s006.spot) }
+        }
         if (strategy == TradingEngine.StrategyId.STRATEGY_001) {
             item {
                 EqualPanel {
@@ -122,6 +125,36 @@ fun HomeDashboard(
                 Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "Direct MetaApi / MT5 • FlashAlpha GC=F • $status" else "Direct MetaApi / MT5 • $status", color = Muted, fontSize = 8.sp)
             }
         }
+    }
+}
+
+@Composable
+private fun S006HomeZoneTable(z: Strategy006Engine.Zones, spot: Double?) {
+    val rows = listOf(
+        "Upper Inventory Ceiling" to z.upperInventoryCeiling,
+        "Reclaim Gate" to z.reclaimGate,
+        "Immediate Hedge Wall" to z.immediateHedgeWall,
+        "Primary Hedge Floor" to z.primaryHedgeFloor,
+        "Absorption Floor" to z.dealerAbsorption,
+        "Liquidity Exhaustion" to z.liquidityExhaustion
+    )
+    EqualPanel {
+        Row(Modifier.fillMaxWidth().background(Panel2).padding(vertical = 6.dp, horizontal = 7.dp)) {
+            Text("I.V MAP ZONE", color = Cyan, fontSize = 8.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1.7f))
+            Text("PRICE", color = Cyan, fontSize = 8.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+        }
+        rows.forEachIndexed { i, (name, value) ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(if (i % 2 == 0) Color.White.copy(alpha = .025f) else Color.Transparent)
+                    .padding(vertical = 6.dp, horizontal = 7.dp)
+            ) {
+                Text(name, color = Text, fontSize = 9.sp, modifier = Modifier.weight(1.7f))
+                Text(value?.let { fmt(it, 2) } ?: "—", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+            }
+            if (i < rows.lastIndex) HorizontalDivider(color = Color.White.copy(alpha = .08f), thickness = 1.dp)
+        }
+        Text("IV file Spot / live mapping price: " + (spot?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 8.sp)
     }
 }
 
