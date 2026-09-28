@@ -98,9 +98,10 @@ class TradingEngine(
         StrategyId.STRATEGY_006 -> {
             val m = strategy006.currentMap()
             val z = m?.zones
-            View(id, null, m?.qof?.toInt() ?: 0, null, z?.immediateHedgeWall, null,
-                if (m == null) "Load both options files at London open." else "Waiting for confirmed zone reaction.",
-                "LONDON + NEW YORK", "QOF ${m?.qof?.let { fmt(it) } ?: "—"} • ${m?.bias ?: "NO MAP"}")
+            val strongest = z?.confluence?.maxByOrNull { it.score }
+            View(id, null, strongest?.score?.toInt() ?: 0, strongest?.zone, null, null,
+                if (m == null) "Load IV options + Volatility/Greeks and GC price." else "Waiting for confirmed M5 reaction.",
+                "LONDON + NEW YORK", "IV CONFLUENCE " + (strongest?.score?.let { fmt(it) } ?: "—"))
         }
     }
 
@@ -163,11 +164,15 @@ class TradingEngine(
         val map = strategy006.currentMap()
         if (map == null || !map.valid) { onStatus("S006 | WAIT | load both options files at London open"); return }
         val price = (tick.bid + tick.ask) / 2.0
-        val target = map.zones.immediateHedgeWall
         for (p in positions) {
             val isBuy = p.type?.contains("BUY", true) == true
+            val side = if (isBuy) TradeSide.BUY else TradeSide.SELL
+            val target = strategy006.oppositeTarget(side, price)?.zone
             if (target != null && ((isBuy && price >= target) || (!isBuy && price <= target))) {
-                meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S006 | ZONE EXIT CONFIRMED | ${p.id}") }.onFailure { onStatus("S006 | EXIT FAILED | ${it.message ?: "unknown"}") }
+                meta.closePosition(saved.metaApiToken, account, p.id).onSuccess {
+                    recordClosedTrade(p.profit, snapshot.equity)
+                    onStatus("S006 | OPPOSITE-CONFLUENCE TARGET HIT | " + p.id + " | target=" + fmt(target))
+                }.onFailure { onStatus("S006 | EXIT FAILED | " + (it.message ?: "unknown")) }
             }
         }
         if (riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions) return
