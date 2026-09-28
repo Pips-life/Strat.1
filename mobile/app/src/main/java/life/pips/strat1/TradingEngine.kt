@@ -171,7 +171,7 @@ class TradingEngine(
             val currentTarget = positions.mapNotNull { it.takeProfit.takeIf { v -> v.isFinite() && v > 0.0 } }.firstOrNull()
                 ?: strategy006.oppositeTarget(side, positions.first().openPrice)?.zone
             if (currentTarget != null) {
-                when (val management = strategy006.manageOpenPosition(side, currentTarget, tick.time)) {
+                when (val management = strategy006.manageOpenPosition(side, currentTarget, tick.time).action) {
                     Strategy006Engine.PositionAction.CLOSE_REVERSE -> {
                         var allClosed = true
                         for (p in positions) {
