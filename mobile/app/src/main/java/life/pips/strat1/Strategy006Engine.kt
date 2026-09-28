@@ -59,6 +59,14 @@ class Strategy006Engine {
         val possibleExitName: String?, val possibleExit: Double?
     )
 
+    enum class PositionAction { HOLD, CLOSE_REVERSE, RETARGET }
+
+    data class PositionManagement(
+        val action: PositionAction,
+        val nextTarget: ZoneConfluence? = null,
+        val reason: String
+    )
+
     /** GC -> XAUUSD coordinate conversion using a same-instant basis. */
     data class PriceTick(val price: Double, val timestampMillis: Long, val sourceTimezone: String = "UTC")
     data class BasisMapping(
@@ -289,65 +297,94 @@ class Strategy006Engine {
         lastConfirmedBarStart = Long.MIN_VALUE
     }
 
+
     fun plan(
         price: Double, balance: Double, bid: Double, ask: Double,
         rejection: Boolean = false, tickTime: Long = System.currentTimeMillis()
     ): TradePlan {
         val m = current ?: return wait("WAIT FILES", "Load the IV options table and Volatility & Greeks file.")
         if (!m.valid || price <= 0.0 || balance <= 0.0) return wait("WAIT DATA", "S006 map or account data is invalid.")
+        lastPrice = price
         priceHistory.addLast(price)
         while (priceHistory.size > 12) priceHistory.removeFirst()
         val closedBar = updateFiveMinuteBar(price, tickTime)
-        val m5Rejection = closedBar?.let { detectM5Rejection(it, m.zones) }
-        val z = m.zones
         val eps = max(price * 0.0005, 0.5)
         val buy = if (ask > 0.0) ask else price
         val sell = if (bid > 0.0) bid else price
+        val candidate = entryConfluence(price)
 
-        if (m5Rejection != null && closedBar != null && closedBar.start != lastConfirmedBarStart) {
+        if (closedBar != null && closedBar.start != lastConfirmedBarStart && candidate != null) {
             lastConfirmedBarStart = closedBar.start
-            lastReactionZoneName = m5Rejection.label
-            lastReactionZone = m5Rejection.zone
-            val target = oppositeTarget(m5Rejection.side, if (m5Rejection.side == TradeSide.BUY) buy else sell)
-            if (target != null) {
-                val stop = if (m5Rejection.side == TradeSide.BUY) m5Rejection.zone - eps else m5Rejection.zone + eps
-                val entry = if (m5Rejection.side == TradeSide.BUY) buy else sell
-                return trade(
-                    m5Rejection.side, entry, stop, target.zone, balance,
-                    if (m5Rejection.side == TradeSide.BUY) MarketState.ABSORPTION_RECLAIM else MarketState.CONTINUATION,
-                    "M5 " + (if (m5Rejection.side == TradeSide.BUY) "bullish" else "bearish") +
-                        " rejection confirmed at " + m5Rejection.label +
-                        " → next opposite zone with strongest confluence: " + target.zoneName +
-                        " (" + String.format("%.1f", target.score) + ")."
-                )
+            val reaction = detectConfluenceReaction(closedBar, candidate)
+            if (reaction != null) {
+                lastReactionZoneName = candidate.zoneName
+                lastReactionZone = candidate.matchedStrike ?: candidate.zone
+                val entry = if (reaction.side == TradeSide.BUY) buy else sell
+                val target = if (reaction.behavior == "REJECTION") oppositeTarget(reaction.side, entry)
+                    else nextTargetInDirection(reaction.side, candidate.matchedStrike ?: candidate.zone)
+                if (target != null) {
+                    val strike = candidate.matchedStrike ?: candidate.zone
+                    val stop = if (reaction.side == TradeSide.BUY) strike - eps else strike + eps
+                    val state = if (reaction.behavior == "REJECTION") MarketState.ABSORPTION_RECLAIM else MarketState.CONTINUATION
+                    return trade(
+                        reaction.side, entry, stop, target.zone, balance, state,
+                        "High-confluence strike " + String.format("%.2f", strike) +
+                            " produced M5 " + reaction.behavior.lowercase(Locale.US) +
+                            " → target " + target.zoneName + " @ " + String.format("%.2f", target.zone) +
+                            " (confluence " + String.format("%.1f", target.score) + ")."
+                    )
+                }
             }
         }
+        val next = candidate?.matchedStrike
+        if (next != null && abs(price - next) <= max(5.0, eps * 2.0))
+            return wait("HIGH_CONFLUENCE_TEST", "High-confluence strike " + String.format("%.2f", next) + " is under test; waiting for completed M5 rejection or breakout.")
+        return wait(MarketState.NO_TRADE.name, "No confirmed M5 reaction at a highest-confluence volatility/Greeks strike.")
+    }
 
-        val floor = z.primaryHedgeFloor
-        val shelf = z.dealerAbsorption
-        val exhaustion = z.liquidityExhaustion
-        val reclaim = z.reclaimGate
-        val wall = z.immediateHedgeWall
-        val ceiling = z.upperInventoryCeiling
-        val phfBreak = floor != null && price < floor - eps && crossedBelow(floor)
-        val shelfBroken = shelf != null && price < shelf - eps && crossedBelow(shelf)
-        val exhaustionBroken = exhaustion != null && price < exhaustion - eps && crossedBelow(exhaustion)
+    private data class ConfluenceReaction(val side: TradeSide, val behavior: String)
 
-        if (ceiling != null && price >= ceiling - eps) return wait("UPPER_CEILING", "Upper Inventory Ceiling reached; wait for completed M5 reaction.")
-        if (reclaim != null && price >= reclaim - eps) return wait("RECLAIM_GATE", "Reclaim Gate reached; wait for completed M5 reaction.")
-        if (floor != null && abs(price - floor) <= eps) return wait("PHF_HOLD", "Primary Hedge Floor touched; waiting for completed M5 rejection.")
-        if (wall != null && abs(price - wall) <= eps) return wait("WALL_TEST", "Immediate Hedge Wall under test; waiting for completed M5 rejection.")
-        if (floor != null && price < floor - eps) {
-            if (shelf != null && price > shelf + eps) return wait("ABSORPTION_TEST", "Primary Hedge Floor broke; testing Dealer Absorption. Wait for M5 rejection.")
-            if (exhaustion != null && price > exhaustion + eps) return wait("EXHAUSTION_TEST", "Dealer Absorption did not hold; testing Liquidity Exhaustion. Wait for M5 rejection.")
-            if (exhaustion != null && price <= exhaustion + eps) {
-                if (exhaustionBroken && fallingThroughZone(priceHistory, listOfNotNull(exhaustion), eps))
-                    return wait("CONTINUATION", "Liquidity Exhaustion failed; waiting for a completed M5 continuation/retest.")
-                return wait("EXHAUSTION_TEST", "Liquidity Exhaustion reached; wait for completed M5 rejection.")
-            }
+    private fun entryConfluence(price: Double): ZoneConfluence? {
+        val candidates = current?.zones?.confluence.orEmpty().filter { it.matchedStrike != null }
+        if (candidates.isEmpty()) return null
+        return candidates.maxWithOrNull(compareBy<ZoneConfluence> { it.score }.thenBy { -abs((it.matchedStrike ?: it.zone) - price) })
+    }
+
+    private fun detectConfluenceReaction(bar: FiveMinuteBar, candidate: ZoneConfluence): ConfluenceReaction? {
+        val strike = candidate.matchedStrike ?: return null
+        val eps = max(strike * 0.0001, 0.5)
+        if (bar.low <= strike + eps && bar.high >= strike - eps) {
+            if (bar.high >= strike && bar.close < strike - eps) return ConfluenceReaction(TradeSide.SELL, "REJECTION")
+            if (bar.low <= strike && bar.close > strike + eps) return ConfluenceReaction(TradeSide.BUY, "REJECTION")
+            if (bar.close > strike + eps) return ConfluenceReaction(TradeSide.BUY, "BREAKOUT")
+            if (bar.close < strike - eps) return ConfluenceReaction(TradeSide.SELL, "BREAKOUT")
         }
-        if (phfBreak || shelfBroken || exhaustionBroken) return wait("BREAK_TEST", "Zone break detected; waiting for completed M5 confirmation.")
-        return wait(MarketState.NO_TRADE.name, "No confirmed M5 reaction at a strongest-confluence mapped zone.")
+        return null
+    }
+
+    private fun nextTargetInDirection(side: TradeSide, fromPrice: Double): ZoneConfluence? {
+        val candidates = current?.zones?.confluence.orEmpty().filter { if (side == TradeSide.BUY) it.zone > fromPrice else it.zone < fromPrice }
+        if (candidates.isEmpty()) return null
+        return candidates.maxWithOrNull(compareBy<ZoneConfluence> { it.score }.thenBy { if (side == TradeSide.BUY) it.zone else -it.zone })
+    }
+
+    fun manageOpenPosition(side: TradeSide, targetPrice: Double, tickTime: Long): PositionManagement {
+        val m = current ?: return PositionManagement(PositionAction.HOLD, reason = "S006 map unavailable.")
+        if (!m.valid || !targetPrice.isFinite() || targetPrice <= 0.0) return PositionManagement(PositionAction.HOLD, reason = "S006 target is invalid.")
+        val price = lastPrice.takeIf { it.isFinite() } ?: targetPrice
+        val closedBar = updateFiveMinuteBar(price, tickTime)
+        if (closedBar == null) return PositionManagement(PositionAction.HOLD, reason = "Waiting for completed M5 reaction at target " + String.format("%.2f", targetPrice) + ".")
+        if (!(closedBar.low <= targetPrice && closedBar.high >= targetPrice))
+            return PositionManagement(PositionAction.HOLD, reason = "Target zone not yet tested.")
+        val eps = max(targetPrice * 0.0001, 0.5)
+        val rejected = if (side == TradeSide.BUY) closedBar.close < targetPrice - eps else closedBar.close > targetPrice + eps
+        if (rejected) return PositionManagement(PositionAction.CLOSE_REVERSE, reason = "M5 rejection detected at target " + String.format("%.2f", targetPrice) + ". Close positions and reassess opposite direction.")
+        val broke = if (side == TradeSide.BUY) closedBar.close > targetPrice + eps else closedBar.close < targetPrice - eps
+        if (broke) {
+            val next = nextTargetInDirection(side, targetPrice)
+            if (next != null) return PositionManagement(PositionAction.RETARGET, next, "M5 breakout accepted through target " + String.format("%.2f", targetPrice) + " → hold and retarget " + next.zoneName + " @ " + String.format("%.2f", next.zone) + ".")
+        }
+        return PositionManagement(PositionAction.HOLD, reason = "Target tested without confirmed rejection or breakout.")
     }
 
     fun oppositeTarget(side: TradeSide, entryPrice: Double): ZoneConfluence? {
@@ -446,44 +483,46 @@ class Strategy006Engine {
         return abs(b - near) <= eps * 2.0 && c < b && b >= a
     }
 
+
     private fun calculate(rows: List<Row>, gcPrice: Double?, liveXauSpot: Double? = gcPrice, signedBasis: Double = 0.0): Map {
         if (rows.isEmpty()) return Map(emptyList(), liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
         if (gcPrice == null || gcPrice <= 0.0) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
         if (liveXauSpot == null || liveXauSpot <= 0.0) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("Live XAUUSD spot price is required for IV strike polishing."))
-
         val unique = rows.filter { it.source == "iv" }.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
         if (unique.size < 6) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
-
         val atm = unique.minByOrNull { abs(it - liveXauSpot) }
         val ivStrikes = unique.filter { it != atm }
         val below = ivStrikes.filter { it < liveXauSpot }.sortedDescending()
         val above = ivStrikes.filter { it > liveXauSpot }.sorted()
-        if (below.size < 3 || above.size < 3)
-            return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV file live spot."))
-
+        if (below.size < 3 || above.size < 3) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV file live spot."))
         val selected = (below.take(3).sorted() + above.take(3)).sorted()
-        val polishedZones = selected.map { ivStrike -> ivStrike + signedBasis }
-
-        fun greekRowsAt(strike: Double): List<Row> =
-            rows.filter { it.source != "iv" && abs(it.strike - strike) <= STRIKE_BUFFER }
+        val polishedZones = selected.map { it + signedBasis }
+        val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
+        val greekRows = rows.filter { it.source != "iv" }
+        val greekStrikes = greekRows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct()
+        val ivVolValues = ivRows.map { abs(it.iv) }
+        val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
 
         fun confluence(zone: Double, name: String): ZoneConfluence {
-            val matches = greekRowsAt(zone)
-            val vol = matches.map { abs(it.iv) }.maxOrNull() ?: 0.0
-            val greekMagnitude = matches.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }.maxOrNull() ?: 0.0
-            val score = (normalize(vol, rows.map { abs(it.iv) }) * 0.55) +
-                (normalize(greekMagnitude, rows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }) * 0.45)
-            val matched = matches.minByOrNull { abs(it.strike - zone) }?.strike
-            return ZoneConfluence(name, zone, matched, score, vol, greekMagnitude, abs((matched ?: zone) - zone))
+            val candidates = greekStrikes.mapNotNull { strike ->
+                if (abs(strike - zone) > STRIKE_BUFFER) return@mapNotNull null
+                val volatility = ivRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { abs(it.iv) } ?: 0.0
+                val greekMagnitude = greekRows.filter { abs(it.strike - strike) <= 0.01 }
+                    .maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
+                val score = normalize(volatility, ivVolValues) * 0.55 + normalize(greekMagnitude, greekMagnitudeValues) * 0.45
+                Triple(strike, score, volatility)
+            }
+            val best = candidates.maxWithOrNull(compareBy<Triple<Double, Double, Double>> { it.second }.thenBy { -abs(it.first - zone) })
+            if (best == null) return ZoneConfluence(name, zone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
+            val bestGreek = greekRows.filter { abs(it.strike - best.first) <= 0.01 }
+                .maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
+            return ZoneConfluence(name, zone, best.first, best.second, best.third, bestGreek, abs(best.first - zone))
         }
 
-        val named = polishedZones.zip(
-            listOf(
-                "Liquidity Exhaustion", "Dealer Absorption", "Primary Hedge Floor",
-                "Immediate Hedge Wall", "Reclaim Gate", "Upper Inventory Ceiling"
-            )
-        ).map { (zone, name) -> confluence(zone, name) }
-
+        val named = polishedZones.zip(listOf(
+            "Liquidity Exhaustion", "Dealer Absorption", "Primary Hedge Floor",
+            "Immediate Hedge Wall", "Reclaim Gate", "Upper Inventory Ceiling"
+        )).map { (zone, name) -> confluence(zone, name) }
         val zoneMap = named.associateBy { it.zoneName }
         val zones = Zones(
             zoneMap["Upper Inventory Ceiling"]?.zone,
@@ -497,7 +536,8 @@ class Strategy006Engine {
         return Map(rows, liveXauSpot, zones, null, true, listOf(
             "ATM IV strike " + (atm ?: Double.NaN) + " ignored.",
             "IV zone polishing uses signed basis: polished strike = IV strike + (GC price - live XAUUSD price).",
-            "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " points."
+            "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " price units (±500 points / 1000 points total).",
+            "Each IV zone selects the highest-scoring Volatility + Greeks strike inside the buffer."
         ))
     }
 
@@ -510,9 +550,9 @@ class Strategy006Engine {
     }
 
     companion object {
-        // 200-point matching window = 100 points on either side of the mapped zone.
-        // For XAUUSD at 0.01 point size, 4150.00 matches 4149.00 through 4151.00.
-        const val STRIKE_BUFFER = 1.0
+        // 1000-point total matching window = 500 points on either side of the mapped zone.
+        // For XAUUSD at 0.01 point size, 4150.00 matches 4145.00 through 4155.00.
+        const val STRIKE_BUFFER = 5.0
     }
 
     private fun parseText(text: String): List<Row> {

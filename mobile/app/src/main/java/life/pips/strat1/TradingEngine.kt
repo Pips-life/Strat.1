@@ -160,49 +160,63 @@ class TradingEngine(
         }
     }
 
+
     private suspend fun execute006(account: MetaAccount, saved: SavedConnection, symbol: String, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
         val map = strategy006.currentMap()
         if (map == null || !map.valid) { onStatus("S006 | WAIT | load both options files at London open"); return }
         val price = (tick.bid + tick.ask) / 2.0
-        for (p in positions) {
-            val isBuy = p.type?.contains("BUY", true) == true
-            val side = if (isBuy) TradeSide.BUY else TradeSide.SELL
-            val target = strategy006.oppositeTarget(side, price)?.zone
-            if (target != null && ((isBuy && price >= target) || (!isBuy && price <= target))) {
-                meta.closePosition(saved.metaApiToken, account, p.id).onSuccess {
-                    recordClosedTrade(p.profit, snapshot.equity)
-                    onStatus("S006 | OPPOSITE-CONFLUENCE TARGET HIT | " + p.id + " | target=" + fmt(target))
-                }.onFailure { onStatus("S006 | EXIT FAILED | " + (it.message ?: "unknown")) }
-            }
+
+        if (positions.isNotEmpty()) {
+            val side = positionSide(positions.first()) ?: return
+            val currentTarget = positions.mapNotNull { it.takeProfit.takeIf { v -> v.isFinite() && v > 0.0 } }.firstOrNull()
+                ?: strategy006.oppositeTarget(side, positions.first().openPrice)?.zone
+            if (currentTarget != null) {
+                when (val management = strategy006.manageOpenPosition(side, currentTarget, tick.time)) {
+                    Strategy006Engine.PositionAction.CLOSE_REVERSE -> {
+                        var allClosed = true
+                        for (p in positions) {
+                            meta.closePosition(saved.metaApiToken, account, p.id)
+                                .onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S006 | TARGET REJECTION | CLOSED | ${p.id}") }
+                                .onFailure { allClosed = false; onStatus("S006 | EXIT FAILED | ${it.message ?: "unknown"}") }
+                        }
+                        if (allClosed) onStatus("S006 | TARGET REJECTION CONFIRMED | positions closed | next tick will evaluate opposite trade")
+                    }
+                    Strategy006Engine.PositionAction.RETARGET -> {
+                        val next = management.nextTarget ?: return
+                        for (p in positions) {
+                            meta.modifyPosition(saved.metaApiToken, account, p.id, takeProfit = null)
+                                .onSuccess { onStatus("S006 | BREAKOUT HOLD | ${p.id} | new soft target=${fmt(next.zone)}") }
+                                .onFailure { onStatus("S006 | RETARGET FAILED | ${p.id} | ${it.message ?: "unknown"}") }
+                        }
+                    }
+                    Strategy006Engine.PositionAction.HOLD -> onStatus("S006 | HOLD | ${management.reason}")
+                }
+            } else onStatus("S006 | HOLD | active position has no mapped target yet")
+            return
         }
+
         if (riskPolicy.maxPositions > 0 && positions.size >= riskPolicy.maxPositions) return
-        if (positions.isNotEmpty()) { onStatus("S006 | ENTRY LOCKED | active batch must be fully closed before a new confirmation"); return }
         if (!safety.canEnter()) { onStatus("S006 | ENTRY BLOCKED | KILL SWITCH | ${safety.reason()}"); return }
-        // Strategy 006 owns its M5 candle aggregation and rejection confirmation.
-        // Do not synthesize rejection from raw ticks here.
         val plan = strategy006.plan(price, snapshot.balance, tick.bid, tick.ask, tickTime = tick.time)
-        val side = plan.side ?: return; val stop = plan.stop ?: return; val takeProfit = plan.target ?: return
+        val side = plan.side ?: return
+        val stop = plan.stop ?: return
+        val takeProfit = plan.target ?: return
         if (plan.rewardRisk < riskPolicy.minRewardRisk) { onStatus("S006 | ENTRY BLOCKED | RR ${fmt(plan.rewardRisk)} < ${fmt(riskPolicy.minRewardRisk)}"); return }
         if (dailyLossFraction >= riskPolicy.maxDailyLoss || tradesToday >= riskPolicy.maxTradesPerDay || consecutiveLosses >= riskPolicy.maxConsecutiveLosses) { onStatus("S006 | ENTRY BLOCKED | GLOBAL DAILY RISK LIMIT"); return }
         val spec = snapshot.specifications[symbol] ?: return
         val entry = plan.entry ?: price
         val minBrokerVolume = spec.minVolume
-        val brokerMarginAtMin = if (minBrokerVolume.isFinite() && minBrokerVolume > 0.0) {
-            meta.calculateMargin(saved.metaApiToken, account, side, symbol, minBrokerVolume, entry).getOrNull()
-        } else null
+        val brokerMarginAtMin = if (minBrokerVolume.isFinite() && minBrokerVolume > 0.0) meta.calculateMargin(saved.metaApiToken, account, side, symbol, minBrokerVolume, entry).getOrNull() else null
         val marginPerVolume = brokerMarginAtMin?.takeIf { it.isFinite() && it > 0.0 }?.let { it / minBrokerVolume }
-        val decision = risk.decide(
-            side, entry, stop, takeProfit, snapshot.equity, positions.size,
+        val decision = risk.decide(side, entry, stop, takeProfit, snapshot.equity, positions.size,
             abs(plan.rewardRisk).coerceAtMost(100.0), dailyLossFraction, tradesToday, consecutiveLosses,
-            tick.lossTickValue, spec.tickSize ?: 0.0,
-            riskFractionOverride = 0.10,
+            tick.lossTickValue, spec.tickSize ?: 0.0, riskFractionOverride = 0.10,
             accountBalance = snapshot.balance, freeMargin = snapshot.freeMargin, leverage = snapshot.leverage,
             contractSize = spec.contractSize, brokerMinVolume = spec.minVolume, brokerMaxVolume = spec.maxVolume,
-            brokerVolumeStep = spec.volumeStep ?: 0.0, marginPerVolume = marginPerVolume ?: 0.0
-        )
+            brokerVolumeStep = spec.volumeStep ?: 0.0, marginPerVolume = marginPerVolume ?: 0.0)
         if (!decision.approved) { onStatus("S006 | ENTRY BLOCKED | ${decision.reason}"); return }
-        logDecisionOnce("S006-${side}-${fmt(takeProfit)}-${fmt(stop)}", "S006 | decision=${side.name} | entry=${fmt(entry)} | SL=${fmt(stop)} | TP=${fmt(takeProfit)} | RR=${fmt(plan.rewardRisk)} | quantity=${fmt(decision.quantity)} | risk=${fmt(decision.riskAmount)} (${fmt(decision.riskPercent)}%) | margin=${fmt(decision.marginRequired)} | ${decision.reason}")
-        submitS006Batch(account, saved, symbol, side, decision.quantity, stop, takeProfit, tick, snapshot, onStatus, "S006|$symbol|$side|${fmt(stop)}|${fmt(takeProfit)}|zone-to-zone")
+        logDecisionOnce("S006-${side}-${fmt(takeProfit)}-${fmt(stop)}", "S006 | decision=${side.name} | entry=${fmt(entry)} | SL=${fmt(stop)} | SOFT TARGET=${fmt(takeProfit)} | RR=${fmt(plan.rewardRisk)} | quantity=${fmt(decision.quantity)} | risk=${fmt(decision.riskAmount)} (${fmt(decision.riskPercent)}%) | margin=${fmt(decision.marginRequired)} | ${decision.reason}")
+        submitS006Batch(account, saved, symbol, side, decision.quantity, stop, takeProfit, tick, snapshot, onStatus, "S006|$symbol|$side|${fmt(stop)}|${fmt(takeProfit)}|dynamic-zone-target")
     }
     private suspend fun execute005(account: MetaAccount, saved: SavedConnection, symbol: String, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
         val plan = strategy005.refresh(account, saved.metaApiToken, symbol, history[symbol]?.toList().orEmpty()).getOrElse {
@@ -394,7 +408,7 @@ class TradingEngine(
         val riskPct = if (minOf(snapshot.balance, snapshot.equity) > 0.0) actualRisk / minOf(snapshot.balance, snapshot.equity) * 100.0 else 0.0
         onStatus("S006 | BATCH EXECUTION | entries=$slots | perPosition=${fmt(perPosition)} | totalRisk=${fmt(actualRisk)} (${fmt(riskPct)}%)")
         val receipts = coroutineScope {
-            (0 until slots).map { async(Dispatchers.IO) { meta.marketOrder(saved.metaApiToken, account, side, symbol, perPosition, stopLoss = stop, takeProfit = target) } }.mapIndexed { index, deferred ->
+            (0 until slots).map { async(Dispatchers.IO) { meta.marketOrder(saved.metaApiToken, account, side, symbol, perPosition, stopLoss = stop, takeProfit = null) } }.mapIndexed { index, deferred ->
                 val result = deferred.await()
                 result.onSuccess { r -> onStatus("S006 | BATCH ORDER ${index + 1}/$slots ACK | ${r.orderId.ifBlank { r.positionId }}") }.onFailure { onStatus("S006 | BATCH ORDER ${index + 1}/$slots FAILED | ${it.message ?: "unknown"}") }
                 result
@@ -414,9 +428,9 @@ class TradingEngine(
                     else openPositions.firstOrNull { positionSide(it) == side && abs(it.volume - perPosition) <= 0.0000001 }
                 if (found != null) {
                     openPositions.remove(found)
-                    var protected = found.stopLoss.isFinite() && found.stopLoss > 0.0 && found.takeProfit.isFinite() && found.takeProfit > 0.0
+                    var protected = found.stopLoss.isFinite() && found.stopLoss > 0.0
                     if (!protected) {
-                        meta.modifyPosition(saved.metaApiToken, account, found.id, stopLoss = stop, takeProfit = target)
+                        meta.modifyPosition(saved.metaApiToken, account, found.id, stopLoss = stop, takeProfit = null)
                             .onSuccess { protected = true }
                             .onFailure { onStatus("S006 | PROTECTION REPAIR FAILED | position=${found.id} | ${it.message ?: "unknown"}") }
                     }

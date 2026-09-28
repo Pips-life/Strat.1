@@ -316,7 +316,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                     fontSize = 9.sp
                                 )
                             }
-                            Text("ATM IV strike is ignored • confluence buffer 200 points (±100) • M5 confirmation required.", color = Muted, fontSize = 8.sp)
+                            Text("ATM IV strike is ignored • confluence buffer 1000 points (±500) • highest Volatility + Greeks strike drives entry.", color = Muted, fontSize = 8.sp)
                         }
                     }
                     }
@@ -347,7 +347,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
         Text("GREEKS STRIKES", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("Parsed volatility / Greeks rows used for 200-point confluence matching (±100 points).", color = Muted, fontSize = 8.sp)
+        Text("Parsed volatility / Greeks rows used for 1000-point confluence matching (±500 points).", color = Muted, fontSize = 8.sp)
         if (rows.isEmpty()) {
             Text("FILE READ — 0 USABLE GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
