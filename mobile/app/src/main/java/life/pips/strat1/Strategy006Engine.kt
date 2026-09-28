@@ -175,7 +175,7 @@ class Strategy006Engine {
             spot = xauSpotPrice,
             basis = basis,
             zones = mapZonesToXau(base.zones, basis.basis),
-            warnings = base.warnings + "Signed basis = GC price - live XAUUSD price = " + basis.basis + "."
+            warnings = base.warnings + listOf<String>("Signed basis = GC price - live XAUUSD price = " + basis.basis + ".")
         )
         current = mapped
         lastPrice = Double.NaN
