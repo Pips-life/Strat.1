@@ -258,8 +258,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
                         if (m?.valid == true && chartPrice != null) {
                             Text("I.V MAP • ACTUAL MAPPED VALUES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            S006ZoneTable(m.zones)
-                            S006ZoneMap(m.zones, chartPrice, zoneStatus, s006PriceHistory)
+                            S006PolishedZones(m.zones, chartPrice, zoneStatus)
                             CardBlock {
                                 Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 Text(
@@ -339,7 +338,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 }
 
 @Composable
-private fun S006ZoneTable(z: Strategy006Engine.Zones) {
+fun S006PolishedZones(z: Strategy006Engine.Zones, livePrice: Double?, status: Strategy006Engine.ZoneStatus?) {
     val rows = listOf(
         "Upper Inventory Ceiling" to z.upperInventoryCeiling,
         "Reclaim Gate" to z.reclaimGate,
@@ -351,122 +350,76 @@ private fun S006ZoneTable(z: Strategy006Engine.Zones) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Panel),
         modifier = Modifier.fillMaxWidth(),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
     ) {
         Column(Modifier.fillMaxWidth()) {
             Row(
-                Modifier.fillMaxWidth().background(Color(0xFF10283B)).padding(vertical = 7.dp, horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                Modifier.fillMaxWidth().background(Color(0xFF10283B)).padding(vertical = 8.dp, horizontal = 9.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
             ) {
-                Text("I.V MAP ZONE", color = Cyan, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1.7f))
-                Text("PRICE", color = Cyan, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+                Column(Modifier.weight(1f)) {
+                    Text("I.V ZONES + PRICE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    Text("POLISHED LIVE CONFLUENCE ZONES", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    livePrice?.let { String.format("%.2f", it) } ?: "—",
+                    color = Green, fontSize = 16.sp, fontWeight = FontWeight.Black
+                )
             }
             rows.forEachIndexed { index, (name, price) ->
+                val active = status?.likelyZoneName == name
+                val reacted = status?.reactedZoneName == name
                 Row(
                     Modifier.fillMaxWidth()
-                        .background(if (index % 2 == 0) Color.White.copy(alpha = .025f) else Color.Transparent)
-                        .padding(vertical = 7.dp, horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp)
+                        .background(
+                            when {
+                                active -> Cyan.copy(alpha = .10f)
+                                reacted -> Green.copy(alpha = .08f)
+                                index % 2 == 0 -> Color.White.copy(alpha = .025f)
+                                else -> Color.Transparent
+                            }
+                        )
+                        .padding(vertical = 7.dp, horizontal = 9.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                 ) {
-                    Text(name, color = TextMain, fontSize = 10.sp, modifier = Modifier.weight(1.7f))
+                    Text(
+                        if (active) "● " + name else if (reacted) "✓ " + name else name,
+                        color = if (active) Cyan else if (reacted) Green else TextMain,
+                        fontSize = 9.sp, fontWeight = if (active || reacted) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier.weight(1.6f)
+                    )
                     Text(
                         price?.let { String.format("%.2f", it) } ?: "—",
-                        color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f), textAlign = TextAlign.End
+                        color = if (active) Cyan else Green,
+                        fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(.8f),
+                        textAlign = TextAlign.End
                     )
                 }
                 if (index < rows.lastIndex) HorizontalDivider(color = Color.White.copy(alpha = .08f), thickness = 1.dp)
             }
-        }
-    }
-}
-
-@Composable
-private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strategy006Engine.ZoneStatus?, history: List<Pair<Long, Double>>) {
-    val levels = listOfNotNull(
-        z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },
-        z.reclaimGate?.let { "Reclaim Gate" to it },
-        z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },
-        z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },
-        z.dealerAbsorption?.let { "Dealer Absorption" to it },
-        z.liquidityExhaustion?.let { "Liquidity Exhaustion" to it }
-    )
-    val recent = history.takeLast(180).filter { it.second.isFinite() && it.second > 0.0 }
-    val chartPrices = recent.map { it.second } + levels.map { it.second } + spot
-    val minP = chartPrices.minOrNull() ?: spot
-    val reactedEntry = status?.reactedZone
-    val reactedSide = status?.likelySide
-    val plannedTarget = status?.possibleExit
-    val stopBuffer = maxOf(spot * 0.0005, 0.5)
-    val plannedStop = reactedEntry?.let { if (reactedSide == life.pips.strat1.data.TradeSide.BUY) it - stopBuffer else it + stopBuffer }
-    val maxP = chartPrices.maxOrNull() ?: spot
-    val span = (maxP - minP).coerceAtLeast(1.0)
-    CardBlock {
-        Text("S006 LIVE XAUUSD • IV ZONES + PRICE", color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        Box(Modifier.fillMaxWidth().height(380.dp)) {
-            Canvas(Modifier.fillMaxSize()) {
-                val topPad = 18f
-                val bottomPad = 24f
-                val plotHeight = (size.height - topPad - bottomPad).coerceAtLeast(1f)
-                fun y(price: Double): Float = topPad + ((maxP - price) / span).toFloat() * plotHeight
-                val paint = android.graphics.Paint().apply { isAntiAlias = true }
-
-                // Trade visualization only: existing S006 engine remains the source of entry/SL/TP decisions.
-                reactedEntry?.let { entry ->
-                    plannedStop?.let { stop ->
-                        val top = minOf(y(entry), y(stop))
-                        val bottom = maxOf(y(entry), y(stop))
-                        drawRect(Red.copy(alpha = 0.16f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(1f)))
-                    }
-                    plannedTarget?.let { target ->
-                        val top = minOf(y(entry), y(target))
-                        val bottom = maxOf(y(entry), y(target))
-                        drawRect(Green.copy(alpha = 0.10f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(1f)))
-                    }
-                    val profitTop = minOf(y(entry), y(spot))
-                    val profitBottom = maxOf(y(entry), y(spot))
-                    val profitable = if (reactedSide == life.pips.strat1.data.TradeSide.BUY) spot > entry else spot < entry
-                    if (profitable) {
-                        drawRect(Green.copy(alpha = 0.18f), topLeft = Offset(0f, profitTop), size = Size(size.width, (profitBottom - profitTop).coerceAtLeast(1f)))
-                    }
-                }
-
-                levels.distinctBy { it.second }.forEach { (name, price) ->
-                    val yy = y(price)
-                    val highlighted = name == status?.likelyZoneName
-                    val reacted = name == status?.reactedZoneName
-                    val lineColor = when { highlighted -> Cyan; reacted -> Green; name.contains("Wall") || name.contains("Ceiling") -> Red; else -> Muted }
-                    drawLine(lineColor, Offset(0f, yy), Offset(size.width, yy), if (highlighted || reacted) 3.5f else 1.5f)
-                    paint.color = lineColor.toArgb()
-                    paint.textSize = if (highlighted || reacted) 22f else 18f
-                    drawContext.canvas.nativeCanvas.drawText(name, 8f, (yy - 6f).coerceAtLeast(16f), paint)
-                    val priceText = String.format("%.2f", price)
-                    val priceWidth = paint.measureText(priceText)
-                    drawContext.canvas.nativeCanvas.drawText(priceText, size.width - priceWidth - 8f, (yy - 6f).coerceAtLeast(16f), paint)
-                }
-                if (recent.size >= 2) {
-                    val minT = recent.first().first.toDouble()
-                    val maxT = recent.last().first.toDouble().coerceAtLeast(minT + 1.0)
-                    val path = androidx.compose.ui.graphics.Path()
-                    recent.forEachIndexed { index, point ->
-                        val x = ((point.first - minT) / (maxT - minT)).toFloat() * size.width
-                        val yy = y(point.second)
-                        if (index == 0) path.moveTo(x, yy) else path.lineTo(x, yy)
-                    }
-                    val trailColor = if (reactedEntry != null) Green else Color(0xFFFFC247)
-                    drawPath(path, color = trailColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
-                }
-                val liveY = y(spot)
-                drawLine(Green, Offset(0f, liveY), Offset(size.width, liveY), 3f)
-                paint.color = android.graphics.Color.WHITE
-                paint.textSize = 23f
-                drawContext.canvas.nativeCanvas.drawText("LIVE " + String.format("%.2f", spot), 8f, (liveY - 7f).coerceAtLeast(16f), paint)
-                paint.color = Muted.toArgb()
-                paint.textSize = 16f
-                drawContext.canvas.nativeCanvas.drawText("1s ticks • last " + recent.size + " points", 8f, size.height - 5f, paint)
+            Row(
+                Modifier.fillMaxWidth().padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("LIVE", color = Muted, fontSize = 7.sp)
+                Text(
+                    status?.likelyZoneName ?: "NO ACTIVE ZONE",
+                    color = status?.likelySide?.let {
+                        when (it) {
+                            life.pips.strat1.data.TradeSide.BUY -> Green
+                            life.pips.strat1.data.TradeSide.SELL -> Red
+                            else -> Muted
+                        }
+                    } ?: Muted,
+                    fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
+                )
+                Text(
+                    status?.likelySide?.name ?: "WAIT",
+                    color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold
+                )
             }
         }
-        Text("Amber = live approach • Green = confirmed entry/trail • Red shade = SL risk • Faded green = planned TP • Bright green = current profit", color = Muted, fontSize = 8.sp)
     }
 }
 
