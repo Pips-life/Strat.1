@@ -566,6 +566,32 @@ class Strategy006Engine {
         val all = if (htmlRows.size >= 2) htmlRows else csvRows
         if (all.isEmpty()) return emptyList()
         val header = all.first().map { normalize(it) }
+
+        // Barchart/Volatility side-by-side layout:
+        // PUT DELTA | PUT PRICE | STRIKE | CALL PRICE | CALL DELTA | IMP VOL
+        // The extractor intentionally preserves this layout. Do not treat it as a
+        // generic one-row option table, otherwise the paired deltas/IV are lost.
+        val sideBySide = header.indexOfFirst { it.contains("put delta") } >= 0 &&
+            header.indexOfFirst { it == "strike" || it.contains("strike price") } >= 0 &&
+            header.indexOfFirst { it.contains("call delta") } >= 0 &&
+            header.indexOfFirst { it.contains("imp vol") || it.contains("implied volatility") } >= 0
+        if (sideBySide) {
+            val putDeltaIdx = header.indexOfFirst { it.contains("put delta") }
+            val strikeIdx = header.indexOfFirst { it == "strike" || it.contains("strike price") }
+            val callDeltaIdx = header.indexOfFirst { it.contains("call delta") }
+            val ivIdx = header.indexOfFirst { it.contains("imp vol") || it.contains("implied volatility") }
+            val parsed = mutableListOf<Row>()
+            for (cells in all.drop(1)) {
+                val strike = num(cells.getOrNull(strikeIdx)) ?: continue
+                val putDelta = num(cells.getOrNull(putDeltaIdx)) ?: 0.0
+                val callDelta = num(cells.getOrNull(callDeltaIdx)) ?: 0.0
+                val iv = num(cells.getOrNull(ivIdx)) ?: 0.0
+                parsed += Row(strike, 'P', delta = putDelta, iv = iv, source = "greeks")
+                parsed += Row(strike, 'C', delta = callDelta, iv = iv, source = "greeks")
+            }
+            if (parsed.isNotEmpty()) return parsed
+        }
+
         fun idx(vararg names: String): Int = names.firstNotNullOfOrNull { n ->
             header.indexOfFirst { it == normalize(n) || it.contains(normalize(n)) }.takeIf { it >= 0 }
         } ?: -1
