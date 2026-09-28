@@ -316,7 +316,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                     fontSize = 9.sp
                                 )
                             }
-                            Text("ATM IV strike is ignored • confluence buffer 5.00 points • M5 confirmation required.", color = Muted, fontSize = 8.sp)
+                            Text("ATM IV strike is ignored • confluence buffer 200 points (±100) • M5 confirmation required.", color = Muted, fontSize = 8.sp)
                         }
                     }
                     }
@@ -347,7 +347,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
         Text("GREEKS STRIKES", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("Parsed volatility / Greeks rows used for ±5 point confluence matching.", color = Muted, fontSize = 8.sp)
+        Text("Parsed volatility / Greeks rows used for 200-point confluence matching (±100 points).", color = Muted, fontSize = 8.sp)
         if (rows.isEmpty()) {
             Text("FILE READ — 0 USABLE GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
@@ -364,7 +364,7 @@ private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>
                 Text("MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.4f))
             }
             rows.forEach { row ->
-                val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - row.strike) <= 5.0 }.minByOrNull { abs((it.matchedStrike ?: row.strike) - row.strike) }
+                val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - row.strike) <= Strategy006Engine.STRIKE_BUFFER }.minByOrNull { abs((it.matchedStrike ?: row.strike) - row.strike) }
                 Row(Modifier.fillMaxWidth().background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
                     Text(row.type.toString(), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(0.7f))
