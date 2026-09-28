@@ -102,6 +102,64 @@ object Strategy006FileExtractor {
      * and the side-by-side form by using the order of numeric fields.
      */
     private fun normalizeOcr(raw: String): String {
+        /*
+         * Barchart side-by-side screenshot layout:
+         * PUT Δ | PUT PRICE | STRIKE | CALL PRICE | CALL Δ | IMP VOL
+         *
+         * OCR often collapses the whole table into one line. Do not treat that
+         * as one row. Reconstruct rows from the numeric sequence and validate
+         * the six-field schema before emitting CSV.
+         */
+        val spotMatch = Regex("""(?i)\\bspot\\s*(?:price)?\\s*[:=\\-]?\\s*([0-9]+(?:\\.[0-9]+)?)\\b""").find(raw)
+        val tablePart = spotMatch?.let { raw.substring(0, it.range.first) } ?: raw
+        val numeric = Regex("""(?<![A-Za-z])[-+]?\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?%?""")
+            .findAll(tablePart)
+            .map { it.value.replace(",", "").replace("%", "") }
+            .toList()
+
+        fun validWindow(values: List<Double>): Boolean {
+            if (values.size != 6) return false
+            val putDelta = values[0]
+            val putPrice = values[1]
+            val strike = values[2]
+            val callPrice = values[3]
+            val callDelta = values[4]
+            val iv = values[5]
+            return putDelta in -1.2..0.05 &&
+                putPrice >= 0.0 &&
+                strike >= 1000.0 &&
+                callPrice >= 0.0 &&
+                callDelta in -0.05..1.2 &&
+                iv in 0.0..100.0
+        }
+
+        val sideBySideRows = mutableListOf<String>()
+        var i = 0
+        while (i + 6 <= numeric.size) {
+            val values = numeric.subList(i, i + 6).mapNotNull { it.toDoubleOrNull() }
+            if (values.size == 6 && validWindow(values)) {
+                val pd = values[0]
+                val pp = values[1]
+                val strike = values[2]
+                val cp = values[3]
+                val cd = values[4]
+                val iv = values[5]
+                sideBySideRows += "$pd,$pp,$strike,$cp,$cd,$iv"
+                i += 6
+            } else {
+                i += 1
+            }
+        }
+
+        if (sideBySideRows.isNotEmpty()) {
+            return buildString {
+                appendLine("put delta,put price,strike,call price,call delta,imp vol")
+                sideBySideRows.distinct().forEach { appendLine(it) }
+                spotMatch?.groupValues?.getOrNull(1)?.let { appendLine("spot,$it") }
+            }
+        }
+
+        // Fallback for stacked Call/Put OCR layouts.
         val lines = raw.lineSequence()
             .map { it.replace('|', ' ').replace('—', '-').replace('–', '-') }
             .map { it.replace(Regex("\\s+"), " ").trim() }
@@ -123,26 +181,19 @@ object Strategy006FileExtractor {
                 }.toList()
 
             if (nums.isEmpty()) continue
-
-            // Strike is normally the first substantial price-like number in an OCR row.
-            // For gold futures, strike values are much larger than option premiums.
             val strike = nums.firstOrNull { it >= 100.0 } ?: continue
-            val afterStrike = nums.dropWhile { abs(it - strike) > 1e-9 }.drop(1)
-            val integerish = afterStrike.filter { abs(it - kotlin.math.round(it)) < 1e-6 && it >= 0.0 }
+            val afterStrike = nums.dropWhile { kotlin.math.abs(it - strike) > 1e-9 }.drop(1)
+            val integerish = afterStrike.filter { kotlin.math.abs(it - kotlin.math.round(it)) < 1e-6 && it >= 0.0 }
             val oi = integerish.maxOrNull() ?: afterStrike.maxOrNull() ?: 0.0
-            val volume = if (afterStrike.size >= 2) {
-                afterStrike.filter { it != oi }.maxOrNull() ?: 0.0
-            } else 0.0
-
+            val volume = if (afterStrike.size >= 2) afterStrike.filter { it != oi }.maxOrNull() ?: 0.0 else 0.0
             rows += "$strike,$type,$volume,$oi"
         }
 
         if (rows.isEmpty()) return ""
-
-        // Deduplicate exact OCR repeats from PDF pages / repeated headers.
         return buildString {
             appendLine("strike,type,volume,open interest")
             rows.distinct().forEach { appendLine(it) }
+            spotMatch?.groupValues?.getOrNull(1)?.let { appendLine("spot,$it") }
         }
     }
 }
