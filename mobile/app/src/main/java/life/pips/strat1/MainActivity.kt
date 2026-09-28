@@ -93,17 +93,19 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     var localStatus by remember(status) { mutableStateOf(status) }
     var key by remember(saved.flashAlphaKey) { mutableStateOf(saved.flashAlphaKey) }; var symbol by remember(flashSymbol) { mutableStateOf(flashSymbol) }
     val s006Prefs = remember { context.getSharedPreferences("strategy006_files", android.content.Context.MODE_PRIVATE) }
-    var barchartName by remember { mutableStateOf("No Barchart file selected") }
-    var greeksName by remember { mutableStateOf("No Greeks CSV selected") }
+    var barchartName by remember { mutableStateOf("No IV options file selected") }
+    var greeksName by remember { mutableStateOf("No Volatility / Greeks file selected") }
     var barchartText by remember { mutableStateOf("") }
     var greeksText by remember { mutableStateOf("") }
+    var gcPriceText by remember { mutableStateOf("") }
     val s006Today = remember { LocalDate.now(ZoneId.of("Africa/Nairobi")).toString() }
     LaunchedEffect(Unit) {
         if (s006Prefs.getString("date", "") == s006Today) {
             barchartText = s006Prefs.getString("barchart_text", "").orEmpty()
             greeksText = s006Prefs.getString("greeks_text", "").orEmpty()
-            barchartName = s006Prefs.getString("barchart_name", "Cached Barchart options file").orEmpty()
-            greeksName = s006Prefs.getString("greeks_name", "Cached Greeks / volatility CSV").orEmpty()
+            barchartName = s006Prefs.getString("barchart_name", "Cached IV options table").orEmpty()
+            greeksName = s006Prefs.getString("greeks_name", "Cached Volatility / Greeks table").orEmpty()
+            gcPriceText = s006Prefs.getString("gc_price", "").orEmpty()
         } else {
             s006Prefs.edit().clear().apply()
         }
@@ -145,17 +147,31 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                 item {
                     var showAdvanced by remember { mutableStateOf(false) }
                     CardBlock {
-                        Text("STRATEGY 006 • OPTIONS FLOW", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black)
-                        Text("Daily options map • live XAUUSD reaction", color = Muted, fontSize = 10.sp)
+                        Text("STRATEGY 006 • IV ZONES + VOLATILITY / GREEKS", color = Cyan, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                        Text("IV strikes → signed GC/XAUUSD basis → six mapped zones → strongest confluence → M5 reaction → opposite-confluence target.", color = Muted, fontSize = 10.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD FILE 1") }
-                            Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.weight(1f)) { Text("LOAD GREEKS") }
+                            Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
+                            Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.weight(1f)) { Text("LOAD VOL/GREEKS") }
                         }
-                        Text("File 1: "+barchartName, color = Muted, fontSize = 8.sp)
-                        Text("Greeks: "+greeksName, color = Muted, fontSize = 8.sp)
-                        Button(enabled = barchartText.isNotBlank() && greeksText.isNotBlank(), onClick = {
-                            optionsFlow.loadFiles(barchartText, greeksText, snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 })
-                        }, modifier = Modifier.fillMaxWidth()) { Text("BUILD OPTIONS FLOW MAP") }
+                        Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
+                        Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
+                        Field("GC futures price", gcPriceText, { gcPriceText = it })
+                        Button(
+                            enabled = barchartText.isNotBlank() && greeksText.isNotBlank() &&
+                                gcPriceText.toDoubleOrNull()?.let { it > 0.0 } == true,
+                            onClick = {
+                                val gc = gcPriceText.toDoubleOrNull()
+                                val live = snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 }
+                                if (gc != null && live != null && live > 0.0) {
+                                    s006Prefs.edit().putString("date", s006Today).putString("gc_price", gcPriceText).apply()
+                                    optionsFlow.loadFiles(barchartText, greeksText, gc, live)
+                                    localStatus = "S006 | IV ZONES BUILT • basis=" + String.format("%.2f", gc - live)
+                                } else {
+                                    localStatus = "S006 | WAITING FOR LIVE XAUUSD TICK"
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("BUILD S006 IV ZONE MAP") }
 
                         val m = optionsFlow.currentMap()
                         val livePrice = snapshot?.prices?.get(tradeSymbol)?.let { (it.bid + it.ask) / 2.0 }
@@ -163,9 +179,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         val zoneStatus = livePrice?.let { optionsFlow.zoneStatus(it) }
 
                         Text(
-                            "QOF " + (m?.qof?.let { String.format("%.1f", it) } ?: "—") +
-                                " • " + (m?.bias ?: "WAITING") +
-                                " • XAUUSD " + (livePrice?.let { String.format("%.2f", it) } ?: "—"),
+                            "BASIS " + (m?.basis?.basis?.let { String.format("%.2f", it) } ?: "—") +
+                                " • LIVE XAUUSD " + (livePrice?.let { String.format("%.2f", it) } ?: "—"),
                             color = if (m?.valid == true) Green else Muted,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -187,41 +202,49 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Black
                                 )
+                                val activeConfluence = m.zones.confluence
+                                    .minByOrNull { abs(it.zone - (zoneStatus?.likelyZone ?: chartPrice)) }
                                 Text(
-                                    "Confirmed: " + (zoneStatus?.reactedZoneName ?: "none") +
-                                        (zoneStatus?.reactedZone?.let { " @ " + String.format("%.2f", it) } ?: ""),
+                                    "Confluence: " + (activeConfluence?.score?.let { String.format("%.1f", it) } ?: "—") +
+                                        " • Greeks strike " + (activeConfluence?.matchedStrike?.let { String.format("%.2f", it) } ?: "—"),
                                     color = Green,
                                     fontSize = 9.sp
                                 )
                                 Text(
-                                    "Possible exit: " + (zoneStatus?.possibleExitName ?: "—") +
+                                    "M5 reaction: " + (zoneStatus?.reactedZoneName ?: "waiting"),
+                                    color = Muted,
+                                    fontSize = 9.sp
+                                )
+                                Text(
+                                    "Opposite target: " + (zoneStatus?.possibleExitName ?: "—") +
                                         (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""),
                                     color = Muted,
                                     fontSize = 9.sp
                                 )
                             }
                         } else {
-                            Text("Load both files and build the map to activate live mapped-zone tracking.", color = Muted, fontSize = 9.sp)
+                            Text("Load the IV options table, Volatility / Greeks table, enter GC futures price, then build the map.", color = Muted, fontSize = 9.sp)
                         }
 
                         TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (showAdvanced) "HIDE ADVANCED DATA ▲" else "SHOW ADVANCED DATA ▼", fontSize = 9.sp)
+                            Text(if (showAdvanced) "HIDE S006 DATA ▲" else "SHOW S006 DATA ▼", fontSize = 9.sp)
                         }
                         if (showAdvanced) {
-                            Text("MAPPED ZONES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            m?.zones?.let { z ->
-                                Text("Upper Ceiling " + (z.upperInventoryCeiling?.let { String.format("%.2f", it) } ?: "—") + " • Reclaim " + (z.reclaimGate?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                                Text("Immediate Wall " + (z.immediateHedgeWall?.let { String.format("%.2f", it) } ?: "—") + " • Primary Floor " + (z.primaryHedgeFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                                Text("Call Wall " + (z.callWall?.let { String.format("%.2f", it) } ?: "—") + " • Put Wall " + (z.putWall?.let { String.format("%.2f", it) } ?: "—") + " • Gamma Flip " + (z.gammaFlip?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
-                                Text("Positive GEX " + (z.positiveGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—") + " • Negative GEX " + (z.negativeGexRegion?.let { String.format("%.2f → %.2f", it.first, it.second) } ?: "—"), color = Muted, fontSize = 9.sp)
-                                Text("Absorption " + (z.dealerAbsorptionShelf?.let { String.format("%.2f", it) } ?: "—") + " • Exhaustion " + (z.liquidityExhaustionFloor?.let { String.format("%.2f", it) } ?: "—"), color = Muted, fontSize = 9.sp)
+                            Text("SIX POLISHED IV ZONES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            m?.zones?.confluence?.sortedBy { it.zone }?.forEach { item ->
+                                Text(
+                                    item.zoneName + "  " + String.format("%.2f", item.zone) +
+                                        " • CONFLUENCE " + String.format("%.1f", item.score) +
+                                        " • MATCH " + (item.matchedStrike?.let { String.format("%.2f", it) } ?: "—"),
+                                    color = if (item.score >= 70.0) Green else Muted,
+                                    fontSize = 9.sp
+                                )
                             }
-                            Text("FILES • cached for the Nairobi trading day", color = Muted, fontSize = 8.sp)
-                            Text("M5 confirmation • completed candle must reject a mapped zone • risk cap 10%", color = Muted, fontSize = 8.sp)
+                            Text("ATM IV strike is ignored • confluence buffer 5.00 points • M5 confirmation required.", color = Muted, fontSize = 8.sp)
                         }
                     }
                 }
-                item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START OPTIONS FLOW") } }
+                item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START IV ZONE ENGINE") } }
                 if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
             }
         }
@@ -236,28 +259,22 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
         z.reclaimGate?.let { "Reclaim Gate" to it },
         z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },
         z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },
-        z.callWall?.let { "Call Wall" to it },
-        z.putWall?.let { "Put Wall" to it },
-        z.gammaFlip?.let { "Gamma Flip" to it },
-        z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },
-        z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it }
+        z.dealerAbsorption?.let { "Dealer Absorption" to it },
+        z.liquidityExhaustion?.let { "Liquidity Exhaustion" to it }
     )
     val recent = history.takeLast(180).filter { it.second.isFinite() && it.second > 0.0 }
-    val regionLevels = listOfNotNull(z.positiveGexRegion, z.negativeGexRegion).flatMap { listOf(it.first, it.second) }
-    val chartPrices = recent.map { it.second } + levels.map { it.second } + regionLevels + spot
+    val chartPrices = recent.map { it.second } + levels.map { it.second } + spot
     val minP = chartPrices.minOrNull() ?: spot
     val maxP = chartPrices.maxOrNull() ?: spot
     val span = (maxP - minP).coerceAtLeast(1.0)
     CardBlock {
-        Text("S006 LIVE XAUUSD • ZONES + PRICE", color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text("S006 LIVE XAUUSD • IV ZONES + PRICE", color = TextMain, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         Box(Modifier.fillMaxWidth().height(380.dp)) {
             Canvas(Modifier.fillMaxSize()) {
                 val topPad = 18f
                 val bottomPad = 24f
                 val plotHeight = (size.height - topPad - bottomPad).coerceAtLeast(1f)
                 fun y(price: Double): Float = topPad + ((maxP - price) / span).toFloat() * plotHeight
-                z.positiveGexRegion?.let { val top = y(maxOf(it.first, it.second)); val bottom = y(minOf(it.first, it.second)); drawRect(Cyan.copy(alpha = 0.07f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
-                z.negativeGexRegion?.let { val top = y(maxOf(it.first, it.second)); val bottom = y(minOf(it.first, it.second)); drawRect(Red.copy(alpha = 0.07f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(2f))) }
                 val paint = android.graphics.Paint().apply { isAntiAlias = true }
                 levels.distinctBy { it.second }.forEach { (name, price) ->
                     val yy = y(price)
@@ -268,7 +285,6 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                     paint.color = lineColor.toArgb()
                     paint.textSize = if (highlighted || reacted) 22f else 18f
                     drawContext.canvas.nativeCanvas.drawText(name, 8f, (yy - 6f).coerceAtLeast(16f), paint)
-                    paint.textSize = if (highlighted || reacted) 22f else 18f
                     val priceText = String.format("%.2f", price)
                     val priceWidth = paint.measureText(priceText)
                     drawContext.canvas.nativeCanvas.drawText(priceText, size.width - priceWidth - 8f, (yy - 6f).coerceAtLeast(16f), paint)
@@ -277,7 +293,11 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                     val minT = recent.first().first.toDouble()
                     val maxT = recent.last().first.toDouble().coerceAtLeast(minT + 1.0)
                     val path = androidx.compose.ui.graphics.Path()
-                    recent.forEachIndexed { index, point -> val x = ((point.first - minT) / (maxT - minT)).toFloat() * size.width; val yy = y(point.second); if (index == 0) path.moveTo(x, yy) else path.lineTo(x, yy) }
+                    recent.forEachIndexed { index, point ->
+                        val x = ((point.first - minT) / (maxT - minT)).toFloat() * size.width
+                        val yy = y(point.second)
+                        if (index == 0) path.moveTo(x, yy) else path.lineTo(x, yy)
+                    }
                     drawPath(path, color = Cyan, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
                 }
                 val liveY = y(spot)
@@ -290,7 +310,7 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                 drawContext.canvas.nativeCanvas.drawText("1s ticks • last " + recent.size + " points", 8f, size.height - 5f, paint)
             }
         }
-        Text("Live line = MetaApi XAUUSD mid-price • Cyan = next reaction • Green = confirmed reaction • shaded bands = GEX regions", color = Muted, fontSize = 8.sp)
+        Text("Live line = MetaApi XAUUSD mid-price • Cyan = active reaction zone • Green = confirmed M5 reaction", color = Muted, fontSize = 8.sp)
     }
 }
 
