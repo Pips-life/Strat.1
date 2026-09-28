@@ -82,21 +82,26 @@ fun HomeDashboard(
                 Text(if (tick != null) "BID " + fmt(tick.bid, 2) + "  ASK " + fmt(tick.ask, 2) + "  SPREAD " + fmt(tick.ask - tick.bid, 2) else "WAITING FOR MT5 PRICE", color = if (tick != null) Green else Muted, fontSize = 8.sp)
             }
         }
-        item {
-            EqualPanel {
-                Text(strategyLabel(strategy) + " • ENGINE ACTIVITY", color = Text, fontSize = 15.sp, fontWeight = FontWeight.Black)
-                when (strategy) {
-                    TradingEngine.StrategyId.STRATEGY_001 -> { Text("GEX / QOF • " + (flash?.flowDirection?.uppercase() ?: "WAITING"), color = Green, fontSize = 10.sp); Text("Entry " + (view?.entry?.let { fmt(it, 2) } ?: "—") + " • Exit " + (view?.exit?.let { fmt(it, 2) } ?: "—") + " • SL " + (view?.stop?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp) }
-                    TradingEngine.StrategyId.STRATEGY_002 -> { Text("TICK VELOCITY • " + (s002.side?.name ?: "WAIT") + " • " + fmt(s002.velocity, 4), color = Green, fontSize = 10.sp); Text("Entry " + (s002.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s002.stop?.let { fmt(it, 2) } ?: "—") + " • " + s002.reason, color = Muted, fontSize = 9.sp) }
-                    TradingEngine.StrategyId.STRATEGY_003 -> { Text("HTF " + s003.h1Bias.name + " • 15M " + s003.m15Bias.name + " • 5M " + s003.m5Bias.name + " • 1M " + s003.m1Bias.name, color = Green, fontSize = 10.sp); Text(s003.bos + " • " + s003.liquidity + " • " + s003.fvg + " • " + s003.orderBlock, color = Text, fontSize = 9.sp); Text("Entry " + (s003.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s003.stop?.let { fmt(it, 2) } ?: "—") + " • " + s003.confidence + "%", color = Muted, fontSize = 9.sp) }
-                    TradingEngine.StrategyId.STRATEGY_004 -> { Text("15M " + s004.contextBias.name + " • 5M " + s004.setupState.name + " • " + s004.bos, color = Green, fontSize = 10.sp); Text(s004.sweptLiquidity + " • " + s004.targetLiquidity, color = Text, fontSize = 9.sp); Text("Entry " + (s004.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s004.stop?.let { fmt(it, 2) } ?: "—") + " • TP " + (s004.target?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 9.sp) }
-                    TradingEngine.StrategyId.STRATEGY_005 -> { val l = s005.levels; Text("4H WOODIE • PP " + (l?.pp?.let { fmt(it, 2) } ?: "—") + " • R1 " + (l?.r1?.let { fmt(it, 2) } ?: "—") + " • S1 " + (l?.s1?.let { fmt(it, 2) } ?: "—"), color = Green, fontSize = 10.sp); Text("Trigger " + s005.trigger.ifBlank { "WAIT" } + " • Entry " + (s005.entry?.let { fmt(it, 2) } ?: "—") + " • PP exit " + (s005.target?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp); Text("SL " + (s005.stop?.let { fmt(it, 2) } ?: "—") + " • RR " + fmt(s005.rewardRisk, 2), color = Muted, fontSize = 9.sp) }
-                    TradingEngine.StrategyId.STRATEGY_006 -> { val z = s006?.zones; val strongest = z?.confluence?.maxByOrNull { it.score }; Text("IV CONFLUENCE " + (strongest?.score?.let { fmt(it, 1) } ?: "—") + " • " + (strongest?.zoneName ?: "NO MAP"), color = Green, fontSize = 10.sp); Text("PHF " + (z?.primaryHedgeFloor?.let { fmt(it, 2) } ?: "—") + " • Absorption " + (z?.dealerAbsorption?.let { fmt(it, 2) } ?: "—") + " • Exhaustion " + (z?.liquidityExhaustion?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp); Text("Upper " + (z?.upperInventoryCeiling?.let { fmt(it, 2) } ?: "—") + " • Reclaim " + (z?.reclaimGate?.let { fmt(it, 2) } ?: "—") + " • IHW " + (z?.immediateHedgeWall?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 9.sp); Text("Batch positions " + (snapshot?.positions?.size ?: 0) + " • 10% combined risk • M5-confirmed opposite-confluence target", color = Muted, fontSize = 9.sp) }
+        if (strategy != TradingEngine.StrategyId.STRATEGY_006) {
+            item {
+                EqualPanel {
+                    Text(strategyLabel(strategy) + " • ENGINE ACTIVITY", color = Text, fontSize = 15.sp, fontWeight = FontWeight.Black)
+                    when (strategy) {
+                        TradingEngine.StrategyId.STRATEGY_001 -> { Text("GEX / QOF • " + (flash?.flowDirection?.uppercase() ?: "WAITING"), color = Green, fontSize = 10.sp); Text("Entry " + (view?.entry?.let { fmt(it, 2) } ?: "—") + " • Exit " + (view?.exit?.let { fmt(it, 2) } ?: "—") + " • SL " + (view?.stop?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp) }
+                        TradingEngine.StrategyId.STRATEGY_002 -> { Text("TICK VELOCITY • " + (s002.side?.name ?: "WAIT") + " • " + fmt(s002.velocity, 4), color = Green, fontSize = 10.sp); Text("Entry " + (s002.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s002.stop?.let { fmt(it, 2) } ?: "—") + " • " + s002.reason, color = Muted, fontSize = 9.sp) }
+                        TradingEngine.StrategyId.STRATEGY_003 -> { Text("HTF " + s003.h1Bias.name + " • 15M " + s003.m15Bias.name + " • 5M " + s003.m5Bias.name + " • 1M " + s003.m1Bias.name, color = Green, fontSize = 10.sp); Text(s003.bos + " • " + s003.liquidity + " • " + s003.fvg + " • " + s003.orderBlock, color = Text, fontSize = 9.sp); Text("Entry " + (s003.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s003.stop?.let { fmt(it, 2) } ?: "—") + " • " + s003.confidence + "%", color = Muted, fontSize = 9.sp) }
+                        TradingEngine.StrategyId.STRATEGY_004 -> { Text("15M " + s004.contextBias.name + " • 5M " + s004.setupState.name + " • " + s004.bos, color = Green, fontSize = 10.sp); Text(s004.sweptLiquidity + " • " + s004.targetLiquidity, color = Text, fontSize = 9.sp); Text("Entry " + (s004.entry?.let { fmt(it, 2) } ?: "—") + " • SL " + (s004.stop?.let { fmt(it, 2) } ?: "—") + " • TP " + (s004.target?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 9.sp) }
+                        TradingEngine.StrategyId.STRATEGY_005 -> { val l = s005.levels; Text("4H WOODIE • PP " + (l?.pp?.let { fmt(it, 2) } ?: "—") + " • R1 " + (l?.r1?.let { fmt(it, 2) } ?: "—") + " • S1 " + (l?.s1?.let { fmt(it, 2) } ?: "—"), color = Green, fontSize = 10.sp); Text("Trigger " + s005.trigger.ifBlank { "WAIT" } + " • Entry " + (s005.entry?.let { fmt(it, 2) } ?: "—") + " • PP exit " + (s005.target?.let { fmt(it, 2) } ?: "—"), color = Text, fontSize = 9.sp); Text("SL " + (s005.stop?.let { fmt(it, 2) } ?: "—") + " • RR " + fmt(s005.rewardRisk, 2), color = Muted, fontSize = 9.sp) }
+                        TradingEngine.StrategyId.STRATEGY_006 -> Unit
+                    }
                 }
             }
         }
         if (strategy == TradingEngine.StrategyId.STRATEGY_006 && s006?.valid == true) {
-            item { S006HomeZoneTable(s006.zones, s006.spot) }
+            item {
+                val live = price ?: s006.spot ?: return@item
+                S006PolishedZones(s006.zones, live, engine.strategy006.zoneStatus(live))
+            }
         }
         if (strategy == TradingEngine.StrategyId.STRATEGY_001) {
             item {
@@ -125,36 +130,6 @@ fun HomeDashboard(
                 Text(if (strategy == TradingEngine.StrategyId.STRATEGY_001) "Direct MetaApi / MT5 • FlashAlpha GC=F • $status" else "Direct MetaApi / MT5 • $status", color = Muted, fontSize = 8.sp)
             }
         }
-    }
-}
-
-@Composable
-private fun S006HomeZoneTable(z: Strategy006Engine.Zones, spot: Double?) {
-    val rows = listOf(
-        "Upper Inventory Ceiling" to z.upperInventoryCeiling,
-        "Reclaim Gate" to z.reclaimGate,
-        "Immediate Hedge Wall" to z.immediateHedgeWall,
-        "Primary Hedge Floor" to z.primaryHedgeFloor,
-        "Absorption Floor" to z.dealerAbsorption,
-        "Liquidity Exhaustion" to z.liquidityExhaustion
-    )
-    EqualPanel {
-        Row(Modifier.fillMaxWidth().background(Panel2).padding(vertical = 6.dp, horizontal = 7.dp)) {
-            Text("I.V MAP ZONE", color = Cyan, fontSize = 8.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1.7f))
-            Text("PRICE", color = Cyan, fontSize = 8.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
-        }
-        rows.forEachIndexed { i, (name, value) ->
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(if (i % 2 == 0) Color.White.copy(alpha = .025f) else Color.Transparent)
-                    .padding(vertical = 6.dp, horizontal = 7.dp)
-            ) {
-                Text(name, color = Text, fontSize = 9.sp, modifier = Modifier.weight(1.7f))
-                Text(value?.let { fmt(it, 2) } ?: "—", color = Green, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
-            }
-            if (i < rows.lastIndex) HorizontalDivider(color = Color.White.copy(alpha = .08f), thickness = 1.dp)
-        }
-        Text("IV file Spot / live mapping price: " + (spot?.let { fmt(it, 2) } ?: "—"), color = Muted, fontSize = 8.sp)
     }
 }
 
