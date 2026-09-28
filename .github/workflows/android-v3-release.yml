@@ -27,25 +27,42 @@ jobs:
           packages: platform-tools
           accept-android-sdk-licenses: true
 
+      - name: Restore production signing keystore
+        env:
+          PIPS_LIFE_KEYSTORE_BASE64: ${{ secrets.PIPS_LIFE_KEYSTORE_BASE64 }}
+          PIPS_LIFE_KEYSTORE_PATH: ${{ secrets.PIPS_LIFE_KEYSTORE_PATH }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PIPS_LIFE_KEYSTORE_BASE64" ]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/pips-life-production.keystore"
+            printf '%s' "$PIPS_LIFE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            chmod 600 "$KEYSTORE_PATH"
+            test -s "$KEYSTORE_PATH"
+          else
+            KEYSTORE_PATH="$PIPS_LIFE_KEYSTORE_PATH"
+            test -n "$KEYSTORE_PATH"
+            test -f "$KEYSTORE_PATH"
+          fi
+          echo "PIPS_LIFE_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
       - name: Verify release signing inputs
         env:
-          PIPS_LIFE_KEYSTORE_PATH: ${{ secrets.PIPS_LIFE_KEYSTORE_PATH }}
           PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           test -n "$PIPS_LIFE_KEYSTORE_PATH"
+          test -f "$PIPS_LIFE_KEYSTORE_PATH"
           test -n "$PIPS_LIFE_KEYSTORE_PASSWORD"
           test -n "$PIPS_LIFE_KEY_ALIAS"
           test -n "$PIPS_LIFE_KEY_PASSWORD"
-          test -f "$PIPS_LIFE_KEYSTORE_PATH"
 
       - name: Build release APK
         working-directory: mobile
         env:
           FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
-          PIPS_LIFE_KEYSTORE_PATH: ${{ secrets.PIPS_LIFE_KEYSTORE_PATH }}
+          PIPS_LIFE_KEYSTORE_PATH: ${{ env.PIPS_LIFE_KEYSTORE_PATH }}
           PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
