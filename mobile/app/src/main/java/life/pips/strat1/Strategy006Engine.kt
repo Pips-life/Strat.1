@@ -190,12 +190,12 @@ class Strategy006Engine {
 
     fun loadFiles(ivOptionsText: String, greeksText: String, gcPrice: Double, xauSpotPrice: Double): Map {
         val now = System.currentTimeMillis()
-        return loadFiles(ivOptionsText, greeksText, gcPrice, xauSpotPrice, now, "UTC", "UTC", 0L)
+        return loadFiles(ivOptionsText, greeksText, gcPrice, xauSpotPrice, now, now, "UTC", "UTC", 0L)
     }
 
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
         val now = System.currentTimeMillis()
-        return loadFiles(barchartText, greeksText, spot ?: Double.NaN, spot ?: Double.NaN, now, "UTC", "UTC", 0L)
+        return loadFiles(barchartText, greeksText, spot ?: Double.NaN, spot ?: Double.NaN, now, now, "UTC", "UTC", 0L)
     }
 
     private fun parseIvOptionsTable(text: String): List<Row> {
