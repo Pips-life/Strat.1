@@ -27,6 +27,20 @@ jobs:
           packages: platform-tools
           accept-android-sdk-licenses: true
 
+      - name: Verify release signing inputs
+        env:
+          PIPS_LIFE_KEYSTORE_PATH: ${{ secrets.PIPS_LIFE_KEYSTORE_PATH }}
+          PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$PIPS_LIFE_KEYSTORE_PATH"
+          test -n "$PIPS_LIFE_KEYSTORE_PASSWORD"
+          test -n "$PIPS_LIFE_KEY_ALIAS"
+          test -n "$PIPS_LIFE_KEY_PASSWORD"
+          test -f "$PIPS_LIFE_KEYSTORE_PATH"
+
       - name: Build release APK
         working-directory: mobile
         env:
@@ -40,22 +54,44 @@ jobs:
       - name: Locate APK
         id: apk
         run: |
-          set -e
-          find mobile/app/build/outputs -type f -name "*.apk" -print
-          APK_PATH="$(find mobile/app/build/outputs -type f -name "*.apk" | head -n 1)"
-          test -n "$APK_PATH"
+          set -euo pipefail
+          APK_PATH="mobile/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK_PATH"
           NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-2.102.0-2102.apk"
           cp "$APK_PATH" "$NORMALIZED_APK"
           echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
-      - name: Verify APK
-        run: test -f "${{ steps.apk.outputs.path }}"
+      - name: Verify signed APK
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK_PATH"
+          "$APKSIGNER" verify --print-certs "$APK_PATH"
+
+      - name: Verify APK metadata
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          AAPT2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          test -n "$AAPT2"
+          "$AAPT2" dump badging "$APK_PATH" | grep -F "package: name='life.pipslife.mobile' versionCode='2102' versionName='2.102'"
+
+      - name: Create SHA-256 checksum
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: sha256sum "$APK_PATH" > "$APK_PATH.sha256"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: PipsLife-v2.102
-          path: ${{ steps.apk.outputs.path }}
+          path: |
+            ${{ steps.apk.outputs.path }}
+            ${{ steps.apk.outputs.path }}.sha256
           if-no-files-found: error
 
       - name: Publish GitHub release
@@ -63,4 +99,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete v2.102 --yes 2>/dev/null || true
-          gh release create v2.102 "${{ steps.apk.outputs.path }}" --title "PipsLife v2.102" --generate-notes
+          gh release create v2.102 \
+            "${{ steps.apk.outputs.path }}" \
+            "${{ steps.apk.outputs.path }}.sha256" \
+            --title "PipsLife v2.102" \
+            --generate-notes
