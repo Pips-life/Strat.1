@@ -132,6 +132,48 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             }
         }
     }
+    fun readS006Clipboard() {
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        val clip = clipboard?.primaryClip
+        if (clip == null || clip.itemCount == 0) {
+            localStatus = "S006 | CLIPBOARD EMPTY"
+            return
+        }
+        val item = clip.getItemAt(0)
+        val uri = item.uri
+        val description = clip.description
+        val hasFileUri = uri != null && description != null && (
+            description.hasMimeType("application/pdf") ||
+                description.hasMimeType("image/*") ||
+                description.hasMimeType("*/*")
+            )
+        scope.launch {
+            localStatus = "S006 | READING CLIPBOARD…"
+            if (hasFileUri && uri != null) {
+                Strategy006FileExtractor.extract(context, uri)
+                    .onSuccess { result ->
+                        barchartText = result.first
+                        barchartName = "Clipboard • ${result.second}"
+                        optionsFlow.extractIvSpotPrice(result.first)?.let { spotPriceText = String.format("%.2f", it) }
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", barchartText).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).apply()
+                        localStatus = "S006 | CLIPBOARD FILE READ • $barchartName"
+                    }
+                    .onFailure { localStatus = "S006 | CLIPBOARD FILE ERROR • " + (it.message ?: "Could not read clipboard file") }
+            } else {
+                val text = item.coerceToText(context)?.toString().orEmpty()
+                Strategy006FileExtractor.normalizeClipboardText(text)
+                    .onSuccess { normalized ->
+                        barchartText = normalized
+                        barchartName = "Clipboard text"
+                        optionsFlow.extractIvSpotPrice(normalized)?.let { spotPriceText = String.format("%.2f", it) }
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", normalized).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).apply()
+                        localStatus = "S006 | CLIPBOARD TEXT PARSED • IV rows + Spot recognized"
+                    }
+                    .onFailure { localStatus = "S006 | CLIPBOARD TEXT ERROR • " + (it.message ?: "Could not parse pasted table") }
+            }
+        }
+    }
+
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
             .onSuccess { text ->
@@ -156,10 +198,11 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("IV strikes → signed GC/XAUUSD basis → six mapped zones → strongest confluence → M5 reaction → opposite-confluence target.", color = Muted, fontSize = 10.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
-                            Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.weight(1f)) { Text("LOAD VOL/GREEKS") }
+                            Button(onClick = { readS006Clipboard() }, modifier = Modifier.weight(1f)) { Text("READ CLIPBOARD") }
                         }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
+                        Text("READ CLIPBOARD accepts copied IV table text or a copied PDF/image file.", color = Muted, fontSize = 8.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             OutlinedTextField(
                                 value = gcPriceText,
