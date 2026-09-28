@@ -89,19 +89,6 @@ class Strategy006Engine {
         return BasisMapping(gc.price, xau.price, gc.price - xau.price, gcUtc, xauUtc, delta, gc.sourceTimezone, true)
     }
 
-    private fun mapZonesToXau(z: Zones, basis: Double): Zones =
-        Zones(
-            z.upperInventoryCeiling?.let { it + basis },
-            z.reclaimGate?.let { it + basis },
-            z.immediateHedgeWall?.let { it + basis },
-            z.primaryHedgeFloor?.let { it + basis },
-            z.dealerAbsorption?.let { it + basis },
-            z.liquidityExhaustion?.let { it + basis },
-            z.confluence.map { item ->
-                item.copy(zone = item.zone + basis, distance = abs(item.zone + basis - (current?.spot ?: item.zone)))
-            }
-        )
-
     private var current: Map? = null
     private var lastPrice = Double.NaN
     private var lastState = MarketState.NO_TRADE
@@ -170,12 +157,13 @@ class Strategy006Engine {
             current = calculate(rows, gcPrice).copy(spot = xauSpotPrice, basis = basis, warnings = listOf<String>(basis.warning ?: "Basis mapping invalid."))
             return current!!
         }
-        val base = calculate(rows, gcPrice)
-        val mapped = base.copy(
+        // Build the six zones directly in XAUUSD coordinates from the signed GC/XAUUSD basis.
+        // The same polished levels are then used for Volatility + Greeks confluence matching.
+        val mappedBase = calculate(rows, gcPrice, basis.basis)
+        val mapped = mappedBase.copy(
             spot = xauSpotPrice,
             basis = basis,
-            zones = mapZonesToXau(base.zones, basis.basis),
-            warnings = base.warnings + listOf<String>("Signed basis = GC price - live XAUUSD price = " + basis.basis + ".")
+            warnings = mappedBase.warnings + listOf<String>("Signed basis = GC price - live XAUUSD price = " + basis.basis + ".")
         )
         current = mapped
         lastPrice = Double.NaN
@@ -446,7 +434,7 @@ class Strategy006Engine {
         return abs(b - near) <= eps * 2.0 && c < b && b >= a
     }
 
-    private fun calculate(rows: List<Row>, spot: Double?): Map {
+    private fun calculate(rows: List<Row>, spot: Double?, signedBasis: Double = 0.0): Map {
         if (rows.isEmpty()) return Map(emptyList(), spot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
         if (spot == null || spot <= 0.0) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
 
@@ -461,26 +449,27 @@ class Strategy006Engine {
             return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above GC spot."))
 
         val selected = (below.take(3).sorted() + above.take(3)).sorted()
-        val difference = 0.0
-        val rawZones = selected.map { it to (it + difference) }
+        val polishedZones = selected.map { ivStrike -> ivStrike + signedBasis }
 
-        fun greekRowsAt(strike: Double): List<Row> = rows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }
-        fun confluence(strike: Double, zone: Double, name: String): ZoneConfluence {
-            val matches = greekRowsAt(strike)
+        fun greekRowsAt(strike: Double): List<Row> =
+            rows.filter { it.source != "iv" && abs(it.strike - strike) <= STRIKE_BUFFER }
+
+        fun confluence(zone: Double, name: String): ZoneConfluence {
+            val matches = greekRowsAt(zone)
             val vol = matches.map { abs(it.iv) }.maxOrNull() ?: 0.0
             val greekMagnitude = matches.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }.maxOrNull() ?: 0.0
             val score = (normalize(vol, rows.map { abs(it.iv) }) * 0.55) +
                 (normalize(greekMagnitude, rows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }) * 0.45)
-            val matched = matches.minByOrNull { abs(it.strike - strike) }?.strike
-            return ZoneConfluence(name, zone, matched, score, vol, greekMagnitude, abs((matched ?: strike) - strike))
+            val matched = matches.minByOrNull { abs(it.strike - zone) }?.strike
+            return ZoneConfluence(name, zone, matched, score, vol, greekMagnitude, abs((matched ?: zone) - zone))
         }
 
-        val named = selected.zip(
+        val named = polishedZones.zip(
             listOf(
                 "Liquidity Exhaustion", "Dealer Absorption", "Primary Hedge Floor",
                 "Immediate Hedge Wall", "Reclaim Gate", "Upper Inventory Ceiling"
             )
-        ).map { (strike, name) -> confluence(strike, strike, name) }
+        ).map { (zone, name) -> confluence(zone, name) }
 
         val zoneMap = named.associateBy { it.zoneName }
         val zones = Zones(
