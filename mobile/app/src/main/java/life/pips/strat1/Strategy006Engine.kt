@@ -456,10 +456,10 @@ class Strategy006Engine {
 
         val atm = unique.minByOrNull { abs(it - liveXauSpot) }
         val ivStrikes = unique.filter { it != atm }
-        val below = ivStrikes.filter { it < spot }.sortedDescending()
-        val above = ivStrikes.filter { it > spot }.sorted()
+        val below = ivStrikes.filter { it < liveXauSpot }.sortedDescending()
+        val above = ivStrikes.filter { it > liveXauSpot }.sorted()
         if (below.size < 3 || above.size < 3)
-            return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above GC spot."))
+            return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV file live spot."))
 
         val selected = (below.take(3).sorted() + above.take(3)).sorted()
         val polishedZones = selected.map { ivStrike -> ivStrike + signedBasis }
@@ -494,7 +494,7 @@ class Strategy006Engine {
             zoneMap["Liquidity Exhaustion"]?.zone,
             named
         )
-        return Map(rows, spot, zones, null, true, listOf(
+        return Map(rows, liveXauSpot, zones, null, true, listOf(
             "ATM IV strike " + (atm ?: Double.NaN) + " ignored.",
             "IV zone polishing uses signed basis: polished strike = IV strike + (GC price - live XAUUSD price).",
             "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " points."
