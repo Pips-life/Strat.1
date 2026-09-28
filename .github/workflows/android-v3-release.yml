@@ -1,4 +1,4 @@
-name: Android v2.104 Release
+name: Android v2.105 Release
 
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
           set -euo pipefail
           APK_PATH="mobile/app/build/outputs/apk/release/app-release.apk"
           test -f "$APK_PATH"
-          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-2.104.0-2104.apk"
+          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-2.105.0-2105.apk"
           cp "$APK_PATH" "$NORMALIZED_APK"
           echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
@@ -95,7 +95,7 @@ jobs:
           set -euo pipefail
           AAPT2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
           test -n "$AAPT2"
-          "$AAPT2" dump badging "$APK_PATH" | grep -F "package: name='life.pipslife.mobile' versionCode='2104' versionName='2.104'"
+          "$AAPT2" dump badging "$APK_PATH" | grep -F "package: name='life.pipslife.mobile' versionCode='2105' versionName='2.105'"
 
       - name: Create SHA-256 checksum
         env:
@@ -105,7 +105,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PipsLife-v2.104
+          name: PipsLife-v2.105
           path: |
             ${{ steps.apk.outputs.path }}
             ${{ steps.apk.outputs.path }}.sha256
@@ -115,9 +115,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete v2.104 --yes 2>/dev/null || true
-          gh release create v2.104 \
+          gh release delete v2.105 --yes 2>/dev/null || true
+          gh release create v2.105 \
             "${{ steps.apk.outputs.path }}" \
             "${{ steps.apk.outputs.path }}.sha256" \
-            --title "PipsLife v2.104" \
+            --title "PipsLife v2.105" \
             --generate-notes
