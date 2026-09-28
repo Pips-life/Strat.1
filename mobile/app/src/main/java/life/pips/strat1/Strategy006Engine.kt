@@ -17,7 +17,7 @@ class Strategy006Engine {
         val strike: Double, val type: Char, val oi: Double = 0.0,
         val volume: Double = 0.0, val gamma: Double = 0.0,
         val delta: Double = 0.0, val vega: Double = 0.0,
-        val theta: Double = 0.0, val iv: Double = 0.0
+        val theta: Double = 0.0, val iv: Double = 0.0, val source: String = "greeks"
     )
 
     data class ZoneConfluence(
@@ -222,8 +222,8 @@ class Strategy006Engine {
             val iv = num(cells.getOrNull(ivIdx)) ?: 0.0
             val pd = num(cells.getOrNull(putDeltaIdx)) ?: 0.0
             val cd = num(cells.getOrNull(callDeltaIdx)) ?: 0.0
-            if (pd != 0.0 || putDeltaIdx >= 0) out += Row(strike, 'P', delta = pd, iv = iv)
-            if (cd != 0.0 || callDeltaIdx >= 0) out += Row(strike, 'C', delta = cd, iv = iv)
+            if (pd != 0.0 || putDeltaIdx >= 0) out += Row(strike, 'P', delta = pd, iv = iv, source = "iv")
+            if (cd != 0.0 || callDeltaIdx >= 0) out += Row(strike, 'C', delta = cd, iv = iv, source = "iv")
         }
         return out
     }
@@ -433,7 +433,7 @@ class Strategy006Engine {
         if (rows.isEmpty()) return Map(emptyList(), spot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
         if (spot == null || spot <= 0.0) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
 
-        val unique = rows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
+        val unique = rows.filter { it.source == "iv" }.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
         if (unique.size < 6) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
 
         val atm = unique.minByOrNull { abs(it - spot) }
@@ -525,7 +525,7 @@ class Strategy006Engine {
                 typeText.startsWith("P") -> 'P'
                 cells.any { it.uppercase(Locale.US).trim() == "CALL" } -> 'C'
                 cells.any { it.uppercase(Locale.US).trim() == "PUT" } -> 'P'
-                else -> continue
+                else -> 'C'
             }
             rows += Row(strike, type, num(cells.getOrNull(oiIdx)) ?: 0.0, num(cells.getOrNull(volIdx)) ?: 0.0,
                 num(cells.getOrNull(gammaIdx)) ?: 0.0, num(cells.getOrNull(deltaIdx)) ?: 0.0,
