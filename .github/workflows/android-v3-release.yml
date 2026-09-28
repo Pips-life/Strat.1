@@ -24,6 +24,8 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: 12266719
+          packages: platform-tools
+          accept-android-sdk-licenses: true
 
       - name: Build release APK
         working-directory: mobile
