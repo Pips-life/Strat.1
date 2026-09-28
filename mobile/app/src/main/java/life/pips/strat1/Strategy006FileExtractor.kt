@@ -289,7 +289,7 @@ object Strategy006FileExtractor {
         // 3) Legacy stacked Call/Put fallback.
         val lines = raw.lineSequence()
             .map { it.replace('|', ' ').replace('—', '-').replace('–', '-') }
-            .map { it.replace(Regex("\s+"), " ").trim() }
+            .map { it.replace(Regex("\\s+"), " ").trim() }
             .filter { it.isNotBlank() }
             .toList()
 
