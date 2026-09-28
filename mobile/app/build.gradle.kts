@@ -7,9 +7,9 @@ plugins {
 }
 
 val releaseProps = Properties().apply { file("../release.properties").inputStream().use(::load) }
-val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
+val flashAlphaKey = System.getenv("FLASHALPHA_API_KEY").orEmpty().replace("\\", "\\\\").replace(""", "\"")
 val canonicalRiskPolicy = rootProject.file("../risk_policy.json").readText().trim()
-    .replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n")
+    .replace("\\", "\\\\").replace(""", "\"").replace("\r", "").replace("\n", "\\n")
 
 android {
     namespace = "life.pips.strat1"
@@ -20,8 +20,8 @@ android {
         targetSdk = 35
         versionCode = releaseProps.getProperty("versionCode").toInt()
         versionName = releaseProps.getProperty("versionName")
-        buildConfigField("String", "FLASHALPHA_API_KEY", "\"$flashAlphaKey\"")
-        buildConfigField("String", "RISK_POLICY_JSON", "\"$canonicalRiskPolicy\"")
+        buildConfigField("String", "FLASHALPHA_API_KEY", ""$flashAlphaKey"")
+        buildConfigField("String", "RISK_POLICY_JSON", ""$canonicalRiskPolicy"")
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -42,17 +42,36 @@ android {
         }
     }
 
-    val storeFile = System.getenv("PIPS_LIFE_KEYSTORE_PATH") ?: System.getenv("PIPSLIFE_KEYSTORE_FILE")
-    val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD") ?: System.getenv("PIPSLIFE_KEYSTORE_PASSWORD")
-    val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS") ?: System.getenv("PIPSLIFE_KEY_ALIAS")
-    val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD") ?: System.getenv("PIPSLIFE_KEY_PASSWORD")
-    if (!storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+    val storeFilePath = System.getenv("PIPS_LIFE_KEYSTORE_PATH")
+        ?: System.getenv("PIPSLIFE_KEYSTORE_FILE")
+    val storePassword = System.getenv("PIPS_LIFE_KEYSTORE_PASSWORD")
+        ?: System.getenv("PIPSLIFE_KEYSTORE_PASSWORD")
+    val keyAlias = System.getenv("PIPS_LIFE_KEY_ALIAS")
+        ?: System.getenv("PIPSLIFE_KEY_ALIAS")
+    val keyPassword = System.getenv("PIPS_LIFE_KEY_PASSWORD")
+        ?: System.getenv("PIPSLIFE_KEY_PASSWORD")
+
+    val signingFile = storeFilePath?.takeIf { it.isNotBlank() }?.let { file(it) }
+    val signingReady = signingFile?.isFile == true &&
+        !storePassword.isNullOrBlank() &&
+        !keyAlias.isNullOrBlank() &&
+        !keyPassword.isNullOrBlank()
+
+    if (signingReady) {
         signingConfigs {
             create("release") {
-                this.storeFile = file(storeFile); this.storePassword = storePassword; this.keyAlias = keyAlias; this.keyPassword = keyPassword
+                storeFile = signingFile
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
             }
         }
         buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
+    } else if (System.getenv("CI").equals("true", ignoreCase = true)) {
+        throw GradleException(
+            "Release signing key is unavailable. Refusing to produce/publish an unsigned APK. " +
+                "Provide the existing Pips-life production keystore and its credentials via GitHub Actions secrets."
+        )
     }
 }
 
