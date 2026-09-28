@@ -161,7 +161,7 @@ class Strategy006Engine {
             return current!!
         }
         val basis = buildBasisMapping(
-            PriceTick(gcPrice, System.currentTimeMillis(), gcSourceTimezone),
+            PriceTick(gcPrice, gcTimestampMillis, gcSourceTimezone),
             PriceTick(xauSpotPrice, xauTimestampMillis, xauSourceTimezone),
             toleranceMillis
         )
