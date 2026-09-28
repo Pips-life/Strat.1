@@ -200,6 +200,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
                             Button(onClick = { readS006Clipboard() }, modifier = Modifier.weight(1f)) { Text("READ CLIPBOARD") }
                         }
+                        Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD VOL/GREEKS") }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
                         Text("READ CLIPBOARD accepts copied IV table text or a copied PDF/image file.", color = Muted, fontSize = 8.sp)
