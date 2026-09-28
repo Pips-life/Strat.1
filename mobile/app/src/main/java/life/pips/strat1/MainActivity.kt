@@ -157,22 +157,25 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
                         Field("GC futures price", gcPriceText, { gcPriceText = it })
+                        val ivFileSpot = optionsFlow.extractIvSpotPrice(barchartText)
+                        Text("IV file Spot = " + (ivFileSpot?.let { String.format("%.2f", it) } ?: "NOT FOUND") + " • used as live XAUUSD mapping price", color = if (ivFileSpot != null) Green else Muted, fontSize = 9.sp)
                         Button(
                             enabled = barchartText.isNotBlank() && greeksText.isNotBlank() &&
-                                gcPriceText.toDoubleOrNull()?.let { it > 0.0 } == true,
+                                gcPriceText.toDoubleOrNull()?.let { it > 0.0 } == true &&
+                                optionsFlow.extractIvSpotPrice(barchartText)?.let { it > 0.0 } == true,
                             onClick = {
                                 val gc = gcPriceText.toDoubleOrNull()
-                                val live = snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 }
-                                if (gc != null && live != null && live > 0.0) {
+                                val ivSpot = optionsFlow.extractIvSpotPrice(barchartText)
+                                if (gc != null && gc > 0.0 && ivSpot != null && ivSpot > 0.0) {
                                     s006Prefs.edit().putString("date", s006Today).putString("gc_price", gcPriceText).apply()
-                                    val built = optionsFlow.loadFiles(barchartText, greeksText, gc, live)
+                                    val built = optionsFlow.loadFiles(barchartText, greeksText, gc, ivSpot)
                                     localStatus = if (built.valid) {
-                                        "S006 | IV MAP BUILT • six zones calculated from supplied files • basis=" + String.format("%.2f", gc - live)
+                                        "S006 | IV MAP BUILT • file Spot used as live XAUUSD mapping price • basis=" + String.format("%.2f", gc - ivSpot)
                                     } else {
                                         "S006 | IV MAP ERROR • " + built.warnings.joinToString(" • ")
                                     }
                                 } else {
-                                    localStatus = "S006 | BUILD MAP WAITING FOR LIVE XAUUSD TICK"
+                                    localStatus = "S006 | BUILD MAP WAITING FOR GC PRICE + IV FILE SPOT"
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
@@ -283,11 +286,34 @@ private fun S006ZoneTable(z: Strategy006Engine.Zones) {
         "Absorption Floor" to z.dealerAbsorption,
         "Liquidity Exhaustion" to z.liquidityExhaustion
     )
-    CardBlock {
-        rows.forEach { (name, price) ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(name, color = TextMain, fontSize = 10.sp)
-                Text(price?.let { String.format("%.2f", it) } ?: "—", color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        modifier = Modifier.fillMaxWidth(),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().background(Color(0xFF10283B)).padding(vertical = 7.dp, horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                Text("I.V MAP ZONE", color = Cyan, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1.7f))
+                Text("PRICE", color = Cyan, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+            }
+            rows.forEachIndexed { index, (name, price) ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(if (index % 2 == 0) Color.White.copy(alpha = .025f) else Color.Transparent)
+                        .padding(vertical = 7.dp, horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    Text(name, color = TextMain, fontSize = 10.sp, modifier = Modifier.weight(1.7f))
+                    Text(
+                        price?.let { String.format("%.2f", it) } ?: "—",
+                        color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f), textAlign = TextAlign.End
+                    )
+                }
+                if (index < rows.lastIndex) HorizontalDivider(color = Color.White.copy(alpha = .08f), thickness = 1.dp)
             }
         }
     }
