@@ -146,6 +146,7 @@ class Strategy006Engine {
         gcPrice: Double?,
         xauSpotPrice: Double?,
         xauTimestampMillis: Long,
+        gcTimestampMillis: Long = xauTimestampMillis,
         gcSourceTimezone: String = "America/New_York",
         xauSourceTimezone: String = "Africa/Nairobi",
         toleranceMillis: Long = 1_000L
@@ -166,7 +167,7 @@ class Strategy006Engine {
             toleranceMillis
         )
         if (!basis.valid) {
-            current = calculate(rows, gcPrice).copy(spot = xauSpotPrice, basis = basis, warnings = listOf(basis.warning.orEmpty()))
+            current = calculate(rows, gcPrice).copy(spot = xauSpotPrice, basis = basis, warnings = listOf<String>(basis.warning ?: "Basis mapping invalid."))
             return current!!
         }
         val base = calculate(rows, gcPrice)
