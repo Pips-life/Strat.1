@@ -534,7 +534,31 @@ class Strategy006Engine {
         val vegaIdx = idx("vega")
         val thetaIdx = idx("theta")
         val ivIdx = idx("iv", "implied volatility")
-        if (strikeIdx < 0) return emptyList()
+        if (strikeIdx < 0) {
+            // OCR/PDF fallback for the common side-by-side Vol/Greeks table:
+            // PUT DELTA | PUT PRICE | STRIKE | CALL PRICE | CALL DELTA | IMP VOL
+            val numberRegex = Regex("""[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?""")
+            fun value(s: String): Double? = s.replace(",", "").replace("%", "").toDoubleOrNull()
+            fun valid(v: List<Double>): Boolean {
+                if (v.size != 6) return false
+                return v[0] in -1.2..0.05 && v[1] >= 0.0 && v[2] >= 1000.0 &&
+                    v[3] >= 0.0 && v[4] in -0.05..1.2 && v[5] in 0.0..100.0
+            }
+            val numbers = numberRegex.findAll(text).mapNotNull { value(it.value) }.toList()
+            val fallback = mutableListOf<Row>()
+            var p = 0
+            while (p + 6 <= numbers.size) {
+                val v = numbers.subList(p, p + 6)
+                if (valid(v)) {
+                    fallback += Row(v[2], 'P', delta = v[0], iv = v[5], source = "greeks")
+                    fallback += Row(v[2], 'C', delta = v[4], iv = v[5], source = "greeks")
+                    p += 6
+                } else {
+                    p += 1
+                }
+            }
+            return fallback
+        }
         val rows = mutableListOf<Row>()
         for (cells in all.drop(1)) {
             val strike = num(cells.getOrNull(strikeIdx)) ?: continue
