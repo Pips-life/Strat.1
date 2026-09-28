@@ -13,6 +13,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -269,45 +271,36 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         )
 
                         if (m?.valid == true && chartPrice != null) {
-                            Text("I.V MAP • ACTUAL MAPPED VALUES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            S006PolishedZones(m.zones, chartPrice, zoneStatus)
-                            CardBlock {
-                                Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                Text(
-                                    (zoneStatus?.likelyZoneName ?: "NO ACTIVE ZONE") +
-                                        " • " + (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") +
-                                        " • " + (zoneStatus?.likelySide?.name ?: "WAIT"),
-                                    color = when (zoneStatus?.likelySide) {
-                                        life.pips.strat1.data.TradeSide.BUY -> Green
-                                        life.pips.strat1.data.TradeSide.SELL -> Red
-                                        else -> Muted
-                                    },
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Black
-                                )
-                                val activeConfluence = m.zones.confluence
-                                    .minByOrNull { abs(it.zone - (zoneStatus?.likelyZone ?: chartPrice)) }
-                                Text(
-                                    "Confluence: " + (activeConfluence?.score?.let { String.format("%.1f", it) } ?: "—") +
-                                        " • Greeks strike " + (activeConfluence?.matchedStrike?.let { String.format("%.2f", it) } ?: "—"),
-                                    color = Green,
-                                    fontSize = 9.sp
-                                )
-                                Text(
-                                    "M5 reaction: " + (zoneStatus?.reactedZoneName ?: "waiting"),
-                                    color = Muted,
-                                    fontSize = 9.sp
-                                )
-                                Text(
-                                    "Opposite target: " + (zoneStatus?.possibleExitName ?: "—") +
-                                        (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""),
-                                    color = Muted,
-                                    fontSize = 9.sp
-                                )
+                            val greekRows = m.rows.filter { it.source != "iv" }.sortedBy { it.strike }
+                            val confluenceRows = m.zones.confluence
+                            val matchedZones = confluenceRows.count { it.matchedStrike != null }
+                            val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
+                            val tabs = listOf("I.V ZONES + PRICE", "GREEKS STRIKES")
+                            Text("IV ZONES " + m.zones.confluence.size + "/6 • GREEKS " + greekRows.size + " ROWS • CONFLUENCE " + matchedZones + "/6", color = if (greekRows.isNotEmpty()) Green else Red, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            TabRow(selectedTabIndex = pagerState.currentPage, containerColor = Color.Transparent, contentColor = Cyan) {
+                                tabs.forEachIndexed { index, title ->
+                                    Tab(selected = pagerState.currentPage == index, onClick = { scope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(title, fontSize = 9.sp, fontWeight = FontWeight.Bold) })
+                                }
                             }
+                            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
+                                if (page == 0) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        S006PolishedZones(m.zones, chartPrice, zoneStatus)
+                                        CardBlock {
+                                            Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text((zoneStatus?.likelyZoneName ?: "NO ACTIVE ZONE") + " • " + (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") + " • " + (zoneStatus?.likelySide?.name ?: "WAIT"), color = when (zoneStatus?.likelySide) { life.pips.strat1.data.TradeSide.BUY -> Green; life.pips.strat1.data.TradeSide.SELL -> Red; else -> Muted }, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                                            val activeConfluence = m.zones.confluence.minByOrNull { abs(it.zone - (zoneStatus?.likelyZone ?: chartPrice)) }
+                                            Text("Confluence: " + (activeConfluence?.score?.let { String.format("%.1f", it) } ?: "—") + " • Greeks strike " + (activeConfluence?.matchedStrike?.let { String.format("%.2f", it) } ?: "—"), color = Green, fontSize = 9.sp)
+                                            Text("M5 reaction: " + (zoneStatus?.reactedZoneName ?: "waiting"), color = Muted, fontSize = 9.sp)
+                                            Text("Opposite target: " + (zoneStatus?.possibleExitName ?: "—") + (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""), color = Muted, fontSize = 9.sp)
+                                        }
+                                    }
+                                } else {
+                                    S006GreeksStrikes(m.zones.confluence, greekRows)
+                                }
+                            }
+                            Text("Swipe left/right to switch between mapped I.V zones and parsed Greeks strikes.", color = Muted, fontSize = 8.sp)
                         } else {
-                            Text("Load the IV options table, Volatility / Greeks table, enter GC futures price, then build the map.", color = Muted, fontSize = 9.sp)
-                        }
 
                         TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.fillMaxWidth()) {
                             Text(if (showAdvanced) "HIDE S006 DATA ▲" else "SHOW S006 DATA ▼", fontSize = 9.sp)
@@ -346,6 +339,36 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             }
         }
         item { CardBlock { Text("STATUS", color = Muted, fontSize = 9.sp); Text(localStatus, color = TextMain, fontSize = 10.sp) } }
+    }
+}
+
+@Composable
+private fun S006GreeksStrikes(confluence: List<Strategy006Engine.Confluence>, rows: List<Strategy006Engine.Row>) {
+    CardBlock {
+        Text("GREEKS STRIKES", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("Parsed volatility / Greeks rows used for ±5 point confluence matching.", color = Muted, fontSize = 8.sp)
+        if (rows.isEmpty()) {
+            Text("FILE READ — 0 USABLE GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        } else {
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text("STRIKE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("DELTA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("IV", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.6f))
+            }
+            rows.take(40).forEach { row ->
+                val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - row.strike) <= 5.0 }.minByOrNull { abs((it.matchedStrike ?: row.strike) - row.strike) }
+                Row(Modifier.fillMaxWidth().background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.3f", row.delta), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.2f", row.iv), color = Green, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(match?.zoneName?.let { "✓ $it" } ?: "—", color = if (match != null) Green else Muted, fontSize = 7.sp, modifier = Modifier.weight(1.6f))
+                }
+                HorizontalDivider(color = Color.White.copy(alpha = .06f))
+            }
+            if (rows.size > 40) Text("+ " + (rows.size - 40) + " more Greek rows", color = Muted, fontSize = 8.sp)
+        }
+        Text("READ → PARSED → USED: " + rows.size + " rows • matched zones: " + confluence.count { it.matchedStrike != null } + "/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
     }
 }
 
