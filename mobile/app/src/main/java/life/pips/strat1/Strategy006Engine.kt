@@ -20,23 +20,24 @@ class Strategy006Engine {
         val theta: Double = 0.0, val iv: Double = 0.0
     )
 
+    data class ZoneConfluence(
+        val zoneName: String, val zone: Double,
+        val matchedStrike: Double?, val score: Double,
+        val volatility: Double, val greekMagnitude: Double,
+        val distance: Double
+    )
+
     data class Zones(
         val upperInventoryCeiling: Double?, val reclaimGate: Double?,
         val immediateHedgeWall: Double?, val primaryHedgeFloor: Double?,
-        val callWall: Double?, val putWall: Double?, val gammaFlip: Double?,
-        val positiveGexRegion: Pair<Double, Double>?,
-        val negativeGexRegion: Pair<Double, Double>?,
-        val dealerAbsorptionShelf: Double? = null,
-        val liquidityExhaustionFloor: Double? = null
+        val dealerAbsorption: Double?, val liquidityExhaustion: Double?,
+        val confluence: List<ZoneConfluence> = emptyList()
     )
 
     data class Map(
         val rows: List<Row>, val spot: Double?,
-        val callGex: kotlin.collections.Map<Double, Double>,
-        val putGex: kotlin.collections.Map<Double, Double>,
-        val netGex: kotlin.collections.Map<Double, Double>,
-        val totalGex: Double, val qof: Double, val bias: String,
-        val zones: Zones, val valid: Boolean, val warnings: List<String>
+        val zones: Zones, val basis: BasisMapping?, val valid: Boolean,
+        val warnings: List<String>
     )
 
     enum class MarketState {
@@ -90,17 +91,15 @@ class Strategy006Engine {
 
     private fun mapZonesToXau(z: Zones, basis: Double): Zones =
         Zones(
-            z.upperInventoryCeiling?.let { it - basis },
-            z.reclaimGate?.let { it - basis },
-            z.immediateHedgeWall?.let { it - basis },
-            z.primaryHedgeFloor?.let { it - basis },
-            z.callWall?.let { it - basis },
-            z.putWall?.let { it - basis },
-            z.gammaFlip?.let { it - basis },
-            z.positiveGexRegion?.let { (a, b) -> Pair(a - basis, b - basis) },
-            z.negativeGexRegion?.let { (a, b) -> Pair(a - basis, b - basis) },
-            z.dealerAbsorptionShelf?.let { it - basis },
-            z.liquidityExhaustionFloor?.let { it - basis }
+            z.upperInventoryCeiling?.let { it + basis },
+            z.reclaimGate?.let { it + basis },
+            z.immediateHedgeWall?.let { it + basis },
+            z.primaryHedgeFloor?.let { it + basis },
+            z.dealerAbsorption?.let { it + basis },
+            z.liquidityExhaustion?.let { it + basis },
+            z.confluence.map { item ->
+                item.copy(zone = item.zone + basis, distance = abs(item.zone + basis - (current?.spot ?: item.zone)))
+            }
         )
 
     private var current: Map? = null
@@ -120,15 +119,13 @@ class Strategy006Engine {
         val z = current?.zones ?: return ZoneStatus(null, null, null, lastReactionZoneName, lastReactionZone, null, null)
         val lower = listOfNotNull(
             z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },
-            z.dealerAbsorptionShelf?.let { "Dealer Absorption Shelf" to it },
-            z.liquidityExhaustionFloor?.let { "Liquidity Exhaustion Floor" to it },
-            z.putWall?.let { "Put Wall" to it }
+            z.dealerAbsorption?.let { "Dealer Absorption" to it },
+            z.liquidityExhaustion?.let { "Liquidity Exhaustion" to it }
         ).filter { it.second < price }.minByOrNull { price - it.second }
         val upper = listOfNotNull(
             z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },
             z.reclaimGate?.let { "Reclaim Gate" to it },
-            z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it },
-            z.callWall?.let { "Call Wall" to it }
+            z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it }
         ).filter { it.second > price }.minByOrNull { it.second - price }
         val likely = listOfNotNull(
             lower?.let { Triple(it.first, it.second, TradeSide.BUY) },
@@ -153,78 +150,31 @@ class Strategy006Engine {
         xauSourceTimezone: String = "Africa/Nairobi",
         toleranceMillis: Long = 1_000L
     ): Map {
-        val gcTimestamp = extractGcTimestampMillis(barchartText, gcSourceTimezone)
-        if (gcTimestamp == null) {
-            val rows = (parseText(barchartText) + parseText(greeksText))
-                .filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
-            val invalid = calculate(rows, null)
-            current = invalid.copy(spot = xauSpotPrice,
-                warnings = invalid.warnings + "GC timestamp could not be read from the first S006 file; no basis mapping performed.")
-            return current!!
-        }
-        return loadFiles(barchartText, greeksText, gcPrice, gcTimestamp, xauSpotPrice, xauTimestampMillis,
-            gcSourceTimezone, xauSourceTimezone, toleranceMillis)
-    }
-
-    fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
-        // Backward-compatible entry point. New callers should use the timestamped overload.
-        val now = System.currentTimeMillis()
-        return loadFiles(barchartText, greeksText, spot, now, spot, now, "UTC", "UTC", 0L)
-    }
-
-    /**
-     * Canonical S006 loader: calculate GEX/QOF on GC, then translate every
-     * price-coordinate zone to XAUUSD using the same-instant cross-market basis.
-     */
-    fun loadFiles(
-        barchartText: String,
-        greeksText: String,
-        gcPrice: Double?,
-        gcTimestampMillis: Long,
-        xauSpotPrice: Double?,
-        xauTimestampMillis: Long,
-        gcSourceTimezone: String = "UTC",
-        xauSourceTimezone: String = "Africa/Nairobi",
-        toleranceMillis: Long = 1_000L
-    ): Map {
-        val rows = (parseText(barchartText) + parseText(greeksText))
-            .filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
-            .groupBy { Triple(it.strike, it.type, it.gamma) }
-            .values.mapNotNull { it.maxByOrNull { row -> row.oi + row.volume } }
-            .sortedBy { it.strike }
-
+        val ivRows = parseIvOptionsTable(barchartText)
+        val greekRows = parseText(greeksText)
+        val rows = (ivRows + greekRows).filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
         if (gcPrice == null || gcPrice <= 0.0 || xauSpotPrice == null || xauSpotPrice <= 0.0) {
-            val invalid = calculate(rows, null)
-            current = invalid.copy(spot = xauSpotPrice,
-                warnings = invalid.warnings + "GC/XAUUSD timestamped prices are required for S006 level mapping.")
+            current = calculate(rows, gcPrice).copy(
+                spot = xauSpotPrice,
+                warnings = calculate(rows, gcPrice).warnings + "GC futures price and live XAUUSD price are required."
+            )
             return current!!
         }
-
-        val mapping = buildBasisMapping(
-            PriceTick(gcPrice, gcTimestampMillis, gcSourceTimezone),
+        val basis = buildBasisMapping(
+            PriceTick(gcPrice, System.currentTimeMillis(), gcSourceTimezone),
             PriceTick(xauSpotPrice, xauTimestampMillis, xauSourceTimezone),
             toleranceMillis
         )
-        if (!mapping.valid) {
-            val invalid = calculate(rows, null)
-            current = invalid.copy(spot = xauSpotPrice,
-                warnings = invalid.warnings + mapping.warning.orEmpty())
+        if (!basis.valid) {
+            current = calculate(rows, gcPrice).copy(spot = xauSpotPrice, basis = basis, warnings = listOf(basis.warning.orEmpty()))
             return current!!
         }
-
-        // Keep options math on native GC. Only resulting price-coordinate zones
-        // are translated, so all downstream S006 logic consumes XAUUSD levels.
-        val gcMap = calculate(rows, gcPrice)
-        val mapped = gcMap.copy(
+        val base = calculate(rows, gcPrice)
+        val mapped = base.copy(
             spot = xauSpotPrice,
-            zones = mapZonesToXau(gcMap.zones, mapping.basis),
-            warnings = gcMap.warnings + listOf(
-                "GC→XAUUSD basis=" + mapping.basis +
-                    "; GC UTC=" + Instant.ofEpochMilli(mapping.gcTimestampUtc) +
-                    "; XAUUSD UTC=" + Instant.ofEpochMilli(mapping.xauTimestampUtc) +
-                    "; matchDeltaMs=" + mapping.matchDeltaMillis +
-                    "; sourceTimezone=" + mapping.sourceTimezone
-            )
+            basis = basis,
+            zones = mapZonesToXau(base.zones, basis.basis),
+            warnings = base.warnings + "Signed basis = GC price - live XAUUSD price = " + basis.basis + "."
         )
         current = mapped
         lastPrice = Double.NaN
@@ -235,6 +185,42 @@ class Strategy006Engine {
         lastReactionZoneName = null
         lastReactionZone = null
         return mapped
+    }
+
+    fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
+        val now = System.currentTimeMillis()
+        return loadFiles(barchartText, greeksText, spot, spot, now, "UTC", "UTC", 0L)
+    }
+
+    private fun parseIvOptionsTable(text: String): List<Row> {
+        if (text.isBlank()) return emptyList()
+        val tableRegex = Regex("<tr[^>]*>(.*?)</tr>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val cellRegex = Regex("<t[dh][^>]*>(.*?)</t[dh]>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val htmlRows = tableRegex.findAll(text).map { match ->
+            cellRegex.findAll(match.groupValues[1]).map { clean(it.groupValues[1]) }.toList()
+        }.toList()
+        val csvRows = text.lineSequence().map { splitCsv(it) }.filter { it.size >= 3 }.toList()
+        val all = if (htmlRows.size >= 2) htmlRows else csvRows
+        if (all.isEmpty()) return emptyList()
+        val header = all.first().map { normalize(it) }
+        fun idx(vararg names: String): Int = names.firstNotNullOfOrNull { n ->
+            header.indexOfFirst { it == normalize(n) || it.contains(normalize(n)) }.takeIf { it >= 0 }
+        } ?: -1
+        val strikeIdx = idx("strike", "strike price")
+        val putDeltaIdx = idx("put delta")
+        val callDeltaIdx = idx("call delta")
+        val ivIdx = idx("imp vol", "implied volatility", "iv")
+        if (strikeIdx < 0 || ivIdx < 0) return emptyList()
+        val out = mutableListOf<Row>()
+        for (cells in all.drop(1)) {
+            val strike = num(cells.getOrNull(strikeIdx)) ?: continue
+            val iv = num(cells.getOrNull(ivIdx)) ?: 0.0
+            val pd = num(cells.getOrNull(putDeltaIdx)) ?: 0.0
+            val cd = num(cells.getOrNull(callDeltaIdx)) ?: 0.0
+            if (pd != 0.0 || putDeltaIdx >= 0) out += Row(strike, 'P', delta = pd, iv = iv)
+            if (cd != 0.0 || callDeltaIdx >= 0) out += Row(strike, 'C', delta = cd, iv = iv)
+        }
+        return out
     }
 
     /** Read the GC observation timestamp from CSV, PDF-extracted text, or OCR text. */
@@ -285,8 +271,8 @@ class Strategy006Engine {
         price: Double, balance: Double, bid: Double, ask: Double,
         rejection: Boolean = false, tickTime: Long = System.currentTimeMillis()
     ): TradePlan {
-        val m = current ?: return wait("WAIT FILES", "Load both options files.")
-        if (!m.valid || price <= 0.0 || balance <= 0.0) return wait("WAIT DATA", "Options map or account data is invalid.")
+        val m = current ?: return wait("WAIT FILES", "Load the IV options table and Volatility & Greeks file.")
+        if (!m.valid || price <= 0.0 || balance <= 0.0) return wait("WAIT DATA", "S006 map or account data is invalid.")
         priceHistory.addLast(price)
         while (priceHistory.size > 12) priceHistory.removeFirst()
         val closedBar = updateFiveMinuteBar(price, tickTime)
@@ -300,49 +286,63 @@ class Strategy006Engine {
             lastConfirmedBarStart = closedBar.start
             lastReactionZoneName = m5Rejection.label
             lastReactionZone = m5Rejection.zone
-            when (m5Rejection.side) {
-                TradeSide.BUY -> {
-                    val target = firstAbove(buy, z.immediateHedgeWall, z.reclaimGate, z.upperInventoryCeiling)
-                    val stop = m5Rejection.zone - eps
-                    if (target != null && target > buy)
-                        return trade(TradeSide.BUY, buy, stop, target, balance, MarketState.ABSORPTION_RECLAIM,
-                            "M5 bullish rejection confirmed at " + m5Rejection.label + " → nearest opposing zone.")
-                }
-                TradeSide.SELL -> {
-                    val target = listOfNotNull(z.primaryHedgeFloor, z.dealerAbsorptionShelf, z.liquidityExhaustionFloor, z.putWall)
-                        .filter { it < sell }.maxOrNull()
-                    val stop = m5Rejection.zone + eps
-                    if (target != null && target < sell)
-                        return trade(TradeSide.SELL, sell, stop, target, balance, MarketState.CONTINUATION,
-                            "M5 bearish rejection confirmed at " + m5Rejection.label + " → nearest opposing zone.")
-                }
+            val target = selectOppositeTarget(m5Rejection.side, m5Rejection.zone, buy, sell, z)
+            if (target != null) {
+                val stop = if (m5Rejection.side == TradeSide.BUY) m5Rejection.zone - eps else m5Rejection.zone + eps
+                val entry = if (m5Rejection.side == TradeSide.BUY) buy else sell
+                return trade(
+                    m5Rejection.side, entry, stop, target.zone, balance,
+                    if (m5Rejection.side == TradeSide.BUY) MarketState.ABSORPTION_RECLAIM else MarketState.CONTINUATION,
+                    "M5 " + (if (m5Rejection.side == TradeSide.BUY) "bullish" else "bearish") +
+                        " rejection confirmed at " + m5Rejection.label +
+                        " → next opposite zone with strongest confluence: " + target.zoneName +
+                        " (" + String.format("%.1f", target.score) + ")."
+                )
             }
         }
 
-        val floor = z.primaryHedgeFloor; val shelf = z.dealerAbsorptionShelf; val exhaustion = z.liquidityExhaustionFloor
-        val reclaim = z.reclaimGate; val wall = z.immediateHedgeWall; val ceiling = z.upperInventoryCeiling
-        val downReaction = fallingThroughZone(priceHistory, listOfNotNull(floor, shelf, exhaustion), eps)
+        val floor = z.primaryHedgeFloor
+        val shelf = z.dealerAbsorption
+        val exhaustion = z.liquidityExhaustion
+        val reclaim = z.reclaimGate
+        val wall = z.immediateHedgeWall
+        val ceiling = z.upperInventoryCeiling
         val phfBreak = floor != null && price < floor - eps && crossedBelow(floor)
         val shelfBroken = shelf != null && price < shelf - eps && crossedBelow(shelf)
         val exhaustionBroken = exhaustion != null && price < exhaustion - eps && crossedBelow(exhaustion)
 
-        if (ceiling != null && price >= ceiling - eps) { lastState = MarketState.UPPER_CEILING; return wait(lastState.name, "Upper Inventory Ceiling reached; wait for M5 rejection or confirmed breakout.") }
-        if (reclaim != null && floor != null && price > floor + eps && price >= reclaim - eps) { lastState = MarketState.RECLAIM_GATE; return wait(lastState.name, "Reclaim Gate reached; wait for M5 rejection or acceptance.") }
-        if (floor != null && price >= floor - eps && price <= floor + eps) { lastState = MarketState.PHF_HOLD; return wait(lastState.name, "Primary Hedge Floor touched; waiting for completed M5 rejection.") }
+        if (ceiling != null && price >= ceiling - eps) return wait("UPPER_CEILING", "Upper Inventory Ceiling reached; wait for completed M5 reaction.")
+        if (reclaim != null && price >= reclaim - eps) return wait("RECLAIM_GATE", "Reclaim Gate reached; wait for completed M5 reaction.")
+        if (floor != null && abs(price - floor) <= eps) return wait("PHF_HOLD", "Primary Hedge Floor touched; waiting for completed M5 rejection.")
+        if (wall != null && abs(price - wall) <= eps) return wait("WALL_TEST", "Immediate Hedge Wall under test; waiting for completed M5 rejection.")
         if (floor != null && price < floor - eps) {
-            if (shelf != null && price > shelf + eps) { lastState = MarketState.ABSORPTION_TEST; return wait(lastState.name, if (phfBreak) "PHF breakdown confirmed; testing Dealer Absorption Shelf. Wait for M5 rejection." else "Testing Dealer Absorption Shelf; wait for M5 rejection.") }
-            if (exhaustion != null && price > exhaustion + eps) { lastState = MarketState.EXHAUSTION_TEST; return wait(lastState.name, "Absorption did not hold; testing Liquidity Exhaustion Floor. Wait for M5 rejection.") }
+            if (shelf != null && price > shelf + eps) return wait("ABSORPTION_TEST", "Primary Hedge Floor broke; testing Dealer Absorption. Wait for M5 rejection.")
+            if (exhaustion != null && price > exhaustion + eps) return wait("EXHAUSTION_TEST", "Dealer Absorption did not hold; testing Liquidity Exhaustion. Wait for M5 rejection.")
             if (exhaustion != null && price <= exhaustion + eps) {
-                lastState = MarketState.EXHAUSTION_FAILURE
-                val lower = nextLowerZone(z, exhaustion)
-                if (exhaustionBroken && downReaction && lower != null && lower < sell) return trade(TradeSide.SELL, sell, exhaustion + eps, lower, balance, MarketState.CONTINUATION, "Liquidity Exhaustion Floor failed → confirmed downside continuation; next lower zone.")
-                return wait(lastState.name, if (shelfBroken) "Absorption Shelf failed; exhaustion floor under test." else "Exhaustion Floor reached; waiting for M5 rejection or failure.")
+                if (exhaustionBroken && fallingThroughZone(priceHistory, listOfNotNull(exhaustion), eps))
+                    return wait("CONTINUATION", "Liquidity Exhaustion failed; waiting for a completed M5 continuation/retest.")
+                return wait("EXHAUSTION_TEST", "Liquidity Exhaustion reached; wait for completed M5 rejection.")
             }
         }
-        if (wall != null && abs(price - wall) <= eps) return wait("WALL TEST", "Immediate Hedge Wall under test; waiting for completed M5 rejection.")
-        if (phfBreak || shelfBroken || exhaustionBroken) { lastState = if (exhaustionBroken) MarketState.CONTINUATION else if (shelfBroken) MarketState.ABSORPTION_FAILURE else MarketState.PHF_BREAK; return wait(lastState.name, "Break detected; waiting for M5 zone confirmation.") }
-        return wait(MarketState.NO_TRADE.name, "No confirmed M5 rejection at a mapped decision zone.")
+        if (phfBreak || shelfBroken || exhaustionBroken) return wait("BREAK_TEST", "Zone break detected; waiting for completed M5 confirmation.")
+        return wait(MarketState.NO_TRADE.name, "No confirmed M5 reaction at a strongest-confluence mapped zone.")
     }
+
+    private fun selectOppositeTarget(
+        side: TradeSide, entryZone: Double, buy: Double, sell: Double, z: Zones
+    ): ZoneConfluence? {
+        val entry = if (side == TradeSide.BUY) buy else sell
+        val candidates = z.confluence
+            .filter { it.zoneName != lastReactionZoneName }
+            .filter { if (side == TradeSide.BUY) it.zone > entry else it.zone < entry }
+            .filter { if (side == TradeSide.BUY) it.zone > entryZone else it.zone < entryZone }
+        if (candidates.isEmpty()) return null
+        val nearestDistance = candidates.minOf { abs(it.zone - entry) }
+        val nextBand = candidates.filter { abs(it.zone - entry) <= nearestDistance + max(epsFor(entry), 0.000001) }
+        return nextBand.maxByOrNull { it.score } ?: candidates.maxByOrNull { it.score }
+    }
+
+    private fun epsFor(price: Double): Double = max(price * 0.00001, 0.01)
 
     private fun updateFiveMinuteBar(price: Double, tickTime: Long): FiveMinuteBar? {
         val millis = if (tickTime in 1L..100_000_000_000L) tickTime * 1000L else tickTime
@@ -360,8 +360,8 @@ class Strategy006Engine {
     private fun detectM5Rejection(bar: FiveMinuteBar, z: Zones): M5Rejection? {
         val lower = listOfNotNull(
             z.primaryHedgeFloor?.let { it to "Primary Hedge Floor" },
-            z.dealerAbsorptionShelf?.let { it to "Dealer Absorption Shelf" },
-            z.liquidityExhaustionFloor?.let { it to "Liquidity Exhaustion Floor" }
+            z.dealerAbsorption?.let { it to "Dealer Absorption" },
+            z.liquidityExhaustion?.let { it to "Liquidity Exhaustion" }
         ).filter { (level, _) -> bar.low <= level && bar.high >= level && bar.close > level }
             .maxByOrNull { (level, _) -> level }
         if (lower != null) return M5Rejection(TradeSide.BUY, lower.first, lower.second)
@@ -397,8 +397,7 @@ class Strategy006Engine {
         levels.filterNotNull().filter { it > entry }.minOrNull()
 
     private fun nextLowerZone(z: Zones, level: Double): Double? =
-        listOfNotNull(z.negativeGexRegion?.first, z.putWall)
-            .filter { it < level }.maxOrNull()
+        z.confluence.filter { it.zone < level }.maxByOrNull { it.zone }?.zone
 
     private fun crossedBelow(level: Double): Boolean =
         priceHistory.size >= 2 && priceHistory.elementAt(priceHistory.size - 2) >= level && priceHistory.last() < level
@@ -429,66 +428,67 @@ class Strategy006Engine {
     }
 
     private fun calculate(rows: List<Row>, spot: Double?): Map {
-        if (rows.isEmpty()) return Map(emptyList(), spot, emptyMap(), emptyMap(), emptyMap(), 0.0, 0.0, "NEUTRAL",
-            Zones(null, null, null, null, null, null, null, null, null), false, listOf("No option rows parsed."))
-        if (spot == null || spot <= 0.0) return Map(rows, spot, emptyMap(), emptyMap(), emptyMap(), 0.0, 0.0, "NEUTRAL",
-            Zones(null, null, null, null, null, null, null, null, null), true, listOf("MT5 spot required for live zone reaction."))
+        if (rows.isEmpty()) return Map(emptyList(), spot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
+        if (spot == null || spot <= 0.0) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
 
-        val call = mutableMapOf<Double, Double>()
-        val put = mutableMapOf<Double, Double>()
-        val net = mutableMapOf<Double, Double>()
-        for (r in rows) {
-            val sign = if (r.type == 'C') 1.0 else -1.0
-            val g = sign * r.gamma * r.oi * 100.0 * spot * spot * 0.01
-            if (r.type == 'C') call[r.strike] = (call[r.strike] ?: 0.0) + g
-            else put[r.strike] = (put[r.strike] ?: 0.0) + g
-            net[r.strike] = (net[r.strike] ?: 0.0) + g
+        val unique = rows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
+        if (unique.size < 6) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
+
+        val atm = unique.minByOrNull { abs(it - spot) }
+        val ivStrikes = unique.filter { it != atm }
+        val below = ivStrikes.filter { it < spot }.sortedDescending()
+        val above = ivStrikes.filter { it > spot }.sorted()
+        if (below.size < 3 || above.size < 3)
+            return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above GC spot."))
+
+        val selected = (below.take(3).sorted() + above.take(3)).sorted()
+        val difference = 0.0
+        val rawZones = selected.map { it to (it + difference) }
+
+        fun greekRowsAt(strike: Double): List<Row> = rows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }
+        fun confluence(strike: Double, zone: Double, name: String): ZoneConfluence {
+            val matches = greekRowsAt(strike)
+            val vol = matches.map { abs(it.iv) }.maxOrNull() ?: 0.0
+            val greekMagnitude = matches.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }.maxOrNull() ?: 0.0
+            val score = (normalize(vol, rows.map { abs(it.iv) }) * 0.55) +
+                (normalize(greekMagnitude, rows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }) * 0.45)
+            val matched = matches.minByOrNull { abs(it.strike - strike) }?.strike
+            return ZoneConfluence(name, zone, matched, score, vol, greekMagnitude, abs((matched ?: strike) - strike))
         }
 
-        val callWall = call.maxByOrNull { it.value }?.key
-        val putWall = put.minByOrNull { it.value }?.key
-        val ordered = net.toSortedMap()
-        var running = 0.0
-        var lastSign = 0
-        var flip: Double? = null
-        for ((k, v) in ordered) {
-            running += v
-            val s = when { running > 0 -> 1; running < 0 -> -1; else -> 0 }
-            if (lastSign != 0 && s != 0 && s != lastSign) { flip = k; break }
-            if (s != 0) lastSign = s
-        }
+        val named = selected.zip(
+            listOf(
+                "Liquidity Exhaustion", "Dealer Absorption", "Primary Hedge Floor",
+                "Immediate Hedge Wall", "Reclaim Gate", "Upper Inventory Ceiling"
+            )
+        ).map { (strike, name) -> confluence(strike, strike, name) }
 
-        val upperCandidates = call.keys.filter { it > spot }
-        val lowerCandidates = put.keys.filter { it < spot }
-        val upper = upperCandidates.maxByOrNull { call[it] ?: 0.0 } ?: callWall
-        val floor = lowerCandidates.minByOrNull { abs(it - spot) } ?: putWall
-        val upperSide = listOfNotNull(callWall, putWall).filter { it > spot }
-        val lowerSide = listOfNotNull(callWall, putWall).filter { it < spot }
-        val immediate = if (upper != null && upper > spot)
-            upperSide.minByOrNull { abs(it - spot) }
-        else lowerSide.minByOrNull { abs(it - spot) }
-
-        // The shelf is the strongest lower put-positioning strike.
-        // The exhaustion floor is the deepest lower put strike below that shelf.
-        val shelf = lowerCandidates.maxByOrNull { abs(put[it] ?: 0.0) } ?: floor
-        val belowShelf = lowerCandidates.filter { shelf != null && it < shelf }
-        val exhaustion = belowShelf.minOrNull() ?: lowerCandidates.minOrNull()
-
-        val positive = ordered.filterValues { it > 0.0 }.keys
-        val negative = ordered.filterValues { it < 0.0 }.keys
-        val total = net.values.sum()
-        val gross = net.values.sumOf { abs(it) }.coerceAtLeast(1.0)
-        val qof = (100.0 * total / gross).coerceIn(-100.0, 100.0)
-        val bias = when { qof >= 20.0 -> "UPSIDE"; qof <= -20.0 -> "DOWNSIDE"; else -> "NEUTRAL" }
-
-        return Map(rows, spot, call, put, net, total, qof, bias,
-            Zones(
-                upper, upper, immediate, floor, callWall, putWall, flip,
-                if (positive.isEmpty()) null else Pair(positive.min(), positive.max()),
-                if (negative.isEmpty()) null else Pair(negative.min(), negative.max()),
-                shelf, exhaustion
-            ), true, emptyList())
+        val zoneMap = named.associateBy { it.zoneName }
+        val zones = Zones(
+            zoneMap["Upper Inventory Ceiling"]?.zone,
+            zoneMap["Reclaim Gate"]?.zone,
+            zoneMap["Immediate Hedge Wall"]?.zone,
+            zoneMap["Primary Hedge Floor"]?.zone,
+            zoneMap["Dealer Absorption"]?.zone,
+            zoneMap["Liquidity Exhaustion"]?.zone,
+            named
+        )
+        return Map(rows, spot, zones, null, true, listOf(
+            "ATM IV strike " + (atm ?: Double.NaN) + " ignored.",
+            "IV zone polishing uses signed basis: polished strike = IV strike + (GC price - live XAUUSD price).",
+            "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " points."
+        ))
     }
+
+    private fun normalize(value: Double, values: List<Double>): Double {
+        val finite = values.filter { it.isFinite() }
+        if (!value.isFinite() || finite.isEmpty()) return 0.0
+        val lo = finite.minOrNull() ?: value
+        val hi = finite.maxOrNull() ?: value
+        return if (hi <= lo) 100.0 else ((value - lo) / (hi - lo) * 100.0).coerceIn(0.0, 100.0)
+    }
+
+    companion object { const val STRIKE_BUFFER = 5.0 }
 
     private fun parseText(text: String): List<Row> {
         if (text.isBlank()) return emptyList()
