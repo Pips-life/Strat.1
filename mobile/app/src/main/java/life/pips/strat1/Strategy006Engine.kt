@@ -131,12 +131,12 @@ class Strategy006Engine {
             lower?.let { Triple(it.first, it.second, TradeSide.BUY) },
             upper?.let { Triple(it.first, it.second, TradeSide.SELL) }
         ).minByOrNull { abs(it.second - price) }
-        val exit = when (likely?.third) {
-            TradeSide.BUY -> upper
-            TradeSide.SELL -> lower
-            else -> null
-        }
-        return ZoneStatus(likely?.first, likely?.second, likely?.third, lastReactionZoneName, lastReactionZone, exit?.first, exit?.second)
+        val target = likely?.third?.let { oppositeTarget(it, price) }
+        return ZoneStatus(
+            likely?.first, likely?.second, likely?.third,
+            lastReactionZoneName, lastReactionZone,
+            target?.zoneName, target?.zone
+        )
     }
 
     /** S006 file-first entry point: GC time is read from the FIRST supplied file. */
@@ -291,7 +291,7 @@ class Strategy006Engine {
             lastConfirmedBarStart = closedBar.start
             lastReactionZoneName = m5Rejection.label
             lastReactionZone = m5Rejection.zone
-            val target = selectOppositeTarget(m5Rejection.side, m5Rejection.zone, buy, sell, z)
+            val target = oppositeTarget(m5Rejection.side, if (m5Rejection.side == TradeSide.BUY) buy else sell)
             if (target != null) {
                 val stop = if (m5Rejection.side == TradeSide.BUY) m5Rejection.zone - eps else m5Rejection.zone + eps
                 val entry = if (m5Rejection.side == TradeSide.BUY) buy else sell
@@ -333,19 +333,15 @@ class Strategy006Engine {
         return wait(MarketState.NO_TRADE.name, "No confirmed M5 reaction at a strongest-confluence mapped zone.")
     }
 
-    private fun selectOppositeTarget(
-        side: TradeSide, entryZone: Double, buy: Double, sell: Double, z: Zones
-    ): ZoneConfluence? {
-        val entry = if (side == TradeSide.BUY) buy else sell
-        val candidates = z.confluence
+    fun oppositeTarget(side: TradeSide, entryPrice: Double): ZoneConfluence? {
+        val entryZone = lastReactionZone ?: entryPrice
+        val candidates = current?.zones?.confluence.orEmpty()
+            .filter { if (side == TradeSide.BUY) it.zone > entryPrice && it.zone > entryZone else it.zone < entryPrice && it.zone < entryZone }
             .filter { it.zoneName != lastReactionZoneName }
-            .filter { if (side == TradeSide.BUY) it.zone > entryZone else it.zone < entryZone }
-            .filter { if (side == TradeSide.BUY) it.zone > entry else it.zone < entry }
         if (candidates.isEmpty()) return null
-        val nextZoneDistance = candidates.minOf { abs(it.zone - entry) }
-        val nextOpposite = candidates.filter { abs(it.zone - entry) <= nextZoneDistance + epsFor(entry) }
-        return nextOpposite.maxByOrNull { it.score }
-            ?: candidates.maxByOrNull { it.score }
+        val nearest = candidates.minOf { abs(it.zone - entryPrice) }
+        val nextOpposite = candidates.filter { abs(it.zone - entryPrice) <= nearest + epsFor(entryPrice) }
+        return nextOpposite.maxByOrNull { it.score } ?: candidates.maxByOrNull { it.score }
     }
 
     private fun epsFor(price: Double): Double = max(price * 0.00001, 0.01)
