@@ -509,7 +509,7 @@ class Strategy006Engine {
         return if (hi <= lo) 100.0 else ((value - lo) / (hi - lo) * 100.0).coerceIn(0.0, 100.0)
     }
 
-    companion object { const val STRIKE_BUFFER = 5.0 }
+    companion object {\n        // 200-point matching window = 100 points on either side of the mapped zone.\n        // For XAUUSD at 0.01 point size, 4150.00 matches 4149.00 through 4151.00.\n        const val STRIKE_BUFFER = 1.0\n    }
 
     private fun parseText(text: String): List<Row> {
         if (text.isBlank()) return emptyList()
