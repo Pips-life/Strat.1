@@ -270,6 +270,22 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             fontWeight = FontWeight.Bold
                         )
 
+                        CardBlock {
+                            Text("VOLATILITY / GREEKS INPUT", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(greeksName, color = TextMain, fontSize = 9.sp)
+                            val parsedGreeks = m?.rows?.count { it.source != "iv" } ?: 0
+                            Text(
+                                if (parsedGreeks > 0) "FILE FOUND • $parsedGreeks GREEKS ROWS PARSED"
+                                else "FILE LOADED • 0 USABLE GREEKS ROWS",
+                                color = if (parsedGreeks > 0) Green else Red,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (greeksText.isBlank()) {
+                                Text("No Volatility / Greeks file is loaded. Load it before building confluence.", color = Red, fontSize = 8.sp)
+                            }
+                        }
+
                         if (m?.valid == true && chartPrice != null) {
                             val greekRows = m.rows.filter { it.source != "iv" }.sortedBy { it.strike }
                             val confluenceRows = m.zones.confluence
