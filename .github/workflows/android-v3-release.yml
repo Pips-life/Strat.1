@@ -1,4 +1,4 @@
-name: Android v3.00 Release
+name: Android v2.101 Release
 
 on:
   push:
@@ -39,7 +39,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PipsLife-v3.00
+          name: PipsLife-v2.101
           path: mobile/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -47,5 +47,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete v3.00 --yes 2>/dev/null || true
-          gh release create v3.00 mobile/app/build/outputs/apk/release/app-release.apk --title "PipsLife v3.00" --generate-notes
+          gh release delete v2.101 --yes 2>/dev/null || true
+          gh release create v2.101 mobile/app/build/outputs/apk/release/app-release.apk --title "PipsLife v2.101" --generate-notes
