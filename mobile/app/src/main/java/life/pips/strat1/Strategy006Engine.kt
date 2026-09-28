@@ -187,9 +187,14 @@ class Strategy006Engine {
         return mapped
     }
 
+    fun loadFiles(ivOptionsText: String, greeksText: String, gcPrice: Double, xauSpotPrice: Double): Map {
+        val now = System.currentTimeMillis()
+        return loadFiles(ivOptionsText, greeksText, gcPrice, xauSpotPrice, now, "UTC", "UTC", 0L)
+    }
+
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
         val now = System.currentTimeMillis()
-        return loadFiles(barchartText, greeksText, spot, spot, now, "UTC", "UTC", 0L)
+        return loadFiles(barchartText, greeksText, spot ?: Double.NaN, spot ?: Double.NaN, now, "UTC", "UTC", 0L)
     }
 
     private fun parseIvOptionsTable(text: String): List<Row> {
@@ -255,8 +260,8 @@ class Strategy006Engine {
         return null
     }
 
-    fun mapGcLevelToXau(gcLevel: Double, gcPrice: Double, xauSpotPrice: Double): Double =
-        gcLevel - (gcPrice - xauSpotPrice)
+    fun polishIvStrike(ivStrike: Double, gcPrice: Double, liveXauPrice: Double): Double =
+        ivStrike + (gcPrice - liveXauPrice)
 
     fun clear() {
         current = null
@@ -334,12 +339,13 @@ class Strategy006Engine {
         val entry = if (side == TradeSide.BUY) buy else sell
         val candidates = z.confluence
             .filter { it.zoneName != lastReactionZoneName }
-            .filter { if (side == TradeSide.BUY) it.zone > entry else it.zone < entry }
             .filter { if (side == TradeSide.BUY) it.zone > entryZone else it.zone < entryZone }
+            .filter { if (side == TradeSide.BUY) it.zone > entry else it.zone < entry }
         if (candidates.isEmpty()) return null
-        val nearestDistance = candidates.minOf { abs(it.zone - entry) }
-        val nextBand = candidates.filter { abs(it.zone - entry) <= nearestDistance + max(epsFor(entry), 0.000001) }
-        return nextBand.maxByOrNull { it.score } ?: candidates.maxByOrNull { it.score }
+        val nextZoneDistance = candidates.minOf { abs(it.zone - entry) }
+        val nextOpposite = candidates.filter { abs(it.zone - entry) <= nextZoneDistance + epsFor(entry) }
+        return nextOpposite.maxByOrNull { it.score }
+            ?: candidates.maxByOrNull { it.score }
     }
 
     private fun epsFor(price: Double): Double = max(price * 0.00001, 0.01)
