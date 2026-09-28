@@ -44,7 +44,9 @@ jobs:
           find mobile/app/build/outputs -type f -name "*.apk" -print
           APK_PATH="$(find mobile/app/build/outputs -type f -name "*.apk" | head -n 1)"
           test -n "$APK_PATH"
-          echo "path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-2.102.0-2102.apk"
+          cp "$APK_PATH" "$NORMALIZED_APK"
+          echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
       - name: Verify APK
         run: test -f "${{ steps.apk.outputs.path }}"
