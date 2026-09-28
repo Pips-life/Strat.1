@@ -352,17 +352,25 @@ private fun S006GreeksStrikes(confluence: List<Strategy006Engine.Confluence>, ro
         } else {
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Text("STRIKE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("DELTA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("PUT Δ", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("CALL Δ", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
                 Text("IV", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.6f))
+                Text("GAMMA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("VEGA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("THETA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.4f))
             }
             rows.forEach { row ->
                 val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - row.strike) <= 5.0 }.minByOrNull { abs((it.matchedStrike ?: row.strike) - row.strike) }
                 Row(Modifier.fillMaxWidth().background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
                     Text(String.format("%.3f", row.delta), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.3f", row.delta), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
                     Text(String.format("%.2f", row.iv), color = Green, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(match?.zoneName?.let { "✓ $it" } ?: "—", color = if (match != null) Green else Muted, fontSize = 7.sp, modifier = Modifier.weight(1.6f))
+                    Text(String.format("%.4f", row.gamma), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.4f", row.vega), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.4f", row.theta), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(match?.zoneName?.let { "✓ $it" } ?: "—", color = if (match != null) Green else Muted, fontSize = 7.sp, modifier = Modifier.weight(1.4f))
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .06f))
             }
