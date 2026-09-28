@@ -470,8 +470,44 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
     }
 }
 
-@Composable private fun StrategySelector(selected: TradingEngine.StrategyId, onSelect: (TradingEngine.StrategyId) -> Unit) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) { StrategySelectorButton("001", "GEX", selected == TradingEngine.StrategyId.STRATEGY_001) { onSelect(TradingEngine.StrategyId.STRATEGY_001) }; StrategySelectorButton("002", "VELOCITY", selected == TradingEngine.StrategyId.STRATEGY_002) { onSelect(TradingEngine.StrategyId.STRATEGY_002) }; StrategySelectorButton("003", "SMC", selected == TradingEngine.StrategyId.STRATEGY_003) { onSelect(TradingEngine.StrategyId.STRATEGY_003) }; StrategySelectorButton("004", "PRICE ACTION", selected == TradingEngine.StrategyId.STRATEGY_004) { onSelect(TradingEngine.StrategyId.STRATEGY_004) }; StrategySelectorButton("005", "WOODIE", selected == TradingEngine.StrategyId.STRATEGY_005) { onSelect(TradingEngine.StrategyId.STRATEGY_005) }; StrategySelectorButton("006", "OPTIONS FLOW", selected == TradingEngine.StrategyId.STRATEGY_006) { onSelect(TradingEngine.StrategyId.STRATEGY_006) } } }
-@Composable private fun RowScope.StrategySelectorButton(id: String, name: String, selected: Boolean, onClick: () -> Unit) { Surface(color = if (selected) Cyan.copy(.14f) else Panel, shape = androidx.compose.foundation.shape.RoundedCornerShape(7.dp), modifier = Modifier.weight(1f).clickable { onClick() }) { Text("$id\n$name", color = if (selected) Cyan else Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center) } }
+@Composable private fun StrategySelector(selected: TradingEngine.StrategyId, onSelect: (TradingEngine.StrategyId) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val strategies = listOf(
+        TradingEngine.StrategyId.STRATEGY_001 to "S001 • GEX / QOF",
+        TradingEngine.StrategyId.STRATEGY_002 to "S002 • VELOCITY",
+        TradingEngine.StrategyId.STRATEGY_003 to "S003 • SMC",
+        TradingEngine.StrategyId.STRATEGY_004 to "S004 • PRICE ACTION",
+        TradingEngine.StrategyId.STRATEGY_005 to "S005 • WOODIE",
+        TradingEngine.StrategyId.STRATEGY_006 to "S006 • OPTIONS FLOW"
+    )
+    val label = strategies.first { it.first == selected }.second
+    Column(Modifier.fillMaxWidth()) {
+        Text("ACTIVE STRATEGY", color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxWidth()) {
+            Surface(
+                color = Panel,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(7.dp),
+                modifier = Modifier.fillMaxWidth().clickable { expanded = true }
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Text(label, color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text(if (expanded) "▲" else "▼", color = Muted, fontSize = 9.sp)
+                }
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                strategies.forEach { (id, name) ->
+                    DropdownMenuItem(
+                        text = { Text(name, color = if (id == selected) Cyan else TextMain, fontSize = 10.sp) },
+                        onClick = { expanded = false; if (id != selected) onSelect(id) }
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable private fun WatchlistTab(modifier: Modifier, saved: SavedConnection, snapshot: MetaSnapshot?, selected: String, onSave: (String) -> Unit) { var text by remember(saved.watchlist) { mutableStateOf(saved.watchlist) }; LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) { item { Header("Market Watchlist", "Actual MetaApi symbols — stored locally") }; item { Field("Comma-separated MetaApi symbols", text, { text = it }) }; item { Button(onClick = { onSave(text) }, modifier = Modifier.fillMaxWidth()) { Text("SAVE WATCHLIST") } }; item { Text("Selected: $selected", color = Cyan, fontWeight = FontWeight.Bold, fontSize = 10.sp) }; snapshot?.prices?.forEach { (symbol, tick) -> item { CardBlock { Text(symbol, color = TextMain, fontWeight = FontWeight.Bold); Text("Bid ${number(tick.bid)} • Ask ${number(tick.ask)} • tick ${tick.time}", color = Muted, fontSize = 10.sp) } } } } }
 @Composable private fun Field(label: String, value: String, onValue: (String) -> Unit, password: Boolean = false) { OutlinedTextField(value = value, onValueChange = onValue, label = { Text(label) }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None) }
