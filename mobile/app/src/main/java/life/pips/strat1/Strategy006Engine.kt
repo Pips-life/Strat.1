@@ -571,14 +571,18 @@ class Strategy006Engine {
         // PUT DELTA | PUT PRICE | STRIKE | CALL PRICE | CALL DELTA | IMP VOL
         // The extractor intentionally preserves this layout. Do not treat it as a
         // generic one-row option table, otherwise the paired deltas/IV are lost.
-        val sideBySide = header.indexOfFirst { it.contains("put delta") } >= 0 &&
+        val hasExplicitSideBySide = header.indexOfFirst { it.contains("put delta") } >= 0 &&
+            header.indexOfFirst { it.contains("call delta") } >= 0
+        val hasBarchartSideBySideLabels = header.any { it.contains("put options") } &&
+            header.any { it.contains("call options") } &&
+            header.any { it == "strike" || it.contains("strike price") }
+        val sideBySide = (hasExplicitSideBySide || hasBarchartSideBySideLabels) &&
             header.indexOfFirst { it == "strike" || it.contains("strike price") } >= 0 &&
-            header.indexOfFirst { it.contains("call delta") } >= 0 &&
             header.indexOfFirst { it.contains("imp vol") || it.contains("implied volatility") } >= 0
         if (sideBySide) {
-            val putDeltaIdx = header.indexOfFirst { it.contains("put delta") }
+            val putDeltaIdx = if (hasExplicitSideBySide) header.indexOfFirst { it.contains("put delta") } else header.indexOfFirst { it == "delta" }
             val strikeIdx = header.indexOfFirst { it == "strike" || it.contains("strike price") }
-            val callDeltaIdx = header.indexOfFirst { it.contains("call delta") }
+            val callDeltaIdx = if (hasExplicitSideBySide) header.indexOfFirst { it.contains("call delta") } else header.indexOfLast { it == "delta" }
             val ivIdx = header.indexOfFirst { it.contains("imp vol") || it.contains("implied volatility") }
             val parsed = mutableListOf<Row>()
             for (cells in all.drop(1)) {
