@@ -99,6 +99,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     var barchartText by remember { mutableStateOf("") }
     var greeksText by remember { mutableStateOf("") }
     var gcPriceText by remember { mutableStateOf("") }
+    var spotPriceText by remember { mutableStateOf("") }
     val s006Today = remember { LocalDate.now(ZoneId.of("Africa/Nairobi")).toString() }
     LaunchedEffect(Unit) {
         if (s006Prefs.getString("date", "") == s006Today) {
@@ -107,6 +108,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             barchartName = s006Prefs.getString("barchart_name", "Cached IV options table").orEmpty()
             greeksName = s006Prefs.getString("greeks_name", "Cached Volatility / Greeks table").orEmpty()
             gcPriceText = s006Prefs.getString("gc_price", "").orEmpty()
+            spotPriceText = s006Prefs.getString("spot_price", "").orEmpty()
+            if (spotPriceText.isBlank()) spotPriceText = optionsFlow.extractIvSpotPrice(barchartText)?.let { String.format("%.2f", it) }.orEmpty()
         } else {
             s006Prefs.edit().clear().apply()
         }
@@ -121,7 +124,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         val name = result.second
                         barchartText = text
                         barchartName = name
-                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).apply()
+                        optionsFlow.extractIvSpotPrice(text)?.let { spotPriceText = String.format("%.2f", it) }
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).apply()
                         localStatus = "S006 | FILE 1 LOADED • " + name
                     }
                     .onFailure { error -> localStatus = "S006 | FILE 1 ERROR • " + (error.message ?: "Could not read file") }
@@ -156,18 +160,32 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
-                        Field("GC futures price", gcPriceText, { gcPriceText = it })
-                        val ivFileSpot = optionsFlow.extractIvSpotPrice(barchartText)
-                        Text("IV file Spot = " + (ivFileSpot?.let { String.format("%.2f", it) } ?: "NOT FOUND") + " • used as live XAUUSD mapping price", color = if (ivFileSpot != null) Green else Muted, fontSize = 9.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedTextField(
+                                value = gcPriceText,
+                                onValueChange = { gcPriceText = it },
+                                label = { Text("GC PRICE") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = spotPriceText,
+                                onValueChange = { spotPriceText = it },
+                                label = { Text("SPOT PRICE") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+                        Text("SPOT PRICE is the XAUUSD anchor for IV mapping. Screenshot Spot is auto-filled when recognized; you can correct it before Build I.V Map.", color = if (spotPriceText.toDoubleOrNull()?.let { it > 0.0 } == true) Green else Muted, fontSize = 9.sp)
                         Button(
                             enabled = barchartText.isNotBlank() && greeksText.isNotBlank() &&
                                 gcPriceText.toDoubleOrNull()?.let { it > 0.0 } == true &&
-                                optionsFlow.extractIvSpotPrice(barchartText)?.let { it > 0.0 } == true,
+                                spotPriceText.toDoubleOrNull()?.let { it > 0.0 } == true,
                             onClick = {
                                 val gc = gcPriceText.toDoubleOrNull()
-                                val ivSpot = optionsFlow.extractIvSpotPrice(barchartText)
+                                val ivSpot = spotPriceText.toDoubleOrNull()
                                 if (gc != null && gc > 0.0 && ivSpot != null && ivSpot > 0.0) {
-                                    s006Prefs.edit().putString("date", s006Today).putString("gc_price", gcPriceText).apply()
+                                    s006Prefs.edit().putString("date", s006Today).putString("gc_price", gcPriceText).putString("spot_price", spotPriceText).apply()
                                     val built = optionsFlow.loadFiles(barchartText, greeksText, gc, ivSpot)
                                     localStatus = if (built.valid) {
                                         "S006 | IV MAP BUILT • file Spot used as live XAUUSD mapping price • basis=" + String.format("%.2f", gc - ivSpot)
@@ -175,7 +193,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                         "S006 | IV MAP ERROR • " + built.warnings.joinToString(" • ")
                                     }
                                 } else {
-                                    localStatus = "S006 | BUILD MAP WAITING FOR GC PRICE + IV FILE SPOT"
+                                    localStatus = "S006 | BUILD MAP WAITING FOR GC PRICE + SPOT PRICE"
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
