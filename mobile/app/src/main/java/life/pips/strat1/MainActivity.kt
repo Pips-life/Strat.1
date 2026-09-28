@@ -175,11 +175,23 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     }
 
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { r -> r.readText() } ?: "" }
-            .onSuccess { text ->
-                greeksText = text; greeksName = uri.lastPathSegment ?: "Greeks CSV"
-                s006Prefs.edit().putString("date", s006Today).putString("greeks_text", text).putString("greeks_name", greeksName).apply()
-            } }
+        uri?.let {
+            scope.launch {
+                status = "S006 | READING VOL/GREEKS FILE…"
+                Strategy006GreeksFileExtractor.extract(context, it)
+                    .onSuccess { result ->
+                        val text = result.first
+                        val name = result.second
+                        greeksText = text
+                        greeksName = name
+                        s006Prefs.edit().putString("date", s006Today).putString("greeks_text", text).putString("greeks_name", name).apply()
+                        status = "S006 | VOL/GREEKS FILE LOADED • " + name
+                    }
+                    .onFailure { error ->
+                        status = "S006 | VOL/GREEKS FILE ERROR • " + (error.message ?: "Could not read file")
+                    }
+            }
+        }
     }
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
         item { Header("Strategies", "Each strategy has its own selectable tab and isolated rules") }; item { StrategySelector(selected, onSelect) }; item { Text("MetaApi trading symbol: $tradeSymbol", color = Muted, fontSize = 10.sp) }
@@ -200,7 +212,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
                             Button(onClick = { readS006Clipboard() }, modifier = Modifier.weight(1f)) { Text("READ CLIPBOARD") }
                         }
-                        Button(onClick = { greeksPicker.launch("text/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD VOL/GREEKS") }
+                        Button(onClick = { greeksPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD VOL/GREEKS FILE") }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
                         Text("READ CLIPBOARD accepts copied IV table text or a copied PDF/image file.", color = Muted, fontSize = 8.sp)
