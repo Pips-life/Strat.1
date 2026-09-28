@@ -356,7 +356,7 @@ private fun S006GreeksStrikes(confluence: List<Strategy006Engine.Confluence>, ro
                 Text("IV", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
                 Text("MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.6f))
             }
-            rows.take(40).forEach { row ->
+            rows.forEach { row ->
                 val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - row.strike) <= 5.0 }.minByOrNull { abs((it.matchedStrike ?: row.strike) - row.strike) }
                 Row(Modifier.fillMaxWidth().background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
@@ -366,7 +366,6 @@ private fun S006GreeksStrikes(confluence: List<Strategy006Engine.Confluence>, ro
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .06f))
             }
-            if (rows.size > 40) Text("+ " + (rows.size - 40) + " more Greek rows", color = Muted, fontSize = 8.sp)
         }
         Text("READ → PARSED → USED: " + rows.size + " rows • matched zones: " + confluence.count { it.matchedStrike != null } + "/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
     }
