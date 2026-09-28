@@ -1,0 +1,51 @@
+name: Android v3.00 Release
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build release APK
+        working-directory: mobile
+        env:
+          FLASHALPHA_API_KEY: ${{ secrets.FLASHALPHA_API_KEY }}
+          PIPS_LIFE_KEYSTORE_PATH: ${{ secrets.PIPS_LIFE_KEYSTORE_PATH }}
+          PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
+          PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
+          PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Verify APK
+        run: test -f mobile/app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PipsLife-v3.00
+          path: mobile/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete v3.00 --yes 2>/dev/null || true
+          gh release create v3.00 mobile/app/build/outputs/apk/release/app-release.apk --title "PipsLife v3.00" --generate-notes
