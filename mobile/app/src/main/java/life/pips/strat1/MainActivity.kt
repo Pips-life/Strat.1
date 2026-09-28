@@ -165,14 +165,18 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                 val live = snapshot?.prices?.get(tradeSymbol)?.let { q -> (q.bid + q.ask) / 2.0 }
                                 if (gc != null && live != null && live > 0.0) {
                                     s006Prefs.edit().putString("date", s006Today).putString("gc_price", gcPriceText).apply()
-                                    optionsFlow.loadFiles(barchartText, greeksText, gc, live)
-                                    localStatus = "S006 | IV ZONES BUILT • basis=" + String.format("%.2f", gc - live)
+                                    val built = optionsFlow.loadFiles(barchartText, greeksText, gc, live)
+                                    localStatus = if (built.valid) {
+                                        "S006 | IV MAP BUILT • six zones calculated from supplied files • basis=" + String.format("%.2f", gc - live)
+                                    } else {
+                                        "S006 | IV MAP ERROR • " + built.warnings.joinToString(" • ")
+                                    }
                                 } else {
-                                    localStatus = "S006 | WAITING FOR LIVE XAUUSD TICK"
+                                    localStatus = "S006 | BUILD MAP WAITING FOR LIVE XAUUSD TICK"
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text("BUILD S006 IV ZONE MAP") }
+                        ) { Text("BUILD I.V MAP") }
 
                         val m = optionsFlow.currentMap()
                         val livePrice = snapshot?.prices?.get(tradeSymbol)?.let { (it.bid + it.ask) / 2.0 }
@@ -188,6 +192,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         )
 
                         if (m?.valid == true && chartPrice != null) {
+                            Text("I.V MAP • ACTUAL MAPPED VALUES", color = Cyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            S006ZoneTable(m.zones)
                             S006ZoneMap(m.zones, chartPrice, zoneStatus, s006PriceHistory)
                             CardBlock {
                                 Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -245,11 +251,45 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         }
                     }
                 }
-                item { Button(onClick = { onRun(!running) }, modifier = Modifier.fillMaxWidth()) { Text(if (running) "STOP" else "START IV ZONE ENGINE") } }
-                if (running) item { Button(onClick = { onArm(!armed) }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = if (armed) Red else Green)) { Text(if (armed) "DISARM LIVE TRADING" else "ARM LIVE TRADING") } }
+                item {
+                    Button(
+                        onClick = {
+                            if (running) {
+                                onRun(false)
+                                onArm(false)
+                            } else {
+                                onRun(true)
+                                onArm(true)
+                                localStatus = "S006 | BOT STARTED • LIVE XAUUSD TRACKING + EXECUTION ACTIVE"
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (running) Red else Green)
+                    ) { Text(if (running) "STOP BOT" else "START BOT") }
+                }
             }
         }
         item { CardBlock { Text("STATUS", color = Muted, fontSize = 9.sp); Text(localStatus, color = TextMain, fontSize = 10.sp) } }
+    }
+}
+
+@Composable
+private fun S006ZoneTable(z: Strategy006Engine.Zones) {
+    val rows = listOf(
+        "Upper Inventory Ceiling" to z.upperInventoryCeiling,
+        "Reclaim Gate" to z.reclaimGate,
+        "Immediate Hedge Wall" to z.immediateHedgeWall,
+        "Primary Hedge Floor" to z.primaryHedgeFloor,
+        "Absorption Floor" to z.dealerAbsorption,
+        "Liquidity Exhaustion" to z.liquidityExhaustion
+    )
+    CardBlock {
+        rows.forEach { (name, price) ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(name, color = TextMain, fontSize = 10.sp)
+                Text(price?.let { String.format("%.2f", it) } ?: "—", color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -266,6 +306,11 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
     val recent = history.takeLast(180).filter { it.second.isFinite() && it.second > 0.0 }
     val chartPrices = recent.map { it.second } + levels.map { it.second } + spot
     val minP = chartPrices.minOrNull() ?: spot
+    val reactedEntry = status?.reactedZone
+    val reactedSide = status?.likelySide
+    val plannedTarget = status?.possibleExit
+    val stopBuffer = maxOf(spot * 0.0005, 0.5)
+    val plannedStop = reactedEntry?.let { if (reactedSide == life.pips.strat1.data.TradeSide.BUY) it - stopBuffer else it + stopBuffer }
     val maxP = chartPrices.maxOrNull() ?: spot
     val span = (maxP - minP).coerceAtLeast(1.0)
     CardBlock {
@@ -277,6 +322,27 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                 val plotHeight = (size.height - topPad - bottomPad).coerceAtLeast(1f)
                 fun y(price: Double): Float = topPad + ((maxP - price) / span).toFloat() * plotHeight
                 val paint = android.graphics.Paint().apply { isAntiAlias = true }
+
+                // Trade visualization only: existing S006 engine remains the source of entry/SL/TP decisions.
+                reactedEntry?.let { entry ->
+                    plannedStop?.let { stop ->
+                        val top = minOf(y(entry), y(stop))
+                        val bottom = maxOf(y(entry), y(stop))
+                        drawRect(Red.copy(alpha = 0.16f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(1f)))
+                    }
+                    plannedTarget?.let { target ->
+                        val top = minOf(y(entry), y(target))
+                        val bottom = maxOf(y(entry), y(target))
+                        drawRect(Green.copy(alpha = 0.10f), topLeft = Offset(0f, top), size = Size(size.width, (bottom - top).coerceAtLeast(1f)))
+                    }
+                    val profitTop = minOf(y(entry), y(spot))
+                    val profitBottom = maxOf(y(entry), y(spot))
+                    val profitable = if (reactedSide == life.pips.strat1.data.TradeSide.BUY) spot > entry else spot < entry
+                    if (profitable) {
+                        drawRect(Green.copy(alpha = 0.18f), topLeft = Offset(0f, profitTop), size = Size(size.width, (profitBottom - profitTop).coerceAtLeast(1f)))
+                    }
+                }
+
                 levels.distinctBy { it.second }.forEach { (name, price) ->
                     val yy = y(price)
                     val highlighted = name == status?.likelyZoneName
@@ -299,7 +365,8 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                         val yy = y(point.second)
                         if (index == 0) path.moveTo(x, yy) else path.lineTo(x, yy)
                     }
-                    drawPath(path, color = Cyan, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+                    val trailColor = if (reactedEntry != null) Green else Color(0xFFFFC247)
+                    drawPath(path, color = trailColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
                 }
                 val liveY = y(spot)
                 drawLine(Green, Offset(0f, liveY), Offset(size.width, liveY), 3f)
@@ -311,7 +378,7 @@ private fun S006ZoneMap(z: Strategy006Engine.Zones, spot: Double, status: Strate
                 drawContext.canvas.nativeCanvas.drawText("1s ticks • last " + recent.size + " points", 8f, size.height - 5f, paint)
             }
         }
-        Text("Live line = MetaApi XAUUSD mid-price • Cyan = active reaction zone • Green = confirmed M5 reaction", color = Muted, fontSize = 8.sp)
+        Text("Amber = live approach • Green = confirmed entry/trail • Red shade = SL risk • Faded green = planned TP • Bright green = current profit", color = Muted, fontSize = 8.sp)
     }
 }
 
