@@ -177,7 +177,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             scope.launch {
-                status = "S006 | READING VOL/GREEKS FILE…"
+                localStatus = "S006 | READING VOL/GREEKS FILE…"
                 Strategy006GreeksFileExtractor.extract(context, it)
                     .onSuccess { result ->
                         val text = result.first
@@ -185,10 +185,10 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         greeksText = text
                         greeksName = name
                         s006Prefs.edit().putString("date", s006Today).putString("greeks_text", text).putString("greeks_name", name).apply()
-                        status = "S006 | VOL/GREEKS FILE LOADED • " + name
+                        localStatus = "S006 | VOL/GREEKS FILE LOADED • " + name
                     }
                     .onFailure { error ->
-                        status = "S006 | VOL/GREEKS FILE ERROR • " + (error.message ?: "Could not read file")
+                        localStatus = "S006 | VOL/GREEKS FILE ERROR • " + (error.message ?: "Could not read file")
                     }
             }
         }
