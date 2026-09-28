@@ -215,7 +215,23 @@ class Strategy006Engine {
         val putDeltaIdx = idx("put delta")
         val callDeltaIdx = idx("call delta")
         val ivIdx = idx("imp vol", "implied volatility", "iv")
-        if (strikeIdx < 0 || ivIdx < 0) return emptyList()
+        if (strikeIdx < 0 || ivIdx < 0) {
+            val fallback = mutableListOf<Row>()
+            text.lineSequence().forEach { line ->
+                val nums = Regex("-?\\d+(?:\\.\\d+)?%?").findAll(line).mapNotNull { num(it.value) }.toList()
+                if (nums.size >= 6) {
+                    val pd = nums[0]
+                    val strike = nums[2]
+                    val cd = nums[4]
+                    val iv = nums[5]
+                    if (strike > 0.0 && iv >= 0.0) {
+                        fallback += Row(strike, 'P', delta = pd, iv = iv, source = "iv")
+                        fallback += Row(strike, 'C', delta = cd, iv = iv, source = "iv")
+                    }
+                }
+            }
+            return fallback
+        }
         val out = mutableListOf<Row>()
         for (cells in all.drop(1)) {
             val strike = num(cells.getOrNull(strikeIdx)) ?: continue
