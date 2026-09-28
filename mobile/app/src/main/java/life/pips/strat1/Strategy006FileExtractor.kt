@@ -27,6 +27,14 @@ import kotlin.math.max
  * Greeks/gamma remain sourced from File 2.
  */
 object Strategy006FileExtractor {
+    fun normalizeClipboardText(raw: String): Result<String> = runCatching {
+        val normalized = normalizeOcr(raw)
+        if (normalized.lineSequence().count { it.isNotBlank() } < 2) {
+            error("Clipboard text did not contain enough IV options rows.")
+        }
+        normalized
+    }
+
     suspend fun extract(context: Context, uri: Uri): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
         runCatching {
             val name = queryName(context, uri)
@@ -71,12 +79,12 @@ object Strategy006FileExtractor {
                 val out = StringBuilder()
                 for (pageIndex in 0 until renderer.pageCount) {
                     renderer.openPage(pageIndex).use { page ->
-                        val scale = max(1.0, 1800.0 / page.width.toDouble())
-                        val width = (page.width * scale).toInt().coerceAtMost(3000)
-                        val height = (page.height * scale).toInt().coerceAtMost(3000)
+                        val scale = max(2.0, 2400.0 / page.width.toDouble())
+                        val width = (page.width * scale).toInt().coerceAtMost(4000)
+                        val height = (page.height * scale).toInt().coerceAtMost(4000)
                         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                         bitmap.eraseColor(Color.WHITE)
-                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                         out.append(ocrBitmap(bitmap)).append('\n')
                         bitmap.recycle()
                     }
