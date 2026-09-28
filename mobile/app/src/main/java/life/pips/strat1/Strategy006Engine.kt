@@ -140,7 +140,7 @@ class Strategy006Engine {
         greeksText: String,
         gcPrice: Double?,
         xauSpotPrice: Double?,
-        xauTimestampMillis: Long,
+        xauTimestampMillis: Long = System.currentTimeMillis(),
         gcTimestampMillis: Long = xauTimestampMillis,
         gcSourceTimezone: String = "America/New_York",
         xauSourceTimezone: String = "Africa/Nairobi",
