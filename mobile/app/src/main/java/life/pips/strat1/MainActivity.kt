@@ -344,7 +344,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 }
 
 @Composable
-private fun S006GreeksStrikes(confluence: List<Strategy006Engine.Confluence>, rows: List<Strategy006Engine.Row>) {
+private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
         Text("GREEKS STRIKES", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
         Text("Parsed volatility / Greeks rows used for ±5 point confluence matching.", color = Muted, fontSize = 8.sp)
