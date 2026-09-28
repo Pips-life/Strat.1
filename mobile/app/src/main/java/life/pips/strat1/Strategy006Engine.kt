@@ -142,7 +142,7 @@ class Strategy006Engine {
         val greekRows = parseText(greeksText)
         val rows = (ivRows + greekRows).filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
         if (gcPrice == null || gcPrice <= 0.0 || xauSpotPrice == null || xauSpotPrice <= 0.0) {
-            current = calculate(rows, gcPrice).copy(
+            current = calculate(rows, gcPrice, xauSpotPrice).copy(
                 spot = xauSpotPrice,
                 warnings = calculate(rows, gcPrice).warnings + "GC futures price and live XAUUSD price are required."
             )
@@ -159,7 +159,7 @@ class Strategy006Engine {
         }
         // Build the six zones directly in XAUUSD coordinates from the signed GC/XAUUSD basis.
         // The same polished levels are then used for Volatility + Greeks confluence matching.
-        val mappedBase = calculate(rows, gcPrice, basis.basis)
+        val mappedBase = calculate(rows, gcPrice, xauSpotPrice, basis.basis)
         val mapped = mappedBase.copy(
             spot = xauSpotPrice,
             basis = basis,
@@ -231,6 +231,18 @@ class Strategy006Engine {
             if (cd != 0.0 || callDeltaIdx >= 0) out += Row(strike, 'C', delta = cd, iv = iv, source = "iv")
         }
         return out
+    }
+
+    /** Extract the spot price printed inside the IV options file. This is the XAUUSD live mapping anchor for the file-built map. */
+    fun extractIvSpotPrice(text: String): Double? {
+        if (text.isBlank()) return null
+        val patterns = listOf(
+            Regex("""(?i)\bspot\s*(?:price)?\s*[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)\b"""),
+            Regex("""(?i)\bspot\b\s+([0-9]+(?:\.[0-9]+)?)\b""")
+        )
+        return patterns.asSequence()
+            .mapNotNull { it.find(text)?.groupValues?.getOrNull(1)?.let(::num) }
+            .firstOrNull { it.isFinite() && it > 0.0 }
     }
 
     /** Read the GC observation timestamp from CSV, PDF-extracted text, or OCR text. */
@@ -434,14 +446,15 @@ class Strategy006Engine {
         return abs(b - near) <= eps * 2.0 && c < b && b >= a
     }
 
-    private fun calculate(rows: List<Row>, spot: Double?, signedBasis: Double = 0.0): Map {
-        if (rows.isEmpty()) return Map(emptyList(), spot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
-        if (spot == null || spot <= 0.0) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
+    private fun calculate(rows: List<Row>, gcPrice: Double?, liveXauSpot: Double? = gcPrice, signedBasis: Double = 0.0): Map {
+        if (rows.isEmpty()) return Map(emptyList(), liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
+        if (gcPrice == null || gcPrice <= 0.0) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
+        if (liveXauSpot == null || liveXauSpot <= 0.0) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("Live XAUUSD spot price is required for IV strike polishing."))
 
         val unique = rows.filter { it.source == "iv" }.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
-        if (unique.size < 6) return Map(rows, spot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
+        if (unique.size < 6) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
 
-        val atm = unique.minByOrNull { abs(it - spot) }
+        val atm = unique.minByOrNull { abs(it - liveXauSpot) }
         val ivStrikes = unique.filter { it != atm }
         val below = ivStrikes.filter { it < spot }.sortedDescending()
         val above = ivStrikes.filter { it > spot }.sorted()
