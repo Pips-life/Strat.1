@@ -37,7 +37,7 @@ class Strategy006Engine {
     )
 
     data class Map(
-        val rows: List<Row>, val spot: Double?,
+        val rows: List<Row>, val futuresRows: List<Row> = emptyList(), val spot: Double?,
         val zones: Zones, val basis: BasisMapping?, val valid: Boolean,
         val warnings: List<String>
     )
