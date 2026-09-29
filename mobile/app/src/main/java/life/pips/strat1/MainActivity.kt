@@ -195,19 +195,24 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
     val futuresPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            futuresText = ""
-            futuresName = "Reading new futures/options PDF…"
-            s006Prefs.edit().remove("futures_text").remove("futures_name").apply()
+            // Keep the previous valid File 3 until the replacement has parsed successfully.
+            futuresName = "Reading new futures/options file…"
             scope.launch {
-                localStatus = "S006 | READING FUTURES OPTIONS PDF…"
+                localStatus = "S006 | READING FUTURES OPTIONS FILE…"
                 Strategy006FileExtractor.extractFutures(context, it)
                     .onSuccess { result ->
                         futuresText = result.first
                         futuresName = result.second
-                        s006Prefs.edit().putString("date", s006Today).putString("futures_text", futuresText).putString("futures_name", futuresName).putLong("updated_at", System.currentTimeMillis()).apply()
-                        localStatus = "S006 | FUTURES OPTIONS FILE LOADED • $futuresName"
+                        s006Prefs.edit().putString("date", s006Today).putString("futures_text", futuresText)
+                            .putString("futures_name", futuresName).putLong("updated_at", System.currentTimeMillis()).apply()
+                        localStatus = "S006 | FUTURES FILE PARSED • " +
+                            futuresText.lineSequence().count { it.isNotBlank() }.coerceAtLeast(1) +
+                            " LINES • " + futuresName
                     }
-                    .onFailure { error -> localStatus = "S006 | FUTURES PDF ERROR • " + (error.message ?: "Could not read futures/options PDF") }
+                    .onFailure { error ->
+                        localStatus = "S006 | FUTURES FILE ERROR • " + (error.message ?: "Could not read futures/options file") +
+                            " • Previous valid File 3 retained"
+                    }
             }
         }
     }
@@ -253,7 +258,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("IV strikes → signed GC/XAUUSD basis → six mapped zones → strongest confluence → M5 reaction → opposite-confluence target.", color = Muted, fontSize = 10.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
-                            Button(onClick = { futuresPicker.launch("application/pdf") }, modifier = Modifier.weight(1f)) { Text("LOAD FUTURES PDF") }
+                            Button(onClick = { futuresPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD FUTURES PDF") }
                         }
                         Button(onClick = { greeksPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD VOL/GREEKS FILE") }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
