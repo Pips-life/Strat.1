@@ -130,66 +130,70 @@ object Strategy006FileExtractor {
 
     /** Rebuild File 3 from OCR geometry and normalize it to one row per side. */
     private fun normalizeFuturesOcr(raw: String, ocrTokens: List<OcrToken>): String {
-        val numberRegex = Regex("""[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?""")
+        val numberRegex = Regex("""[-+]?\\d+(?:,\\d{3})*(?:\\.\\d+)?%?""")
         fun value(s: String): Double? = s.replace(",", "").replace("%", "").toDoubleOrNull()
 
-        fun parseRows(values: List<Double>): Pair<Double, List<RowValue>>? {
-            if (values.size < 5) return null
-            val strikeIndex = values.indexOfFirst { it >= 1000.0 }
-            if (strikeIndex <= 0 || strikeIndex >= values.lastIndex) return null
-            val strike = values[strikeIndex]
-            val left = values.subList(0, strikeIndex)
-            val right = values.subList(strikeIndex + 1, values.size)
-            if (left.isEmpty() || right.isEmpty()) return null
-            val putPremium = left.last()
-            val putVol = left.getOrNull(left.size - 2) ?: 0.0
-            val putOi = left.getOrNull(left.size - 3) ?: left.first()
-            val callPremium = right.first()
-            val callVol = right.getOrNull(1) ?: 0.0
-            val callOi = right.getOrNull(2) ?: right.last()
-            return strike to listOf(
-                RowValue('P', putOi, putVol, putPremium),
-                RowValue('C', callOi, callVol, callPremium)
-            )
+        /*
+         * Screenshot/PDF File 3 schema (page 3):
+         *   CALL: Volume | OI | Premium | STRIKE | PUT: Volume | OI | Premium
+         *
+         * The OCR result is never mapped by text order. For each physical OCR row
+         * we use Y to find the row and X to find the seven cells. A row is accepted
+         * only when exactly seven numeric cells are present, so a neighbouring value
+         * can never slide into another column.
+         */
+        fun parseSeven(values: List<Double>): Pair<Double, List<RowValue>>? {
+            if (values.size != 7) return null
+            val strike = values[3]
+            if (strike < 100.0) return null
+            val call = RowValue('C', values[1], values[0], values[2])
+            val put = RowValue('P', values[5], values[4], values[6])
+            return strike to listOf(call, put)
         }
 
         val rows = mutableListOf<Pair<Double, List<RowValue>>>()
 
         if (ocrTokens.isNotEmpty()) {
-            for (pageTokens in ocrTokens.groupBy { it.page }.values) {
-                val numeric = pageTokens.flatMap { token ->
+            for (pageTokens in ocrTokens.groupBy { it.page }) {
+                val numeric = pageTokens.value.flatMap { token ->
                     numberRegex.findAll(token.text).mapNotNull { m ->
                         value(m.value)?.let { Triple(it, token.left, token.centerY) }
                     }
                 }
                 if (numeric.isEmpty()) continue
-                val heights = pageTokens.map { it.height }.sorted()
+
+                val heights = pageTokens.value.map { it.height }.sorted()
                 val medianHeight = heights[heights.size / 2].toDouble().coerceAtLeast(1.0)
                 val rowTolerance = max(12.0, medianHeight * 0.8)
                 val groups = mutableListOf<MutableList<Triple<Double, Int, Double>>>()
+
                 for (item in numeric.sortedBy { it.third }) {
                     val group = groups.lastOrNull()
                     if (group == null ||
                         kotlin.math.abs(group.map { it.third }.average() - item.third) > rowTolerance
-                    ) groups += mutableListOf(item) else group += item
+                    ) {
+                        groups += mutableListOf(item)
+                    } else {
+                        group += item
+                    }
                 }
+
                 for (group in groups) {
-                    parseRows(group.sortedBy { it.second }.map { it.first })?.let { rows += it }
+                    val ordered = group.sortedBy { it.second }
+                    // Header/metadata rows and wrapped OCR rows are rejected.
+                    if (ordered.size != 7) continue
+                    parseSeven(ordered.map { it.first })?.let { rows += it }
                 }
             }
         }
 
+        /*
+         * Text fallback is deliberately strict: seven numbers per row only.
+         * This is used for non-image exports where physical coordinates are absent.
+         */
         if (rows.isEmpty()) {
             raw.lineSequence().forEach { line ->
-                parseRows(numberRegex.findAll(line).mapNotNull { value(it.value) }.toList())?.let { rows += it }
-            }
-        }
-
-        if (rows.isEmpty()) {
-            val values = numberRegex.findAll(raw).mapNotNull { value(it.value) }.toList()
-            for (i in values.indices) {
-                if (i + 5 > values.size) break
-                parseRows(values.subList(i, minOf(values.size, i + 7)))?.let { rows += it }
+                parseSeven(numberRegex.findAll(line).mapNotNull { value(it.value) }.toList())?.let { rows += it }
             }
         }
 
@@ -197,9 +201,15 @@ object Strategy006FileExtractor {
         return buildString {
             appendLine("strike,type,volume,open interest,premium")
             rows.distinctBy { it.first to it.second.first().type }.forEach { (strike, sides) ->
+                // Preserve CALL-left / PUT-right source orientation in the normalized data.
                 sides.forEach { side ->
-                    appendLine(String.format(java.util.Locale.US, "%.4f,%s,%.4f,%.4f,%.4f",
-                        strike, side.type, side.volume, side.oi, side.premium))
+                    appendLine(
+                        String.format(
+                            java.util.Locale.US,
+                            "%.4f,%s,%.4f,%.4f,%.4f",
+                            strike, side.type, side.volume, side.oi, side.premium
+                        )
+                    )
                 }
             }
         }
