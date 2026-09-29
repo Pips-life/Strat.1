@@ -462,76 +462,62 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 @Composable
 private fun S006FuturesStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
-        Text("FUTURES OPTIONS", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("Native futures strikes are the third confluence layer after IV and Greeks matching.", color = Muted, fontSize = 8.sp)
+        Text("FUTURES / OPTIONS", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("CALL SIDE                         STRIKES                         PUT SIDE", color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("VOL   OI   PREMIUM", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.55f))
+            Text("STRIKE", color = Cyan, fontSize = 7.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
+            Text("VOL   OI   PREMIUM", color = Muted, fontSize = 7.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.55f))
+        }
         if (rows.isEmpty()) {
             Text("FILE READ — 0 USABLE FUTURES ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Text("STRIKE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("TYPE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(.7f))
-                Text("OI", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("VOL", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("PREMIUM", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("3-LAYER MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.5f))
-            }
-            rows.sortedBy { it.strike }.take(60).forEach { row ->
-                val match = confluence.filter { it.matchedStrike != null }.minByOrNull { abs(it.matchedStrike!! - row.strike) }
-                val matched = match != null && abs(match.matchedStrike!! - row.strike) <= Strategy006Engine.STRIKE_BUFFER
+            rows.map { it.strike }.distinct().sorted().take(60).forEach { strike ->
+                val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { it.volume + it.oi }
+                val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { it.volume + it.oi }
+                val match = confluence.filter { it.matchedStrike != null }.minByOrNull { abs(it.matchedStrike!! - strike) }
+                val matched = match != null && abs(match.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER
                 Row(Modifier.fillMaxWidth().background(if (matched) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(row.type.toString(), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(.7f))
-                    Text(String.format("%.0f", row.oi), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.0f", row.volume), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.2f", row.premium), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(if (matched) "✓ ${match!!.zoneName}" else "—", color = if (matched) Green else Muted, fontSize = 7.sp, modifier = Modifier.weight(1.5f))
+                    Text(call?.let { String.format("%.0f  %.0f  %.2f", it.volume, it.oi, it.premium) } ?: "—", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.55f))
+                    Text(String.format("%.2f", strike), color = TextMain, fontSize = 8.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
+                    Text(put?.let { String.format("%.0f  %.0f  %.2f", it.volume, it.oi, it.premium) } ?: "—", color = Muted, fontSize = 7.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.55f))
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .06f))
             }
-            if (rows.size > 60) Text("+ ${rows.size - 60} more futures rows", color = Muted, fontSize = 8.sp)
         }
-        Text("READ → PARSED → MATCHED: ${rows.size} futures rows • full confluence zones: ${confluence.count { it.matchedStrike != null }}/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
+        Text("CALL: Volume / OI / Premium  •  PUT: Volume / OI / Premium  •  \${rows.map { it.strike }.distinct().size} strikes • full confluence zones: \${confluence.count { it.matchedStrike != null }}/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
     }
 }
 
 @Composable
 private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
-        Text("GREEKS STRIKES", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("Parsed volatility / Greeks rows used for 1000-point confluence matching (±500 points).", color = Muted, fontSize = 8.sp)
+        Text("VOLATILITY / GREEKS", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("CALL SIDE                         STRIKES                         PUT SIDE", color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("IV   DELTA   GAMMA   THETA   VEGA   IV SKEW", color = Muted, fontSize = 6.sp, modifier = Modifier.weight(1.65f))
+            Text("STRIKE", color = Cyan, fontSize = 7.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
+            Text("IV   DELTA   GAMMA   THETA   VEGA   IV SKEW", color = Muted, fontSize = 6.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.65f))
+        }
         if (rows.isEmpty()) {
             Text("FILE READ — 0 USABLE GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Text("STRIKE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("TYPE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(0.7f))
-                Text("DELTA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("IV", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("GAMMA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("VEGA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("THETA", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("OI", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("VOL", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
-                Text("MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.4f))
-            }
-            rows.forEach { row ->
-                val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - row.strike) <= Strategy006Engine.STRIKE_BUFFER }.minByOrNull { abs((it.matchedStrike ?: row.strike) - row.strike) }
+            rows.map { it.strike }.distinct().sorted().forEach { strike ->
+                val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+                val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+                val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER }.minByOrNull { abs(it.matchedStrike!! - strike) }
+                val fmt: (Strategy006Engine.Row?) -> String = { r ->
+                    r?.let { String.format("%.2f  %.3f  %.4f  %.4f  %.4f  %.2f", it.iv, it.delta, it.gamma, it.theta, it.vega, it.ivSkew) } ?: "—"
+                }
                 Row(Modifier.fillMaxWidth().background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(row.type.toString(), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(0.7f))
-                    Text(String.format("%.3f", row.delta), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.2f", row.iv), color = Green, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.4f", row.gamma), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.4f", row.vega), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.4f", row.theta), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.0f", row.oi), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(String.format("%.0f", row.volume), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
-                    Text(match?.zoneName?.let { "✓ $it" } ?: "—", color = if (match != null) Green else Muted, fontSize = 7.sp, modifier = Modifier.weight(1.4f))
+                    Text(fmt(call), color = Muted, fontSize = 6.sp, modifier = Modifier.weight(1.65f))
+                    Text(String.format("%.2f", strike), color = TextMain, fontSize = 8.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
+                    Text(fmt(put), color = Muted, fontSize = 6.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.65f))
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .06f))
             }
         }
-        Text("READ → PARSED → USED: " + rows.size + " rows • matched zones: " + confluence.count { it.matchedStrike != null } + "/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
+        Text("CALL and PUT values remain separate by strike  •  \${rows.map { it.strike }.distinct().size} strikes • matched zones: \${confluence.count { it.matchedStrike != null }}/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
     }
 }
 
