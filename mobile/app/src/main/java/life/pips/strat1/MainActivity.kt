@@ -278,7 +278,14 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
                         Text("File 2: " + greeksName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
                         Text("File 3: " + futuresName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
-                        Text("Futures PDF reads both put/call strikes with OI, volume and premium; it is used as the third confluence layer.", color = Muted, fontSize = 8.sp)
+                        Text(
+                            if (futuresText.isNotBlank()) "FILE 3 PARSED • " + futuresText.lineSequence().count { it.isNotBlank() }.coerceAtLeast(0) + " DATA LINES"
+                            else "FILE 3 NOT PARSED — LOAD FILE 3 BEFORE BUILD I.V MAP",
+                            color = if (futuresText.isNotBlank()) Green else Red,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text("File 3 supplies OI / Volume / Premium confluence only; it does not create or move the File 1 zones.", color = Muted, fontSize = 8.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             OutlinedTextField(
                                 value = gcPriceText,
@@ -297,7 +304,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         }
                         Text("SPOT PRICE is the XAUUSD anchor for IV mapping. Screenshot Spot is auto-filled when recognized; you can correct it before Build I.V Map.", color = if (spotPriceText.toDoubleOrNull()?.let { it > 0.0 } == true) Green else Muted, fontSize = 9.sp)
                         Button(
-                            enabled = barchartText.isNotBlank() && greeksText.isNotBlank() &&
+                            enabled = barchartText.isNotBlank() && greeksText.isNotBlank() && futuresText.isNotBlank() &&
                                 gcPriceText.toDoubleOrNull()?.let { it > 0.0 } == true &&
                                 spotPriceText.toDoubleOrNull()?.let { it > 0.0 } == true,
                             onClick = {
@@ -323,6 +330,12 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         val chartPrice = livePrice ?: m?.spot
                         val zoneStatus = livePrice?.let { optionsFlow.zoneStatus(it) }
 
+                        Text(
+                            if (m?.valid == true) "CONFLUENCE READY • File 1 zones + File 2 Greeks + File 3 OI/Volume/Premium" else "CONFLUENCE WAITING • File 1 + File 2 + File 3 required",
+                            color = if (m?.valid == true) Green else Red,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                         Text(
                             "BASIS " + (m?.basis?.basis?.let { String.format("%.2f", it) } ?: "—") +
                                 " • LIVE XAUUSD " + (livePrice?.let { String.format("%.2f", it) } ?: "—"),
