@@ -520,6 +520,8 @@ class Strategy006Engine {
         val skewValues = greekRows.map { abs(it.ivSkew) }.filter { it.isFinite() }
         val futuresValues = futuresRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it.isFinite() && it > 0.0 }
 
+        data class ZoneScore(val confluence: ZoneConfluence, val score: Double)
+
         fun confluence(ivZone: Double, name: String): ZoneConfluence {
             if (nativeGreekStrikes.isEmpty()) {
                 return ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
@@ -549,16 +551,16 @@ class Strategy006Engine {
                     normalize(skew, skewValues) * 0.15 +
                     futuresStrength * 0.20
 
-                Triple(
+                ZoneScore(
                     ZoneConfluence(name, ivZone, greekStrike, score, volatility, greekMagnitude, abs(greekStrike - ivZone)),
                     score
                 )
             }
 
             return scored.maxWithOrNull(
-                compareBy<Triple<ZoneConfluence, Double>> { it.second }
-                    .thenBy { -it.first.distance }
-            )?.first ?: ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
+                compareBy<ZoneScore> { it.score }
+                    .thenBy { -it.confluence.distance }
+            )?.confluence ?: ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
         }
 
         val named = polishedZones.zip(listOf(
