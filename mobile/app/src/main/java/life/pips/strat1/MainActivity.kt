@@ -98,8 +98,10 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     val s006Prefs = remember { context.getSharedPreferences("strategy006_files", android.content.Context.MODE_PRIVATE) }
     var barchartName by remember { mutableStateOf("No IV options file selected") }
     var greeksName by remember { mutableStateOf("No Volatility / Greeks file selected") }
+    var futuresName by remember { mutableStateOf("No futures/options PDF selected") }
     var barchartText by remember { mutableStateOf("") }
     var greeksText by remember { mutableStateOf("") }
+    var futuresText by remember { mutableStateOf("") }
     var gcPriceText by remember { mutableStateOf("") }
     var spotPriceText by remember { mutableStateOf("") }
     val s006Today = remember { LocalDate.now(ZoneId.of("Africa/Nairobi")).toString() }
@@ -109,6 +111,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             greeksText = s006Prefs.getString("greeks_text", "").orEmpty()
             barchartName = s006Prefs.getString("barchart_name", "Cached IV options table").orEmpty()
             greeksName = s006Prefs.getString("greeks_name", "Cached Volatility / Greeks table").orEmpty()
+            futuresText = s006Prefs.getString("futures_text", "").orEmpty()
+            futuresName = s006Prefs.getString("futures_name", "Cached futures/options PDF").orEmpty()
             gcPriceText = s006Prefs.getString("gc_price", "").orEmpty()
             spotPriceText = s006Prefs.getString("spot_price", "").orEmpty()
             if (spotPriceText.isBlank()) spotPriceText = optionsFlow.extractIvSpotPrice(barchartText)?.let { String.format("%.2f", it) }.orEmpty()
@@ -189,6 +193,25 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
         }
     }
 
+    val futuresPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            futuresText = ""
+            futuresName = "Reading new futures/options PDF…"
+            s006Prefs.edit().remove("futures_text").remove("futures_name").apply()
+            scope.launch {
+                localStatus = "S006 | READING FUTURES OPTIONS PDF…"
+                Strategy006FileExtractor.extractFutures(context, it)
+                    .onSuccess { result ->
+                        futuresText = result.first
+                        futuresName = result.second
+                        s006Prefs.edit().putString("date", s006Today).putString("futures_text", futuresText).putString("futures_name", futuresName).putLong("updated_at", System.currentTimeMillis()).apply()
+                        localStatus = "S006 | FUTURES OPTIONS FILE LOADED • $futuresName"
+                    }
+                    .onFailure { error -> localStatus = "S006 | FUTURES PDF ERROR • " + (error.message ?: "Could not read futures/options PDF") }
+            }
+        }
+    }
+
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             // A newly selected Greeks/volatility file replaces the previous active file.
@@ -230,12 +253,13 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("IV strikes → signed GC/XAUUSD basis → six mapped zones → strongest confluence → M5 reaction → opposite-confluence target.", color = Muted, fontSize = 10.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
-                            Button(onClick = { readS006Clipboard() }, modifier = Modifier.weight(1f)) { Text("READ CLIPBOARD") }
+                            Button(onClick = { futuresPicker.launch("application/pdf") }, modifier = Modifier.weight(1f)) { Text("LOAD FUTURES PDF") }
                         }
                         Button(onClick = { greeksPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD VOL/GREEKS FILE") }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
-                        Text("READ CLIPBOARD accepts copied IV table text or a copied PDF/image file.", color = Muted, fontSize = 8.sp)
+                        Text("Futures options: " + futuresName, color = Muted, fontSize = 8.sp)
+                        Text("Futures PDF reads both put/call strikes with OI, volume and premium; it is used as the third confluence layer.", color = Muted, fontSize = 8.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             OutlinedTextField(
                                 value = gcPriceText,
@@ -262,7 +286,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                 val ivSpot = spotPriceText.toDoubleOrNull()
                                 if (gc != null && gc > 0.0 && ivSpot != null && ivSpot > 0.0) {
                                     s006Prefs.edit().putString("date", s006Today).putString("gc_price", gcPriceText).putString("spot_price", spotPriceText).apply()
-                                    val built = optionsFlow.loadFiles(barchartText, greeksText, gc, ivSpot)
+                                    val built = optionsFlow.loadFiles(barchartText, greeksText, futuresText, gc, ivSpot)
                                     localStatus = if (built.valid) {
                                         "S006 | IV MAP BUILT • file Spot used as live XAUUSD mapping price • basis=" + String.format("%.2f", gc - ivSpot)
                                     } else {
@@ -310,7 +334,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             val matchedZones = confluenceRows.count { it.matchedStrike != null }
                             val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
                             val tabs = listOf("I.V ZONES + PRICE", "GREEKS STRIKES")
-                            Text("IV ZONES " + m.zones.confluence.size + "/6 • GREEKS " + greekRows.size + " ROWS • CONFLUENCE " + matchedZones + "/6", color = if (greekRows.isNotEmpty()) Green else Red, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            Text("IV MAP " + m.zones.confluence.size + "/6 • GREEKS " + greekRows.size + " ROWS • FUTURES " + m.futuresRows.size + " ROWS • 3-LAYER CONFLUENCE " + matchedZones + "/6", color = if (greekRows.isNotEmpty()) Green else Red, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             TabRow(selectedTabIndex = pagerState.currentPage, containerColor = Color.Transparent, contentColor = Cyan) {
                                 tabs.forEachIndexed { index, title ->
                                     Tab(selected = pagerState.currentPage == index, onClick = { scope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(title, fontSize = 9.sp, fontWeight = FontWeight.Bold) })
