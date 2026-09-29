@@ -540,7 +540,7 @@ class Strategy006Engine {
             "ATM IV strike " + (atm ?: Double.NaN) + " ignored.",
             "IV zone polishing uses signed basis: polished strike = IV strike + (GC price - live XAUUSD price).",
             "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " price units (±500 points / 1000 points total).",
-            "Each IV zone selects the highest-scoring Volatility + Greeks strike inside the buffer."
+            "Confluence = IV zone + full Greeks/IV-skew + futures OI/volume/premium; futures strikes are basis-mapped before matching."
         ))
     }
 
