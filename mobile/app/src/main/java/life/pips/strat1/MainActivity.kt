@@ -195,7 +195,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
         }
     }
 
-    val futuresPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val futuresPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             // FILE 3 is a single replaceable slot: selecting a new file immediately
             // overrides/removes the previous File 3 so stale data cannot remain active.
@@ -230,7 +230,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
         }
     }
 
-    val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             // A newly selected Greeks/volatility file replaces the previous active file.
             // Remove the old copy before reading so the UI/engine cannot retain stale Greeks.
@@ -271,12 +271,13 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("IV strikes → signed GC/XAUUSD basis → six mapped zones → strongest confluence → M5 reaction → opposite-confluence target.", color = Muted, fontSize = 10.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(onClick = { barchartPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD IV TABLE") }
-                            Button(onClick = { futuresPicker.launch("*/*") }, modifier = Modifier.weight(1f)) { Text("LOAD FUTURES PDF") }
+                            Button(onClick = { futuresPicker.launch(arrayOf("application/pdf", "text/csv", "text/comma-separated-values", "text/*")) }, modifier = Modifier.weight(1f)) { Text("LOAD FILE 3") }
                         }
-                        Button(onClick = { greeksPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) { Text("LOAD VOL/GREEKS FILE") }
+                        Button(onClick = { greeksPicker.launch(arrayOf("application/pdf", "text/csv", "text/comma-separated-values", "text/*")) }, modifier = Modifier.fillMaxWidth()) { Text("LOAD FILE 2") }
                         Text("IV table: " + barchartName, color = Muted, fontSize = 8.sp)
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
-                        Text("Futures options: " + futuresName, color = Muted, fontSize = 8.sp)
+                        Text("File 2: " + greeksName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
+                        Text("File 3: " + futuresName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
                         Text("Futures PDF reads both put/call strikes with OI, volume and premium; it is used as the third confluence layer.", color = Muted, fontSize = 8.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             OutlinedTextField(
