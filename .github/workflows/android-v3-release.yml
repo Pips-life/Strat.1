@@ -1,4 +1,4 @@
-name: Android v2.109 Release
+name: Android v2.110 Release
 
 on:
   push:
@@ -58,6 +58,17 @@ jobs:
           test -n "$PIPS_LIFE_KEY_ALIAS"
           test -n "$PIPS_LIFE_KEY_PASSWORD"
 
+      - name: Read release version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION_NAME="$(grep '^versionName=' mobile/release.properties | cut -d= -f2)"
+          VERSION_CODE="$(grep '^versionCode=' mobile/release.properties | cut -d= -f2)"
+          test -n "$VERSION_NAME"
+          test -n "$VERSION_CODE"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
       - name: Build release APK
         working-directory: mobile
         env:
@@ -70,11 +81,14 @@ jobs:
 
       - name: Locate APK
         id: apk
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
         run: |
           set -euo pipefail
           APK_PATH="mobile/app/build/outputs/apk/release/app-release.apk"
           test -f "$APK_PATH"
-          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-2.109.0-2109.apk"
+          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-$VERSION_NAME.0-$VERSION_CODE.apk"
           cp "$APK_PATH" "$NORMALIZED_APK"
           echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
@@ -91,11 +105,15 @@ jobs:
       - name: Verify APK metadata
         env:
           APK_PATH: ${{ steps.apk.outputs.path }}
+          EXPECTED_VERSION_NAME: ${{ steps.version.outputs.name }}
+          EXPECTED_VERSION_CODE: ${{ steps.version.outputs.code }}
         run: |
           set -euo pipefail
           AAPT2="$(find "$ANDROID_HOME/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
           test -n "$AAPT2"
-          "$AAPT2" dump badging "$APK_PATH" | grep -F "package: name='life.pipslife.mobile' versionCode='2109' versionName='2.109'"
+          BADGING="$("$AAPT2" dump badging "$APK_PATH")"
+          echo "$BADGING"
+          echo "$BADGING" | grep -F "package: name='life.pipslife.mobile' versionCode='$EXPECTED_VERSION_CODE' versionName='$EXPECTED_VERSION_NAME'"
 
       - name: Create SHA-256 checksum
         env:
@@ -105,7 +123,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PipsLife-v2.109
+          name: PipsLife-v${{ steps.version.outputs.name }}
           path: |
             ${{ steps.apk.outputs.path }}
             ${{ steps.apk.outputs.path }}.sha256
@@ -114,10 +132,8 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
-          gh release delete v2.109 --yes 2>/dev/null || true
-          gh release create v2.109 \
-            "${{ steps.apk.outputs.path }}" \
-            "${{ steps.apk.outputs.path }}.sha256" \
-            --title "PipsLife v2.109" \
-            --generate-notes
+          set -euo pipefail
+          gh release delete "v$VERSION_NAME" --yes 2>/dev/null || true
+          gh release create "v$VERSION_NAME"             "${{ steps.apk.outputs.path }}"             "${{ steps.apk.outputs.path }}.sha256"             --title "PipsLife v$VERSION_NAME"             --generate-notes
