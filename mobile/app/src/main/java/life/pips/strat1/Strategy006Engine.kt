@@ -500,10 +500,11 @@ class Strategy006Engine {
         val selected = (below.take(3).sorted() + above.take(3)).sorted()
         val polishedZones = selected.map { it + signedBasis }
         val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
-        val greekRows = rows.filter { it.source != "iv" }
+        val greekRows = rows.filter { it.source != "iv" && it.source != "futures" }
+        val mappedFuturesRows = futuresRows.map { it.copy(strike = it.strike - signedBasis) }
         val greekStrikes = greekRows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct()
         val ivVolValues = ivRows.map { abs(it.iv) }
-        val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }\n        val futuresValues = futuresRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it > 0.0 }
+        val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }\n        val futuresValues = mappedFuturesRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it > 0.0 }
 
         fun confluence(zone: Double, name: String): ZoneConfluence {
             val candidates = greekStrikes.mapNotNull { strike ->
@@ -511,7 +512,7 @@ class Strategy006Engine {
                 val volatility = ivRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { abs(it.iv) } ?: 0.0
                 val greekMagnitude = greekRows.filter { abs(it.strike - strike) <= 0.01 }
                     .maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
-                val greekIv = greekRows.filter { abs(it.strike - strike) <= 0.01 }.maxOfOrNull { abs(it.ivSkew) } ?: 0.0\n                val futuresStrength = futuresRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues) } ?: 0.0\n                val score = normalize(volatility, ivVolValues) * 0.30 + normalize(greekMagnitude, greekMagnitudeValues) * 0.35 + normalize(greekIv, greekRows.map { abs(it.ivSkew) }) * 0.15 + futuresStrength * 0.20
+                val greekIv = greekRows.filter { abs(it.strike - strike) <= 0.01 }.maxOfOrNull { abs(it.ivSkew) } ?: 0.0\n                val futuresStrength = mappedFuturesRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues) } ?: 0.0\n                val score = normalize(volatility, ivVolValues) * 0.30 + normalize(greekMagnitude, greekMagnitudeValues) * 0.35 + normalize(greekIv, greekRows.map { abs(it.ivSkew) }) * 0.15 + futuresStrength * 0.20
                 Triple(strike, score, volatility)
             }
             val best = candidates.maxWithOrNull(compareBy<Triple<Double, Double, Double>> { it.second }.thenBy { -abs(it.first - zone) })
