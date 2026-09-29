@@ -118,6 +118,11 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     }
     val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
+            // A newly selected file is the replacement for the active FILE 1.
+            // Clear the previous slot immediately so stale data cannot survive a replacement.
+            barchartText = ""
+            barchartName = "Reading new IV options file…"
+            s006Prefs.edit().remove("barchart_text").remove("barchart_name").remove("spot_price").apply()
             scope.launch {
                 localStatus = "S006 | READING FILE 1…"
                 Strategy006FileExtractor.extract(context, it)
@@ -127,7 +132,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         barchartText = text
                         barchartName = name
                         optionsFlow.extractIvSpotPrice(text)?.let { spotPriceText = String.format("%.2f", it) }
-                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).apply()
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", text).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).putLong("updated_at", System.currentTimeMillis()).apply()
                         localStatus = "S006 | FILE 1 LOADED • " + name
                     }
                     .onFailure { error -> localStatus = "S006 | FILE 1 ERROR • " + (error.message ?: "Could not read file") }
@@ -152,23 +157,31 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
         scope.launch {
             localStatus = "S006 | READING CLIPBOARD…"
             if (hasFileUri && uri != null) {
+                // Clipboard file input replaces the previous FILE 1 atomically.
+                barchartText = ""
+                barchartName = "Reading new clipboard IV options file…"
+                s006Prefs.edit().remove("barchart_text").remove("barchart_name").remove("spot_price").apply()
                 Strategy006FileExtractor.extract(context, uri)
                     .onSuccess { result ->
                         barchartText = result.first
                         barchartName = "Clipboard • ${result.second}"
                         optionsFlow.extractIvSpotPrice(result.first)?.let { spotPriceText = String.format("%.2f", it) }
-                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", barchartText).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).apply()
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", barchartText).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).putLong("updated_at", System.currentTimeMillis()).apply()
                         localStatus = "S006 | CLIPBOARD FILE READ • $barchartName"
                     }
                     .onFailure { localStatus = "S006 | CLIPBOARD FILE ERROR • " + (it.message ?: "Could not read clipboard file") }
             } else {
+                // Pasted table input also replaces the previous FILE 1.
+                barchartText = ""
+                barchartName = "Reading new clipboard text…"
+                s006Prefs.edit().remove("barchart_text").remove("barchart_name").remove("spot_price").apply()
                 val text = item.coerceToText(context)?.toString().orEmpty()
                 Strategy006FileExtractor.normalizeClipboardText(text)
                     .onSuccess { normalized ->
                         barchartText = normalized
                         barchartName = "Clipboard text"
                         optionsFlow.extractIvSpotPrice(normalized)?.let { spotPriceText = String.format("%.2f", it) }
-                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", normalized).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).apply()
+                        s006Prefs.edit().putString("date", s006Today).putString("barchart_text", normalized).putString("barchart_name", barchartName).putString("spot_price", spotPriceText).putLong("updated_at", System.currentTimeMillis()).apply()
                         localStatus = "S006 | CLIPBOARD TEXT PARSED • IV rows + Spot recognized"
                     }
                     .onFailure { localStatus = "S006 | CLIPBOARD TEXT ERROR • " + (it.message ?: "Could not parse pasted table") }
@@ -178,6 +191,11 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
     val greeksPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
+            // A newly selected Greeks/volatility file replaces the previous active file.
+            // Remove the old copy before reading so the UI/engine cannot retain stale Greeks.
+            greeksText = ""
+            greeksName = "Reading new Volatility / Greeks file…"
+            s006Prefs.edit().remove("greeks_text").remove("greeks_name").apply()
             scope.launch {
                 localStatus = "S006 | READING VOL/GREEKS FILE…"
                 Strategy006GreeksFileExtractor.extract(context, it)
