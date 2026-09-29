@@ -67,9 +67,10 @@ android {
             }
         }
         buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
-    } else if (System.getenv("CI").equals("true", ignoreCase = true)) {
+    } else if (System.getenv("CI").equals("true", ignoreCase = true) &&
+        gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }) {
         throw GradleException(
-            "Release signing key is unavailable. Refusing to produce/publish an unsigned APK. " +
+            "Release signing key is unavailable. Refusing to produce/publish an unsigned release APK. " +
                 "Provide the existing Pips-life production keystore and its credentials via GitHub Actions secrets."
         )
     }
