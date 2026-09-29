@@ -1,4 +1,4 @@
-name: Android v2.110 Release
+name: Android v2.115 Release
 
 on:
   push:
@@ -92,15 +92,30 @@ jobs:
           cp "$APK_PATH" "$NORMALIZED_APK"
           echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
-      - name: Verify signed APK
+      - name: Verify signed APK and production signing identity
         env:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
           test -n "$APKSIGNER"
+          test -n "$ZIPALIGN"
           "$APKSIGNER" verify --verbose "$APK_PATH"
-          "$APKSIGNER" verify --print-certs "$APK_PATH"
+          "$ZIPALIGN" -c -v 4 "$APK_PATH"
+          "$APKSIGNER" verify --print-certs "$APK_PATH" | tee "$RUNNER_TEMP/current-certs.txt"
+
+          mkdir -p "$RUNNER_TEMP/previous-release"
+          gh release download v2.113 --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir "$RUNNER_TEMP/previous-release"
+          PREVIOUS_APK="$(find "$RUNNER_TEMP/previous-release" -type f -name '*.apk' | head -n 1)"
+          test -n "$PREVIOUS_APK"
+          "$APKSIGNER" verify --print-certs "$PREVIOUS_APK" | tee "$RUNNER_TEMP/previous-certs.txt"
+
+          CURRENT_CERT="$(grep -m1 'Signer #1 certificate SHA-256 digest:' "$RUNNER_TEMP/current-certs.txt" | sed 's/.*: //')"
+          PREVIOUS_CERT="$(grep -m1 'Signer #1 certificate SHA-256 digest:' "$RUNNER_TEMP/previous-certs.txt" | sed 's/.*: //')"
+          test -n "$CURRENT_CERT"
+          test -n "$PREVIOUS_CERT"
+          test "$CURRENT_CERT" = "$PREVIOUS_CERT"
 
       - name: Verify APK metadata
         env:
