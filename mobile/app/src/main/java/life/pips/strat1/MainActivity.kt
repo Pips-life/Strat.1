@@ -197,23 +197,34 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 
     val futuresPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            // Keep the previous valid File 3 until the replacement has parsed successfully.
-            futuresName = "Reading new futures/options file…"
+            // FILE 3 is a single replaceable slot: selecting a new file immediately
+            // overrides/removes the previous File 3 so stale data cannot remain active.
+            futuresText = ""
+            futuresName = "Reading new File 3…"
+            s006Prefs.edit()
+                .remove("futures_text")
+                .remove("futures_name")
+                .apply()
             scope.launch {
-                localStatus = "S006 | READING FUTURES OPTIONS FILE…"
+                localStatus = "S006 | READING FILE 3…"
                 Strategy006FileExtractor.extractFutures(context, it)
                     .onSuccess { result ->
                         futuresText = result.first
                         futuresName = result.second
-                        s006Prefs.edit().putString("date", s006Today).putString("futures_text", futuresText)
-                            .putString("futures_name", futuresName).putLong("updated_at", System.currentTimeMillis()).apply()
-                        localStatus = "S006 | FUTURES FILE PARSED • " +
+                        s006Prefs.edit()
+                            .putString("date", s006Today)
+                            .putString("futures_text", futuresText)
+                            .putString("futures_name", futuresName)
+                            .putLong("updated_at", System.currentTimeMillis())
+                            .apply()
+                        localStatus = "S006 | FILE 3 REPLACED • " +
                             futuresText.lineSequence().count { it.isNotBlank() }.coerceAtLeast(1) +
                             " LINES • " + futuresName
                     }
                     .onFailure { error ->
-                        localStatus = "S006 | FUTURES FILE ERROR • " + (error.message ?: "Could not read futures/options file") +
-                            " • Previous valid File 3 retained"
+                        localStatus = "S006 | FILE 3 ERROR • " +
+                            (error.message ?: "Could not read futures/options file") +
+                            " • Previous File 3 has already been overridden"
                     }
             }
         }
