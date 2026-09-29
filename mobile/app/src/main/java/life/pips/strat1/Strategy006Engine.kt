@@ -150,7 +150,7 @@ class Strategy006Engine {
         val greekRows = parseText(greeksText)
         val rows = (ivRows + greekRows).filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
         if (gcPrice == null || gcPrice <= 0.0 || xauSpotPrice == null || xauSpotPrice <= 0.0) {
-            current = calculate(rows, gcPrice, xauSpotPrice).copy(
+            current = calculate(rows, futuresRows, gcPrice, xauSpotPrice).copy(
                 spot = xauSpotPrice,
                 warnings = calculate(rows, gcPrice).warnings + "GC futures price and live XAUUSD price are required."
             )
@@ -162,12 +162,12 @@ class Strategy006Engine {
             toleranceMillis
         )
         if (!basis.valid) {
-            current = calculate(rows, gcPrice).copy(spot = xauSpotPrice, basis = basis, warnings = listOf<String>(basis.warning ?: "Basis mapping invalid."))
+            current = calculate(rows, futuresRows, gcPrice).copy(spot = xauSpotPrice, basis = basis, warnings = listOf<String>(basis.warning ?: "Basis mapping invalid."))
             return current!!
         }
         // Build the six zones directly in XAUUSD coordinates from the signed GC/XAUUSD basis.
         // The same polished levels are then used for Volatility + Greeks confluence matching.
-        val mappedBase = calculate(rows, gcPrice, xauSpotPrice, basis.basis)
+        val mappedBase = calculate(rows, futuresRows, gcPrice, xauSpotPrice, basis.basis)
         val mapped = mappedBase.copy(
             spot = xauSpotPrice,
             basis = basis,
@@ -186,7 +186,7 @@ class Strategy006Engine {
 
     fun loadFiles(ivOptionsText: String, greeksText: String, gcPrice: Double, xauSpotPrice: Double): Map {
         val now = System.currentTimeMillis()
-        return loadFiles(ivOptionsText, greeksText, gcPrice, xauSpotPrice, now, now, "UTC", "UTC", 0L)
+        return loadFiles(ivOptionsText, greeksText, "", gcPrice, xauSpotPrice, now, now, "UTC", "UTC", 0L)
     }
 
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
@@ -484,24 +484,24 @@ class Strategy006Engine {
     }
 
 
-    private fun calculate(rows: List<Row>, gcPrice: Double?, liveXauSpot: Double? = gcPrice, signedBasis: Double = 0.0): Map {
-        if (rows.isEmpty()) return Map(emptyList(), liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
-        if (gcPrice == null || gcPrice <= 0.0) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
-        if (liveXauSpot == null || liveXauSpot <= 0.0) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("Live XAUUSD spot price is required for IV strike polishing."))
+    private fun calculate(rows: List<Row>, futuresRows: List<Row> = emptyList(), gcPrice: Double?, liveXauSpot: Double? = gcPrice, signedBasis: Double = 0.0): Map {
+        if (rows.isEmpty()) return Map(emptyList(), futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
+        if (gcPrice == null || gcPrice <= 0.0) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
+        if (liveXauSpot == null || liveXauSpot <= 0.0) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("Live XAUUSD spot price is required for IV strike polishing."))
         val unique = rows.filter { it.source == "iv" }.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
-        if (unique.size < 6) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
+        if (unique.size < 6) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
         val atm = unique.minByOrNull { abs(it - liveXauSpot) }
         val ivStrikes = unique.filter { it != atm }
         val below = ivStrikes.filter { it < liveXauSpot }.sortedDescending()
         val above = ivStrikes.filter { it > liveXauSpot }.sorted()
-        if (below.size < 3 || above.size < 3) return Map(rows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV file live spot."))
+        if (below.size < 3 || above.size < 3) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV file live spot."))
         val selected = (below.take(3).sorted() + above.take(3)).sorted()
         val polishedZones = selected.map { it + signedBasis }
         val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
         val greekRows = rows.filter { it.source != "iv" }
         val greekStrikes = greekRows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct()
         val ivVolValues = ivRows.map { abs(it.iv) }
-        val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+        val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }\n        val futuresValues = futuresRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it > 0.0 }
 
         fun confluence(zone: Double, name: String): ZoneConfluence {
             val candidates = greekStrikes.mapNotNull { strike ->
@@ -509,7 +509,7 @@ class Strategy006Engine {
                 val volatility = ivRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { abs(it.iv) } ?: 0.0
                 val greekMagnitude = greekRows.filter { abs(it.strike - strike) <= 0.01 }
                     .maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
-                val score = normalize(volatility, ivVolValues) * 0.55 + normalize(greekMagnitude, greekMagnitudeValues) * 0.45
+                val greekIv = greekRows.filter { abs(it.strike - strike) <= 0.01 }.maxOfOrNull { abs(it.ivSkew) } ?: 0.0\n                val futuresStrength = futuresRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues) } ?: 0.0\n                val score = normalize(volatility, ivVolValues) * 0.30 + normalize(greekMagnitude, greekMagnitudeValues) * 0.35 + normalize(greekIv, greekRows.map { abs(it.ivSkew) }) * 0.15 + futuresStrength * 0.20
                 Triple(strike, score, volatility)
             }
             val best = candidates.maxWithOrNull(compareBy<Triple<Double, Double, Double>> { it.second }.thenBy { -abs(it.first - zone) })
@@ -533,7 +533,7 @@ class Strategy006Engine {
             zoneMap["Liquidity Exhaustion"]?.zone,
             named
         )
-        return Map(rows, liveXauSpot, zones, null, true, listOf(
+        return Map(rows, futuresRows, liveXauSpot, zones, null, true, listOf(
             "ATM IV strike " + (atm ?: Double.NaN) + " ignored.",
             "IV zone polishing uses signed basis: polished strike = IV strike + (GC price - live XAUUSD price).",
             "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " price units (±500 points / 1000 points total).",
@@ -650,6 +650,33 @@ class Strategy006Engine {
                 num(cells.getOrNull(ivIdx)) ?: 0.0)
         }
         return rows
+    }
+
+    /** Parse futures/options chain rows carrying OI, volume and premiums for both sides. */
+    private fun parseFuturesText(text: String): List<Row> {
+        if (text.isBlank()) return emptyList()
+        val lines = text.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+        val out = mutableListOf<Row>()
+        val number = Regex("""[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?""")
+        for (line in lines) {
+            val v = number.findAll(line).mapNotNull { it.value.replace(",", "").replace("%", "").toDoubleOrNull() }.toList()
+            if (v.size < 5) continue
+            val strikeIndex = v.indexOfFirst { it >= 1000.0 }
+            if (strikeIndex < 0) continue
+            val strike = v[strikeIndex]
+            val left = v.take(strikeIndex)
+            val right = v.drop(strikeIndex + 1)
+            if (left.isEmpty() || right.isEmpty()) continue
+            val putOi = left.getOrNull(left.size - 3) ?: left.first()
+            val putVol = left.getOrNull(left.size - 2) ?: 0.0
+            val putPremium = left.last()
+            val callPremium = right.first()
+            val callVol = right.getOrNull(1) ?: 0.0
+            val callOi = right.getOrNull(2) ?: 0.0
+            out += Row(strike, 'P', oi = putOi, volume = putVol, premium = putPremium, source = "futures")
+            out += Row(strike, 'C', oi = callOi, volume = callVol, premium = callPremium, source = "futures")
+        }
+        return out.distinctBy { Triple(it.strike, it.type, it.oi.toString() + "|" + it.volume + "|" + it.premium) }
     }
 
     private fun clean(s: String): String = s.replace(Regex("<[^>]+>"), "").replace("&nbsp;", " ").trim()
