@@ -711,10 +711,29 @@ class Strategy006Engine {
         return rows
     }
 
-    /** Parse futures/options chain rows carrying OI, volume and premiums for both sides. */
+    /** Parse normalized File 3 rows plus legacy OCR futures chains. */
     private fun parseFuturesText(text: String): List<Row> {
         if (text.isBlank()) return emptyList()
         val lines = text.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+        if (lines.isEmpty()) return emptyList()
+        val header = splitCsv(lines.first()).map { normalize(it) }
+        val strikeIdx = header.indexOfFirst { it == "strike" || it.contains("strike price") }
+        val typeIdx = header.indexOfFirst { it == "type" || it == "call put" || it == "put call" }
+        val volIdx = header.indexOfFirst { it == "volume" || it == "vol" }
+        val oiIdx = header.indexOfFirst { it == "open interest" || it == "oi" }
+        val premiumIdx = header.indexOfFirst { it == "premium" || it == "price" || it == "option price" }
+        if (strikeIdx >= 0 && typeIdx >= 0) {
+            val parsed = mutableListOf<Row>()
+            for (line in lines.drop(1)) {
+                val cells = splitCsv(line)
+                val strike = num(cells.getOrNull(strikeIdx)) ?: continue
+                if (strike <= 0.0) continue
+                val typeText = cells.getOrNull(typeIdx).orEmpty().uppercase(Locale.US)
+                val type = when { typeText.startsWith("P") -> 'P'; typeText.startsWith("C") -> 'C'; else -> continue }
+                parsed += Row(strike, type, oi = num(cells.getOrNull(oiIdx)) ?: 0.0, volume = num(cells.getOrNull(volIdx)) ?: 0.0, premium = num(cells.getOrNull(premiumIdx)) ?: 0.0, source = "futures")
+            }
+            if (parsed.isNotEmpty()) return parsed.distinctBy { Triple(it.strike, it.type, it.oi.toString() + "|" + it.volume + "|" + it.premium) }
+        }
         val out = mutableListOf<Row>()
         val number = Regex("""[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?""")
         for (line in lines) {
@@ -731,7 +750,7 @@ class Strategy006Engine {
             val putPremium = left.last()
             val callPremium = right.first()
             val callVol = right.getOrNull(1) ?: 0.0
-            val callOi = right.getOrNull(2) ?: 0.0
+            val callOi = right.getOrNull(2) ?: right.last()
             out += Row(strike, 'P', oi = putOi, volume = putVol, premium = putPremium, source = "futures")
             out += Row(strike, 'C', oi = callOi, volume = callVol, premium = callPremium, source = "futures")
         }
