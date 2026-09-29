@@ -15,9 +15,11 @@ import kotlin.math.max
 class Strategy006Engine {
     data class Row(
         val strike: Double, val type: Char, val oi: Double = 0.0,
-        val volume: Double = 0.0, val gamma: Double = 0.0,
-        val delta: Double = 0.0, val vega: Double = 0.0,
-        val theta: Double = 0.0, val iv: Double = 0.0, val source: String = "greeks"
+        val volume: Double = 0.0, val premium: Double = 0.0,
+        val gamma: Double = 0.0, val delta: Double = 0.0, val vega: Double = 0.0,
+        val theta: Double = 0.0, val iv: Double = 0.0,
+        val putIv: Double = 0.0, val callIv: Double = 0.0, val ivSkew: Double = 0.0,
+        val source: String = "greeks"
     )
 
     data class ZoneConfluence(
@@ -490,42 +492,70 @@ class Strategy006Engine {
         if (rows.isEmpty()) return Map(emptyList(), futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("No options rows parsed."))
         if (gcPrice == null || gcPrice <= 0.0) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("GC futures price is required for IV strike polishing."))
         if (liveXauSpot == null || liveXauSpot <= 0.0) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("Live XAUUSD spot price is required for IV strike polishing."))
-        val unique = rows.filter { it.source == "iv" }.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
-        if (unique.size < 6) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("At least six non-ATM IV strikes are required."))
-        val atm = unique.minByOrNull { abs(it - liveXauSpot) }
-        val ivStrikes = unique.filter { it != atm }
-        val below = ivStrikes.filter { it < liveXauSpot }.sortedDescending()
-        val above = ivStrikes.filter { it > liveXauSpot }.sorted()
-        if (below.size < 3 || above.size < 3) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV file live spot."))
-        val selected = (below.take(3).sorted() + above.take(3)).sorted()
-        val polishedZones = selected.map { it + signedBasis }
-        val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
-        val greekRows = rows.filter { it.source != "iv" && it.source != "futures" }
-        // GC basis is an IV-map normalization only. Futures strikes remain in their native GC/options-chain price space.\n        val mappedFuturesRows = futuresRows
-        val greekStrikes = greekRows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct()
-        val ivVolValues = ivRows.map { abs(it.iv) }
-        val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }\n        val futuresValues = mappedFuturesRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it > 0.0 }
 
-        fun confluence(zone: Double, name: String): ZoneConfluence {
-            val candidates = greekStrikes.mapNotNull { strike ->
-                if (abs(strike - zone) > STRIKE_BUFFER) return@mapNotNull null
-                val volatility = ivRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { abs(it.iv) } ?: 0.0
-                val greekMagnitude = greekRows.filter { abs(it.strike - strike) <= 0.01 }
-                    .maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
-                val greekIv = greekRows.filter { abs(it.strike - strike) <= 0.01 }.maxOfOrNull { abs(it.ivSkew) } ?: 0.0\n                val futuresStrength = mappedFuturesRows.filter { abs(it.strike - strike) <= STRIKE_BUFFER }.maxOfOrNull { normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues) } ?: 0.0\n                val score = normalize(volatility, ivVolValues) * 0.30 + normalize(greekMagnitude, greekMagnitudeValues) * 0.35 + normalize(greekIv, greekRows.map { abs(it.ivSkew) }) * 0.15 + futuresStrength * 0.20
-                Triple(strike, score, volatility)
-            }
-            val best = candidates.maxWithOrNull(compareBy<Triple<Double, Double, Double>> { it.second }.thenBy { -abs(it.first - zone) })
-            if (best == null) return ZoneConfluence(name, zone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
-            val bestGreek = greekRows.filter { abs(it.strike - best.first) <= 0.01 }
-                .maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
-            return ZoneConfluence(name, zone, best.first, best.second, best.third, bestGreek, abs(best.first - zone))
+        // Stage 1: build the IV map. GC basis is used ONLY here.
+        val ivStrikes = rows.filter { it.source == "iv" }
+            .map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct().sorted()
+        if (ivStrikes.size < 7) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("At least seven IV strikes are required so six non-ATM strikes can be mapped."))
+        val atm = ivStrikes.minByOrNull { abs(it - liveXauSpot) }
+        val nonAtm = ivStrikes.filter { it != atm }
+        val below = nonAtm.filter { it < liveXauSpot }.sortedDescending()
+        val above = nonAtm.filter { it > liveXauSpot }.sorted()
+        if (below.size < 3 || above.size < 3) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV-file live spot."))
+
+        val selectedIv = (below.take(3).sorted() + above.take(3)).sorted()
+        val polishedZones = selectedIv.map { it + signedBasis }
+
+        val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
+        val greekRows = rows.filter { it.source == "greeks" && it.strike.isFinite() && it.strike > 0.0 }
+        val nativeGreekStrikes = greekRows.map { it.strike }.distinct().sorted()
+        val nativeFuturesStrikes = futuresRows.map { it.strike }.filter { it.isFinite() && it.strike > 0.0 }.distinct().sorted()
+
+        // Stage 2: each polished IV zone must first match a native Greeks strike.
+        // Stage 3: that Greeks strike must then match a native futures strike.
+        // No GC-basis conversion is applied to Greeks or futures strikes.
+        val ivValues = ivRows.map { abs(it.iv) }
+        val greekValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+        val skewValues = greekRows.map { abs(it.ivSkew) }
+        val futuresValues = futuresRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it > 0.0 }
+
+        fun nearest(strikes: List<Double>, target: Double): Double? =
+            strikes.minByOrNull { abs(it - target) }?.takeIf { abs(it - target) <= STRIKE_BUFFER }
+
+        fun confluence(ivZone: Double, name: String): ZoneConfluence {
+            val greekStrike = nearest(nativeGreekStrikes, ivZone)
+                ?: return ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
+
+            val futuresStrike = nearest(nativeFuturesStrikes, greekStrike)
+                ?: return ZoneConfluence(name, greekStrike, null, 0.0, 0.0, 0.0, abs(greekStrike - ivZone))
+
+            val greekAtStrike = greekRows.filter { abs(it.strike - greekStrike) <= 0.01 }
+            val ivAtStrike = ivRows.filter { abs(it.strike - greekStrike) <= STRIKE_BUFFER }
+            val futuresAtStrike = futuresRows.filter { abs(it.strike - futuresStrike) <= 0.01 }
+
+            val volatility = ivAtStrike.maxOfOrNull { abs(it.iv) } ?: 0.0
+            val greekMagnitude = greekAtStrike.maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
+            val skew = greekAtStrike.maxOfOrNull { abs(it.ivSkew) } ?: 0.0
+            val futuresStrength = futuresAtStrike.maxOfOrNull { normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues) } ?: 0.0
+
+            val score = normalize(volatility, ivValues) * 0.30 +
+                normalize(greekMagnitude, greekValues) * 0.35 +
+                normalize(skew, skewValues) * 0.15 +
+                futuresStrength * 0.20
+
+            // matchedStrike is the native Greeks/XAU execution strike. The futures
+            // strike is evidence only; it is never basis-shifted into XAUUSD.
+            ZoneConfluence(
+                name, greekStrike, greekStrike, score, volatility, greekMagnitude,
+                abs(greekStrike - ivZone)
+            )
         }
 
         val named = polishedZones.zip(listOf(
             "Liquidity Exhaustion", "Dealer Absorption", "Primary Hedge Floor",
             "Immediate Hedge Wall", "Reclaim Gate", "Upper Inventory Ceiling"
         )).map { (zone, name) -> confluence(zone, name) }
+
         val zoneMap = named.associateBy { it.zoneName }
         val zones = Zones(
             zoneMap["Upper Inventory Ceiling"]?.zone,
@@ -536,11 +566,13 @@ class Strategy006Engine {
             zoneMap["Liquidity Exhaustion"]?.zone,
             named
         )
-        return Map(rows, futuresRows, liveXauSpot, zones, null, true, listOf(
-            "ATM IV strike " + (atm ?: Double.NaN) + " ignored.",
-            "IV zone polishing uses signed basis: polished strike = IV strike + (GC price - live XAUUSD price).",
-            "Volatility + Greeks confluence buffer = " + STRIKE_BUFFER + " price units (±500 points / 1000 points total).",
-            "Confluence = IV zone + full Greeks/IV-skew + futures OI/volume/premium; futures strikes are basis-mapped before matching."
+
+        return Map(rows, futuresRows, liveXauSpot, zones, null, named.any { it.matchedStrike != null }, listOf(
+            "S006 pipeline: IV map -> Greeks strike match -> Futures strike match -> confluence -> execution.",
+            "GC basis is applied only to IV strike polishing: XAU zone = IV strike + (GC price - live XAUUSD price).",
+            "Greeks and futures strikes remain in their native file price spaces; no GC-basis adjustment is applied to either.",
+            "Only strikes present in all three layers receive a confluence score and are eligible for the execution engine.",
+            "Confluence weights: IV volatility 30%, full Greeks magnitude 35%, IV skew 15%, futures OI/volume/premium 20%."
         ))
     }
 
