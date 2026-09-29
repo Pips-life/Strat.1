@@ -545,7 +545,7 @@ class Strategy006Engine {
 
             // matchedStrike is the native Greeks/XAU execution strike. The futures
             // strike is evidence only; it is never basis-shifted into XAUUSD.
-            ZoneConfluence(
+            return ZoneConfluence(
                 name, greekStrike, greekStrike, score, volatility, greekMagnitude,
                 abs(greekStrike - ivZone)
             )
