@@ -329,8 +329,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         }
 
                         if (m != null && chartPrice != null) {
-                            // v2.110: three-page pager is always bound to its native dataset.
-                            // Do not hide Greeks/Futures pages when confluence is incomplete.
+                            // v2.110 fix: keep the three swipe pages structurally inside the S006 list item.
+                            // Each page is bound to its own parsed dataset and remains visible even if confluence is incomplete.
                             val ivRows = m.rows.filter { it.source == "iv" }.sortedBy { it.strike }
                             val greekRows = m.rows.filter { it.source == "greeks" }.sortedBy { it.strike }
                             val futuresRows = m.futuresRows.sortedBy { it.strike }
@@ -338,27 +338,81 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             val matchedZones = confluenceRows.count { it.matchedStrike != null }
                             val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
                             val tabs = listOf("I.V MAP", "GREEKS DATA", "FUTURES DATA")
-                            Text("IV " + ivRows.size + " ROWS • GREEKS " + greekRows.size + " ROWS • FUTURES " + futuresRows.size + " ROWS • CONFLUENCE " + matchedZones + "/6", color = if (ivRows.isNotEmpty() && greekRows.isNotEmpty() && futuresRows.isNotEmpty()) Green else Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                            TabRow(selectedTabIndex = pagerState.currentPage, containerColor = Color.Transparent, contentColor = Cyan) {
+                            Text(
+                                "IV " + ivRows.size + " ROWS • GREEKS " + greekRows.size +
+                                    " ROWS • FUTURES " + futuresRows.size + " ROWS • CONFLUENCE " + matchedZones + "/6",
+                                color = if (ivRows.isNotEmpty() && greekRows.isNotEmpty() && futuresRows.isNotEmpty()) Green else Muted,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            TabRow(
+                                selectedTabIndex = pagerState.currentPage,
+                                containerColor = Color.Transparent,
+                                contentColor = Cyan
+                            ) {
                                 tabs.forEachIndexed { index, title ->
-                                    Tab(selected = pagerState.currentPage == index, onClick = { scope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(title, fontSize = 9.sp, fontWeight = FontWeight.Bold) })
+                                    Tab(
+                                        selected = pagerState.currentPage == index,
+                                        onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                                        text = { Text(title, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
+                                    )
                                 }
                             }
-                            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
+                            HorizontalPager(
+                                state = pagerState,
+                                modifier = Modifier.fillMaxWidth()
+                            ) { page ->
                                 when (page) {
-                                    0 -> S006PolishedZones(m.zones, chartPrice, zoneStatus)
+                                    0 -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        S006PolishedZones(m.zones, chartPrice, zoneStatus)
+                                        CardBlock {
+                                            Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                (zoneStatus?.likelyZoneName ?: "NO ACTIVE ZONE") + " • " +
+                                                    (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") + " • " +
+                                                    (zoneStatus?.likelySide?.name ?: "WAIT"),
+                                                color = when (zoneStatus?.likelySide) {
+                                                    life.pips.strat1.data.TradeSide.BUY -> Green
+                                                    life.pips.strat1.data.TradeSide.SELL -> Red
+                                                    else -> Muted
+                                                },
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Black
+                                            )
+                                            val activeConfluence = m.zones.confluence.minByOrNull {
+                                                abs(it.zone - (zoneStatus?.likelyZone ?: chartPrice))
+                                            }
+                                            Text(
+                                                "Confluence: " +
+                                                    (activeConfluence?.score?.let { String.format("%.1f", it) } ?: "—") +
+                                                    " • Greeks strike " +
+                                                    (activeConfluence?.matchedStrike?.let { String.format("%.2f", it) } ?: "—"),
+                                                color = Green,
+                                                fontSize = 9.sp
+                                            )
+                                            Text(
+                                                "M5 reaction: " + (zoneStatus?.reactedZoneName ?: "waiting"),
+                                                color = Muted,
+                                                fontSize = 9.sp
+                                            )
+                                            Text(
+                                                "Opposite target: " + (zoneStatus?.possibleExitName ?: "—") +
+                                                    (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""),
+                                                color = Muted,
+                                                fontSize = 9.sp
+                                            )
+                                        }
+                                    }
                                     1 -> S006GreeksStrikes(confluenceRows, greekRows)
                                     2 -> S006FuturesStrikes(confluenceRows, futuresRows)
                                 }
                             }
-                            Text("Swipe left/right: I.V Map → Greeks Data → Futures Data.", color = Muted, fontSize = 8.sp)
+                            Text(
+                                "Swipe left/right: I.V Map → Greeks Data → Futures Data.",
+                                color = Muted,
+                                fontSize = 8.sp
+                            )
                         } else {
-                                    S006FuturesStrikes(m.zones.confluence, m.futuresRows)
-                                }
-                            }
-                            Text("Swipe left/right: I.V zones → Volatility / Greeks → Futures Options.", color = Muted, fontSize = 8.sp)
-                        } else {
-
                         TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.fillMaxWidth()) {
                             Text(if (showAdvanced) "HIDE S006 DATA ▲" else "SHOW S006 DATA ▼", fontSize = 9.sp)
                         }
