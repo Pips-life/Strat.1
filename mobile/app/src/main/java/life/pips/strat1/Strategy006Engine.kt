@@ -138,6 +138,7 @@ class Strategy006Engine {
     fun loadFiles(
         barchartText: String,
         greeksText: String,
+        futuresText: String = "",
         gcPrice: Double?,
         xauSpotPrice: Double?,
         xauTimestampMillis: Long = System.currentTimeMillis(),
@@ -148,11 +149,12 @@ class Strategy006Engine {
     ): Map {
         val ivRows = parseIvOptionsTable(barchartText)
         val greekRows = parseText(greeksText)
+        val futuresRows = parseFuturesText(futuresText)
         val rows = (ivRows + greekRows).filter { it.strike > 0.0 && (it.type == 'C' || it.type == 'P') }
         if (gcPrice == null || gcPrice <= 0.0 || xauSpotPrice == null || xauSpotPrice <= 0.0) {
             current = calculate(rows, futuresRows, gcPrice, xauSpotPrice).copy(
                 spot = xauSpotPrice,
-                warnings = calculate(rows, gcPrice).warnings + "GC futures price and live XAUUSD price are required."
+                warnings = calculate(rows, futuresRows, gcPrice).warnings + "GC futures price and live XAUUSD price are required."
             )
             return current!!
         }
