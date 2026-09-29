@@ -583,15 +583,31 @@ class Strategy006Engine {
             val putDeltaIdx = if (hasExplicitSideBySide) header.indexOfFirst { it.contains("put delta") } else header.indexOfFirst { it == "delta" }
             val strikeIdx = header.indexOfFirst { it == "strike" || it.contains("strike price") }
             val callDeltaIdx = if (hasExplicitSideBySide) header.indexOfFirst { it.contains("call delta") } else header.indexOfLast { it == "delta" }
-            val ivIdx = header.indexOfFirst { it.contains("imp vol") || it.contains("implied volatility") }
+            val ivIndices = header.mapIndexedNotNull { i, h -> if (h.contains("imp vol") || h.contains("implied volatility") || h == "iv") i else null }
+            val putIvIdx = ivIndices.firstOrNull { header[it].contains("put") } ?: ivIndices.firstOrNull() ?: -1
+            val callIvIdx = ivIndices.lastOrNull { header[it].contains("call") } ?: ivIndices.lastOrNull() ?: -1
+            fun sideIndex(side: String, field: String, fallback: Int = -1): Int =
+                header.indexOfFirst { it.contains(side) && it.contains(field) }.takeIf { it >= 0 } ?: fallback
+            val gammaIdx = sideIndex("put", "gamma", header.indexOfFirst { it == "gamma" })
+            val vegaIdx = sideIndex("put", "vega", header.indexOfFirst { it == "vega" })
+            val thetaIdx = sideIndex("put", "theta", header.indexOfFirst { it == "theta" })
+            val oiIdx = header.indexOfFirst { it == "open interest" || it == "oi" }
+            val volIdx = header.indexOfFirst { it == "volume" || it == "vol" }
             val parsed = mutableListOf<Row>()
             for (cells in all.drop(1)) {
                 val strike = num(cells.getOrNull(strikeIdx)) ?: continue
                 val putDelta = num(cells.getOrNull(putDeltaIdx)) ?: 0.0
                 val callDelta = num(cells.getOrNull(callDeltaIdx)) ?: 0.0
-                val iv = num(cells.getOrNull(ivIdx)) ?: 0.0
-                parsed += Row(strike, 'P', delta = putDelta, iv = iv, source = "greeks")
-                parsed += Row(strike, 'C', delta = callDelta, iv = iv, source = "greeks")
+                val putIv = num(cells.getOrNull(putIvIdx)) ?: 0.0
+                val callIv = num(cells.getOrNull(callIvIdx)) ?: putIv
+                val ivSkew = putIv - callIv
+                val gamma = num(cells.getOrNull(gammaIdx)) ?: 0.0
+                val vega = num(cells.getOrNull(vegaIdx)) ?: 0.0
+                val theta = num(cells.getOrNull(thetaIdx)) ?: 0.0
+                val oi = num(cells.getOrNull(oiIdx)) ?: 0.0
+                val volume = num(cells.getOrNull(volIdx)) ?: 0.0
+                parsed += Row(strike, 'P', oi = oi, volume = volume, gamma = gamma, delta = putDelta, vega = vega, theta = theta, iv = putIv, putIv = putIv, callIv = callIv, ivSkew = ivSkew, source = "greeks")
+                parsed += Row(strike, 'C', oi = oi, volume = volume, gamma = gamma, delta = callDelta, vega = vega, theta = theta, iv = callIv, putIv = putIv, callIv = callIv, ivSkew = ivSkew, source = "greeks")
             }
             if (parsed.isNotEmpty()) return parsed
         }
