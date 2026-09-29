@@ -12,12 +12,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
@@ -462,62 +464,147 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
 @Composable
 private fun S006FuturesStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
-        Text("FUTURES / OPTIONS", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("CALL SIDE                         STRIKES                         PUT SIDE", color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text("VOL   OI   PREMIUM", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.55f))
-            Text("STRIKE", color = Cyan, fontSize = 7.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
-            Text("VOL   OI   PREMIUM", color = Muted, fontSize = 7.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.55f))
+        Text("FUTURES / OPTIONS • PAGE 3", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("8-COLUMN RULED TABLE • CALL → STRIKE → PUT → ZONE MATCH", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+
+        val scroll = rememberScrollState()
+        val header = listOf("Vol.", "OI.", "Premium", "Strike", "Vol.", "OI.", "Premium", "Zone Matched + Score")
+        Row(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
+            header.forEachIndexed { index, label ->
+                Text(
+                    label,
+                    color = if (index == 3) Cyan else Muted,
+                    fontSize = 7.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(if (index == 7) 118.dp else 70.dp).padding(vertical = 6.dp, horizontal = 3.dp)
+                )
+            }
         }
+        HorizontalDivider(color = Color.White.copy(alpha = .16f))
+
         if (rows.isEmpty()) {
             Text("FILE READ — 0 USABLE FUTURES ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
             rows.map { it.strike }.distinct().sorted().take(60).forEach { strike ->
                 val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { it.volume + it.oi }
                 val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { it.volume + it.oi }
-                val match = confluence.filter { it.matchedStrike != null }.minByOrNull { abs(it.matchedStrike!! - strike) }
-                val matched = match != null && abs(match.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER
-                Row(Modifier.fillMaxWidth().background(if (matched) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(call?.let { String.format("%.0f  %.0f  %.2f", it.volume, it.oi, it.premium) } ?: "—", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.55f))
-                    Text(String.format("%.2f", strike), color = TextMain, fontSize = 8.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
-                    Text(put?.let { String.format("%.0f  %.0f  %.2f", it.volume, it.oi, it.premium) } ?: "—", color = Muted, fontSize = 7.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.55f))
+                val match = confluence
+                    .filter { it.matchedStrike != null && abs(it.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER }
+                    .maxByOrNull { it.score }
+                val cells = listOf(
+                    call?.let { String.format("%.0f", it.volume) } ?: "—",
+                    call?.let { String.format("%.0f", it.oi) } ?: "—",
+                    call?.let { String.format("%.2f", it.premium) } ?: "—",
+                    String.format("%.2f", strike),
+                    put?.let { String.format("%.0f", it.volume) } ?: "—",
+                    put?.let { String.format("%.0f", it.oi) } ?: "—",
+                    put?.let { String.format("%.2f", it.premium) } ?: "—",
+                    match?.let { "✓ " + String.format("%.1f", it.score) } ?: "✗ —"
+                )
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(scroll)
+                        .background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent)
+                ) {
+                    cells.forEachIndexed { index, value ->
+                        Text(
+                            value,
+                            color = when {
+                                index == 3 -> TextMain
+                                index == 7 && match != null -> Green
+                                index == 7 -> Muted
+                                else -> TextMain
+                            },
+                            fontSize = 7.sp,
+                            fontWeight = if (index == 3 || index == 7) FontWeight.Bold else FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.width(if (index == 7) 118.dp else 70.dp).padding(vertical = 6.dp, horizontal = 3.dp)
+                        )
+                    }
                 }
-                HorizontalDivider(color = Color.White.copy(alpha = .06f))
+                HorizontalDivider(color = Color.White.copy(alpha = .08f))
             }
         }
-        Text("CALL: Volume / OI / Premium  •  PUT: Volume / OI / Premium  •  \${rows.map { it.strike }.distinct().size} strikes • full confluence zones: \${confluence.count { it.matchedStrike != null }}/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
+        Text(
+            "CALL: Volume / OI / Premium • STRIKE • PUT: Volume / OI / Premium • Zone Matched + Score",
+            color = if (rows.isNotEmpty()) Green else Red,
+            fontSize = 8.sp
+        )
     }
 }
-
 @Composable
 private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
-        Text("VOLATILITY / GREEKS", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("CALL SIDE                         STRIKES                         PUT SIDE", color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-        Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text("IV   DELTA   GAMMA   THETA   VEGA   IV SKEW", color = Muted, fontSize = 6.sp, modifier = Modifier.weight(1.65f))
-            Text("STRIKE", color = Cyan, fontSize = 7.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
-            Text("IV   DELTA   GAMMA   THETA   VEGA   IV SKEW", color = Muted, fontSize = 6.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.65f))
+        Text("VOLATILITY / GREEKS • PAGE 2", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("13-COLUMN RULED TABLE • ALL HEADERS ON ONE ROW", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+
+        val scroll = rememberScrollState()
+        val header = listOf(
+            "Call IV", "Call Δ", "Call Γ", "Call Θ", "Call Vega", "Call IV Skew",
+            "Strike",
+            "Put IV", "Put Δ", "Put Γ", "Put Θ", "Put Vega", "Put IV Skew"
+        )
+        Row(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
+            header.forEachIndexed { index, label ->
+                Text(
+                    label,
+                    color = if (index == 6) Cyan else Muted,
+                    fontSize = 6.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(if (index == 6) 68.dp else 76.dp).padding(vertical = 6.dp, horizontal = 2.dp)
+                )
+            }
         }
+        HorizontalDivider(color = Color.White.copy(alpha = .16f))
+
         if (rows.isEmpty()) {
             Text("FILE READ — 0 USABLE GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
             rows.map { it.strike }.distinct().sorted().forEach { strike ->
                 val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
                 val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
-                val match = confluence.filter { it.matchedStrike != null && abs(it.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER }.minByOrNull { abs(it.matchedStrike!! - strike) }
-                val fmt: (Strategy006Engine.Row?) -> String = { r ->
-                    r?.let { String.format("%.2f  %.3f  %.4f  %.4f  %.4f  %.2f", it.iv, it.delta, it.gamma, it.theta, it.vega, it.ivSkew) } ?: "—"
+                val match = confluence
+                    .filter { it.matchedStrike != null && abs(it.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER }
+                    .maxByOrNull { it.score }
+                val cells = listOf(
+                    call?.let { String.format("%.2f", it.iv) } ?: "—",
+                    call?.let { String.format("%.3f", it.delta) } ?: "—",
+                    call?.let { String.format("%.4f", it.gamma) } ?: "—",
+                    call?.let { String.format("%.4f", it.theta) } ?: "—",
+                    call?.let { String.format("%.4f", it.vega) } ?: "—",
+                    call?.let { String.format("%.2f", it.ivSkew) } ?: "—",
+                    String.format("%.2f", strike),
+                    put?.let { String.format("%.2f", it.iv) } ?: "—",
+                    put?.let { String.format("%.3f", it.delta) } ?: "—",
+                    put?.let { String.format("%.4f", it.gamma) } ?: "—",
+                    put?.let { String.format("%.4f", it.theta) } ?: "—",
+                    put?.let { String.format("%.4f", it.vega) } ?: "—",
+                    put?.let { String.format("%.2f", it.ivSkew) } ?: "—"
+                )
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(scroll)
+                        .background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent)
+                ) {
+                    cells.forEachIndexed { index, value ->
+                        Text(
+                            value,
+                            color = if (index == 6) TextMain else Muted,
+                            fontSize = 6.sp,
+                            fontWeight = if (index == 6) FontWeight.Bold else FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.width(if (index == 6) 68.dp else 76.dp).padding(vertical = 6.dp, horizontal = 2.dp)
+                        )
+                    }
                 }
-                Row(Modifier.fillMaxWidth().background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(fmt(call), color = Muted, fontSize = 6.sp, modifier = Modifier.weight(1.65f))
-                    Text(String.format("%.2f", strike), color = TextMain, fontSize = 8.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.weight(0.9f))
-                    Text(fmt(put), color = Muted, fontSize = 6.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1.65f))
-                }
-                HorizontalDivider(color = Color.White.copy(alpha = .06f))
+                HorizontalDivider(color = Color.White.copy(alpha = .08f))
             }
         }
-        Text("CALL and PUT values remain separate by strike  •  \${rows.map { it.strike }.distinct().size} strikes • matched zones: \${confluence.count { it.matchedStrike != null }}/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
+        Text(
+            "CALL: IV / Delta / Gamma / Theta / Vega / IV Skew • STRIKE • PUT: IV / Delta / Gamma / Theta / Vega / IV Skew",
+            color = if (rows.isNotEmpty()) Green else Red,
+            fontSize = 8.sp
+        )
     }
 }
 
