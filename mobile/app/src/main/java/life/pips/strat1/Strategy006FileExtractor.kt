@@ -123,6 +123,32 @@ object Strategy006FileExtractor {
             uri.lastPathSegment.orEmpty().ifBlank { "Barchart File 1" }
         }
 
+    private fun ocrBitmap(bitmap: Bitmap, page: Int): OcrCapture {
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        return try {
+            val image = InputImage.fromBitmap(bitmap, 0)
+            val result = Tasks.await(recognizer.process(image))
+            val tokens = result.textBlocks.flatMap { block ->
+                block.lines.flatMap { line ->
+                    line.elements.map { element ->
+                        val box = element.boundingBox
+                        OcrToken(
+                            text = element.text,
+                            left = box?.left ?: 0,
+                            top = box?.top ?: 0,
+                            right = box?.right ?: 0,
+                            bottom = box?.bottom ?: 0,
+                            page = page
+                        )
+                    }
+                }
+            }
+            OcrCapture(result.text, tokens)
+        } finally {
+            recognizer.close()
+        }
+    }
+
     private fun ocrPdf(context: Context, uri: Uri): OcrCapture {
         val pfd = context.contentResolver.openFileDescriptor(uri, "r")
             ?: error("Could not open PDF.")
