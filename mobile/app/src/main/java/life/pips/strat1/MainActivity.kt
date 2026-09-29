@@ -332,8 +332,8 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                             val greekRows = m.rows.filter { it.source != "iv" }.sortedBy { it.strike }
                             val confluenceRows = m.zones.confluence
                             val matchedZones = confluenceRows.count { it.matchedStrike != null }
-                            val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
-                            val tabs = listOf("I.V ZONES + PRICE", "GREEKS STRIKES")
+                            val pagerState = rememberPagerState(initialPage = 0, pageCount = { 3 })
+                            val tabs = listOf("I.V ZONES + PRICE", "VOL / GREEKS", "FUTURES OPTIONS")
                             Text("IV MAP " + m.zones.confluence.size + "/6 • GREEKS " + greekRows.size + " ROWS • FUTURES " + m.futuresRows.size + " ROWS • 3-LAYER CONFLUENCE " + matchedZones + "/6", color = if (greekRows.isNotEmpty()) Green else Red, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             TabRow(selectedTabIndex = pagerState.currentPage, containerColor = Color.Transparent, contentColor = Cyan) {
                                 tabs.forEachIndexed { index, title ->
@@ -353,11 +353,13 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                             Text("Opposite target: " + (zoneStatus?.possibleExitName ?: "—") + (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""), color = Muted, fontSize = 9.sp)
                                         }
                                     }
-                                } else {
+                                } else if (page == 1) {
                                     S006GreeksStrikes(m.zones.confluence, greekRows)
+                                } else {
+                                    S006FuturesStrikes(m.zones.confluence, m.futuresRows)
                                 }
                             }
-                            Text("Swipe left/right to switch between mapped I.V zones and parsed Greeks strikes.", color = Muted, fontSize = 8.sp)
+                            Text("Swipe left/right: I.V zones → Volatility / Greeks → Futures Options.", color = Muted, fontSize = 8.sp)
                         } else {
 
                         TextButton(onClick = { showAdvanced = !showAdvanced }, modifier = Modifier.fillMaxWidth()) {
@@ -398,6 +400,41 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             }
         }
         item { CardBlock { Text("STATUS", color = Muted, fontSize = 9.sp); Text(localStatus, color = TextMain, fontSize = 10.sp) } }
+    }
+}
+
+@Composable
+private fun S006FuturesStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
+    CardBlock {
+        Text("FUTURES OPTIONS", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("Native futures strikes are the third confluence layer after IV and Greeks matching.", color = Muted, fontSize = 8.sp)
+        if (rows.isEmpty()) {
+            Text("FILE READ — 0 USABLE FUTURES ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        } else {
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Text("STRIKE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("TYPE", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(.7f))
+                Text("OI", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("VOL", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("PREMIUM", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1f))
+                Text("3-LAYER MATCH", color = Muted, fontSize = 7.sp, modifier = Modifier.weight(1.5f))
+            }
+            rows.sortedBy { it.strike }.take(60).forEach { row ->
+                val match = confluence.filter { it.matchedStrike != null }.minByOrNull { abs(it.matchedStrike!! - row.strike) }
+                val matched = match != null && abs(match.matchedStrike!! - row.strike) <= Strategy006Engine.STRIKE_BUFFER
+                Row(Modifier.fillMaxWidth().background(if (matched) Green.copy(alpha = .08f) else Color.Transparent).padding(vertical = 5.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(String.format("%.2f", row.strike), color = TextMain, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(row.type.toString(), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(.7f))
+                    Text(String.format("%.0f", row.oi), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.0f", row.volume), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(String.format("%.2f", row.premium), color = Muted, fontSize = 8.sp, modifier = Modifier.weight(1f))
+                    Text(if (matched) "✓ ${match!!.zoneName}" else "—", color = if (matched) Green else Muted, fontSize = 7.sp, modifier = Modifier.weight(1.5f))
+                }
+                HorizontalDivider(color = Color.White.copy(alpha = .06f))
+            }
+            if (rows.size > 60) Text("+ ${rows.size - 60} more futures rows", color = Muted, fontSize = 8.sp)
+        }
+        Text("READ → PARSED → MATCHED: ${rows.size} futures rows • full confluence zones: ${confluence.count { it.matchedStrike != null }}/6", color = if (rows.isNotEmpty()) Green else Red, fontSize = 8.sp)
     }
 }
 
