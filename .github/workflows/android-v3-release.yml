@@ -77,7 +77,7 @@ jobs:
           PIPS_LIFE_KEYSTORE_PASSWORD: ${{ secrets.PIPS_LIFE_KEYSTORE_PASSWORD }}
           PIPS_LIFE_KEY_ALIAS: ${{ secrets.PIPS_LIFE_KEY_ALIAS }}
           PIPS_LIFE_KEY_PASSWORD: ${{ secrets.PIPS_LIFE_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew clean assembleRelease --no-daemon --no-build-cache
 
       - name: Locate APK
         id: apk
@@ -92,7 +92,7 @@ jobs:
           cp "$APK_PATH" "$NORMALIZED_APK"
           echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
-      - name: Verify signed APK and production signing identity
+      - name: Verify signed APK and production signing identity (known-good v2.119 baseline)
         env:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
@@ -106,7 +106,7 @@ jobs:
           "$APKSIGNER" verify --print-certs "$APK_PATH" | tee "$RUNNER_TEMP/current-certs.txt"
 
           mkdir -p "$RUNNER_TEMP/previous-release"
-          gh release download v2.113 --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir "$RUNNER_TEMP/previous-release"
+          gh release download v2.119 --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir "$RUNNER_TEMP/previous-release"
           PREVIOUS_APK="$(find "$RUNNER_TEMP/previous-release" -type f -name '*.apk' | head -n 1)"
           test -n "$PREVIOUS_APK"
           "$APKSIGNER" verify --print-certs "$PREVIOUS_APK" | tee "$RUNNER_TEMP/previous-certs.txt"
