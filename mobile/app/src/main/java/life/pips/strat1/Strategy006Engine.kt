@@ -501,7 +501,7 @@ class Strategy006Engine {
         val polishedZones = selected.map { it + signedBasis }
         val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
         val greekRows = rows.filter { it.source != "iv" && it.source != "futures" }
-        val mappedFuturesRows = futuresRows.map { it.copy(strike = it.strike - signedBasis) }
+        // GC basis is an IV-map normalization only. Futures strikes remain in their native GC/options-chain price space.\n        val mappedFuturesRows = futuresRows
         val greekStrikes = greekRows.map { it.strike }.filter { it.isFinite() && it > 0.0 }.distinct()
         val ivVolValues = ivRows.map { abs(it.iv) }
         val greekMagnitudeValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }\n        val futuresValues = mappedFuturesRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it > 0.0 }
