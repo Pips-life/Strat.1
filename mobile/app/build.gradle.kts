@@ -28,6 +28,11 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     packaging {
+        jniLibs {
+            // Keep native libraries compressed for reliable direct APK installation
+            // on devices using 16 KB memory pages.
+            useLegacyPackaging = true
+        }
         resources {
             excludes += setOf(
                 "META-INF/DEPENDENCIES",
