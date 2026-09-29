@@ -90,6 +90,31 @@ object Strategy006FileExtractor {
             }
         }
 
+    /** Read a futures/options PDF or image as raw OCR so Strategy 006 can parse OI, volume, premium and strike columns. */
+    suspend fun extractFutures(context: Context, uri: Uri): Result<Pair<String, String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val name = queryName(context, uri)
+                val mime = context.contentResolver.getType(uri).orEmpty().lowercase()
+                val lower = name.lowercase()
+                val isPdf = mime == "application/pdf" || lower.endsWith(".pdf")
+                val isImage = mime.startsWith("image/") || lower.endsWith(".png") ||
+                    lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")
+                val raw = if (isPdf) {
+                    ocrPdf(context, uri).text
+                } else if (isImage) {
+                    val bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                        ?: error("Could not decode futures screenshot.")
+                    try { ocrBitmap(bitmap, 0).text } finally { bitmap.recycle() }
+                } else {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        ?: error("Could not read futures/options file.")
+                }
+                if (raw.lineSequence().count { it.isNotBlank() } < 2) error("OCR could not read the futures/options table.")
+                raw to name
+            }
+        }
+
     private fun queryName(context: Context, uri: Uri): String =
         context.contentResolver.query(uri, null, null, null, null)?.use { c ->
             val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
