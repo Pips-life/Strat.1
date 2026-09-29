@@ -134,57 +134,56 @@ object Strategy006FileExtractor {
 
                 for (pageIndex in 0 until renderer.pageCount) {
                     renderer.openPage(pageIndex).use { page ->
-                        val scale = max(2.0, 2600.0 / page.width.toDouble())
-                        val width = (page.width * scale).toInt().coerceAtMost(4500)
-                        val height = (page.height * scale).toInt().coerceAtMost(4500)
+                        // Screenshot PDFs often contain a raster image rather than a
+                        // text layer. Render at a high, OCR-friendly resolution and
+                        // preserve the page aspect ratio exactly.
+                        val targetWidth = 3200.0
+                        val scale = max(2.0, targetWidth / page.width.toDouble())
+                        val width = (page.width * scale).toInt().coerceAtMost(4800)
+                        val height = (page.height * scale).toInt().coerceAtMost(4800)
 
-                        val bitmap = Bitmap.createBitmap(
-                            width,
-                            height,
-                            Bitmap.Config.ARGB_8888
-                        )
-                        bitmap.eraseColor(Color.WHITE)
-                        page.render(
-                            bitmap,
-                            null,
-                            null,
-                            PdfRenderer.Page.RENDER_MODE_FOR_PRINT
-                        )
+                        fun renderAndOcr(renderWidth: Int, renderHeight: Int): OcrCapture {
+                            val bitmap = Bitmap.createBitmap(
+                                renderWidth,
+                                renderHeight,
+                                Bitmap.Config.ARGB_8888
+                            )
+                            bitmap.eraseColor(Color.WHITE)
+                            page.render(
+                                bitmap,
+                                null,
+                                null,
+                                PdfRenderer.Page.RENDER_MODE_FOR_PRINT
+                            )
+                            return try {
+                                ocrBitmap(bitmap, pageIndex)
+                            } finally {
+                                bitmap.recycle()
+                            }
+                        }
 
-                        val capture = ocrBitmap(bitmap, pageIndex)
+                        var capture = renderAndOcr(width, height)
+
+                        // If the first pass produced little/no text, retry the same
+                        // screenshot PDF page at a larger raster size. This specifically
+                        // covers small text embedded inside PDF screenshots.
+                        if (capture.tokens.size < 8 || capture.text.lineSequence().count { it.isNotBlank() } < 2) {
+                            val retryScale = max(scale * 1.35, 3.0)
+                            val retryWidth = (page.width * retryScale).toInt().coerceAtMost(6000)
+                            val retryHeight = (page.height * retryScale).toInt().coerceAtMost(6000)
+                            val retry = renderAndOcr(retryWidth, retryHeight)
+                            if (retry.tokens.size > capture.tokens.size ||
+                                retry.text.length > capture.text.length) {
+                                capture = retry
+                            }
+                        }
+
                         out.append(capture.text).append('\n')
                         allTokens += capture.tokens
-                        bitmap.recycle()
                     }
                 }
                 OcrCapture(out.toString(), allTokens)
             }
-        }
-    }
-
-    private fun ocrBitmap(bitmap: Bitmap, page: Int): OcrCapture {
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        return try {
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val result = Tasks.await(recognizer.process(image))
-            val tokens = result.textBlocks.flatMap { block ->
-                block.lines.flatMap { line ->
-                    line.elements.mapNotNull { element ->
-                        val box = element.boundingBox ?: return@mapNotNull null
-                        OcrToken(
-                            text = element.text,
-                            left = box.left,
-                            top = box.top,
-                            right = box.right,
-                            bottom = box.bottom,
-                            page = page
-                        )
-                    }
-                }
-            }
-            OcrCapture(result.text, tokens)
-        } finally {
-            recognizer.close()
         }
     }
 
