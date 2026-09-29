@@ -195,7 +195,7 @@ class Strategy006Engine {
 
     fun loadFiles(barchartText: String, greeksText: String, spot: Double?): Map {
         val now = System.currentTimeMillis()
-        return loadFiles(barchartText, greeksText, spot ?: Double.NaN, spot ?: Double.NaN, now, now, "UTC", "UTC", 0L)
+        return loadFiles(barchartText, greeksText, "", spot ?: Double.NaN, spot ?: Double.NaN, now, now, "UTC", "UTC", 0L)
     }
 
     private fun parseIvOptionsTable(text: String): List<Row> {
@@ -509,7 +509,7 @@ class Strategy006Engine {
         val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
         val greekRows = rows.filter { it.source == "greeks" && it.strike.isFinite() && it.strike > 0.0 }
         val nativeGreekStrikes = greekRows.map { it.strike }.distinct().sorted()
-        val nativeFuturesStrikes = futuresRows.map { it.strike }.filter { it.isFinite() && it.strike > 0.0 }.distinct().sorted()
+        val nativeFuturesStrikes = futuresRows.map { row -> row.strike }.filter { strike -> strike.isFinite() && strike > 0.0 }.distinct().sorted()
 
         // Stage 2: each polished IV zone must first match a native Greeks strike.
         // Stage 3: that Greeks strike must then match a native futures strike.
@@ -695,10 +695,18 @@ class Strategy006Engine {
                 cells.any { it.uppercase(Locale.US).trim() == "PUT" } -> 'P'
                 else -> 'C'
             }
-            rows += Row(strike, type, num(cells.getOrNull(oiIdx)) ?: 0.0, num(cells.getOrNull(volIdx)) ?: 0.0,
-                num(cells.getOrNull(gammaIdx)) ?: 0.0, num(cells.getOrNull(deltaIdx)) ?: 0.0,
-                num(cells.getOrNull(vegaIdx)) ?: 0.0, num(cells.getOrNull(thetaIdx)) ?: 0.0,
-                num(cells.getOrNull(ivIdx)) ?: 0.0)
+            rows += Row(
+                strike = strike,
+                type = type,
+                oi = num(cells.getOrNull(oiIdx)) ?: 0.0,
+                volume = num(cells.getOrNull(volIdx)) ?: 0.0,
+                gamma = num(cells.getOrNull(gammaIdx)) ?: 0.0,
+                delta = num(cells.getOrNull(deltaIdx)) ?: 0.0,
+                vega = num(cells.getOrNull(vegaIdx)) ?: 0.0,
+                theta = num(cells.getOrNull(thetaIdx)) ?: 0.0,
+                iv = num(cells.getOrNull(ivIdx)) ?: 0.0,
+                source = "greeks"
+            )
         }
         return rows
     }
