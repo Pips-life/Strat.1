@@ -364,8 +364,8 @@ class Strategy006Engine {
                             side, entry, stop, target.zone, balance, state,
                             "Nominated confluence strike " + String.format("%.2f", strike) +
                                 " triggered → immediate " + side.name +
-                                " entry; fixed SL " + String.format("%.0f", NOMINATED_STRIKE_STOP) +
-                                " points away; target " + target.zoneName + " @ " +
+                                " entry; fixed SL " + String.format("%.0f", NOMINATED_STRIKE_STOP / POINT_SIZE) +
+                                " points (" + String.format("%.2f", NOMINATED_STRIKE_STOP) + " price) away; target " + target.zoneName + " @ " +
                                 String.format("%.2f", target.zone) +
                                 " (confluence " + String.format("%.1f", candidate.score) + ")."
                         )
@@ -663,7 +663,7 @@ class Strategy006Engine {
                 val skewStrength = normalize(skew, greekRows.map { abs(it.ivSkew) }.filter { it.isFinite() })
 
                 // Make proximity a first-class signal. A strike at the edge of
-                // the ±500 window must not beat a materially closer strike merely
+                // the ±500-point window must not beat a materially closer strike merely
                 // because its raw option metrics are larger.
                 val distance = abs(greekStrike - ivZone)
                 val proximity = (exp(-distance / PROXIMITY_SCALE) * 100.0).coerceIn(0.0, 100.0)
@@ -720,7 +720,7 @@ class Strategy006Engine {
             "GC basis is applied only to IV strike polishing: XAU zone = IV strike + (GC price - live XAUUSD price).",
             "Greeks and futures strikes remain in their native file price spaces; no GC-basis adjustment is applied to either.",
             "Only strikes present in File 2 and File 3 within the buffer receive a confluence score and are eligible for the execution engine.",
-            "For each mapped zone, the highest-scoring agreeing strike is nominated as the execution strike; price triggers immediately at that nominated strike, with a fixed 350-point stop.",
+            "For each mapped zone, the highest-scoring agreeing strike is nominated as the execution strike; price triggers immediately at that nominated strike, with a fixed 350-point (3.50 price) stop.",
             "Confluence weights: IV volatility 30%, full Greeks magnitude 35%, IV skew 15%, futures OI/volume/premium 20%."
         ))
     }
@@ -734,18 +734,21 @@ class Strategy006Engine {
     }
 
     companion object {
-        // 1000-point total matching window = 500 points on either side of the mapped zone.
-        // For XAUUSD at 0.01 point size, 4150.00 matches 4145.00 through 4155.00.
-        const val STRIKE_BUFFER = 500.0
-        const val PROXIMITY_SCALE = 200.0
-        const val TICK_SIZE = 0.01
+        // Point convention: 1 XAUUSD point = 0.01 price.
+        // Therefore 500 points = 5.00 price and a ±500-point window is ±5.00.
+        // Example: 4150.00 matches 4145.00 through 4155.00.
+        const val POINT_SIZE = 0.01
+        const val STRIKE_BUFFER = 500.0 * POINT_SIZE
+        const val PROXIMITY_SCALE = 200.0 * POINT_SIZE
+        const val TICK_SIZE = POINT_SIZE
         const val TICK_VALUE = 0.01
         const val BASE_LOT_SIZE = 1.00
         const val LOT_STEP = 0.01
         const val MIN_LOT = 0.01
         const val MAX_ACCOUNT_RISK = 0.10
-        // Immediate-entry stop: 350 price points from the nominated confluence strike.
-        const val NOMINATED_STRIKE_STOP = 350.0
+        // Immediate-entry stop: 350 points = 3.50 XAUUSD price from the
+        // nominated confluence strike.
+        const val NOMINATED_STRIKE_STOP = 350.0 * POINT_SIZE
     }
 
     private fun parseText(text: String): List<Row> {
