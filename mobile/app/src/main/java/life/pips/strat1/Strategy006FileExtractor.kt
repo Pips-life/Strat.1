@@ -12,6 +12,8 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -141,8 +143,37 @@ object Strategy006FileExtractor {
      */
     private fun normalizeFuturesOcr(raw: String, ocrTokens: List<OcrToken>): String {
         val numberRegex = Regex("""[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?""")
-        fun value(s: String): Double? =
-            s.replace(",", "").replace("%", "").trim().toDoubleOrNull()
+        fun value(s: String?): Double? =
+            s.orEmpty().replace(",", "").replace("%", "").trim().toDoubleOrNull()
+        fun normalize(s: String): String =
+            s.trim().lowercase(Locale.US).replace(Regex("\\s+"), " ")
+        fun splitCsv(line: String): List<String> {
+            val cells = mutableListOf<String>()
+            val cell = StringBuilder()
+            var quoted = false
+            var i = 0
+            while (i < line.length) {
+                val ch = line[i]
+                when {
+                    ch == '"' -> {
+                        if (quoted && i + 1 < line.length && line[i + 1] == '"') {
+                            cell.append('"')
+                            i++
+                        } else {
+                            quoted = !quoted
+                        }
+                    }
+                    ch == ',' && !quoted -> {
+                        cells += cell.toString().trim()
+                        cell.setLength(0)
+                    }
+                    else -> cell.append(ch)
+                }
+                i++
+            }
+            cells += cell.toString().trim()
+            return cells
+        }
 
         fun parseAroundStrike(values: List<Double>, strikeIndex: Int): Pair<Double, List<RowValue>>? {
             if (strikeIndex < 3 || strikeIndex + 3 >= values.size) return null
