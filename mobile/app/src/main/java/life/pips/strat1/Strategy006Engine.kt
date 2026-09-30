@@ -19,7 +19,8 @@ class Strategy006Engine {
         val gamma: Double = 0.0, val delta: Double = 0.0, val vega: Double = 0.0,
         val theta: Double = 0.0, val iv: Double = 0.0,
         val putIv: Double = 0.0, val callIv: Double = 0.0, val ivSkew: Double = 0.0,
-        val source: String = "greeks", val latest: Double? = null
+        val source: String = "greeks", val latest: Double? = null,
+        val volumeMissing: Boolean = false, val oiMissing: Boolean = false, val premiumMissing: Boolean = false
     )
 
     data class ZoneConfluence(
@@ -774,7 +775,10 @@ class Strategy006Engine {
                         volume = numOrNull(cells[2]) ?: 0.0,
                         premium = numOrNull(cells[4]) ?: 0.0,
                         source = "futures",
-                        latest = numOrNull(cells[1])
+                        latest = numOrNull(cells[1]),
+                        volumeMissing = numOrNull(cells[2]) == null,
+                        oiMissing = numOrNull(cells[3]) == null,
+                        premiumMissing = numOrNull(cells[4]) == null
                     )
                 }
                 if (sideType(cells[6]) == 'P') {
@@ -784,7 +788,10 @@ class Strategy006Engine {
                         volume = numOrNull(cells[8]) ?: 0.0,
                         premium = numOrNull(cells[10]) ?: 0.0,
                         source = "futures",
-                        latest = numOrNull(cells[7])
+                        latest = numOrNull(cells[7]),
+                        volumeMissing = numOrNull(cells[8]) == null,
+                        oiMissing = numOrNull(cells[9]) == null,
+                        premiumMissing = numOrNull(cells[10]) == null
                     )
                 }
             }
