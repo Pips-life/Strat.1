@@ -103,16 +103,25 @@ object Strategy006FileExtractor {
                 val isImage = mime.startsWith("image/") || lower.endsWith(".png") ||
                     lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")
 
+                // Keep native CSV/text exports intact. The Barchart File 3 CSV is
+                // already structured and contains both call and put sides, including
+                // Latest, Volume, Open Int and Premium. Re-normalizing it through the
+                // OCR reconstruction would discard the duplicate side-by-side columns.
+                if (!isPdf && !isImage) {
+                    val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        ?: error("Could not read futures/options file.")
+                    if (raw.lineSequence().count { it.isNotBlank() } < 2) {
+                        error("File 3 CSV/text export is empty.")
+                    }
+                    return@runCatching raw to name
+                }
+
                 val capture = if (isPdf) {
                     ocrPdf(context, uri)
-                } else if (isImage) {
+                } else {
                     val bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
                         ?: error("Could not decode futures screenshot.")
                     try { ocrBitmap(bitmap, 0) } finally { bitmap.recycle() }
-                } else {
-                    val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                        ?: error("Could not read futures/options file.")
-                    OcrCapture(raw, emptyList())
                 }
 
                 val normalized = normalizeFuturesOcr(capture.text, capture.tokens)
