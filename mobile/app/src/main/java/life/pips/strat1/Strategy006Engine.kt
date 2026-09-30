@@ -54,7 +54,8 @@ class Strategy006Engine {
     data class TradePlan(
         val side: TradeSide?, val entry: Double?, val stop: Double?,
         val target: Double?, val rewardRisk: Double, val riskAmount: Double,
-        val state: String, val reason: String
+        val state: String, val reason: String,
+        val positionLots: Double = 0.0
     )
 
     data class ZoneStatus(
@@ -508,7 +509,15 @@ class Strategy006Engine {
         if (rr < 1.35)
             return TradePlan(null, null, null, null, rr, 0.0, "WAIT RR",
                 "Zone-to-zone reward is below 1.35R; no trade.")
-        return TradePlan(side, entry, stop, target, rr, balance * 0.10, state.name, reason)
+        val riskBudget = balance * MAX_ACCOUNT_RISK
+        val stopDistance = abs(entry - stop)
+        val riskPerLot = (stopDistance / TICK_SIZE) * TICK_VALUE
+        if (!riskPerLot.isFinite() || riskPerLot <= 0.0) return wait(state.name, "Invalid tick-value/stop-distance risk model.")
+        val rawLots = riskBudget / riskPerLot
+        val sizedLots = kotlin.math.floor(rawLots / LOT_STEP) * LOT_STEP
+        if (sizedLots < MIN_LOT) return wait("WAIT RISK", "Minimum lot 0.01 would exceed the 10% account-risk limit.")
+        val actualRisk = sizedLots * riskPerLot
+        return TradePlan(side, entry, stop, target, rr, actualRisk, state.name, reason, sizedLots)
     }
 
     private fun firstAbove(entry: Double, vararg levels: Double?): Double? =
@@ -729,6 +738,12 @@ class Strategy006Engine {
         // For XAUUSD at 0.01 point size, 4150.00 matches 4145.00 through 4155.00.
         const val STRIKE_BUFFER = 500.0
         const val PROXIMITY_SCALE = 200.0
+        const val TICK_SIZE = 0.01
+        const val TICK_VALUE = 0.01
+        const val BASE_LOT_SIZE = 1.00
+        const val LOT_STEP = 0.01
+        const val MIN_LOT = 0.01
+        const val MAX_ACCOUNT_RISK = 0.10
         // Immediate-entry stop: 350 price points from the nominated confluence strike.
         const val NOMINATED_STRIKE_STOP = 350.0
     }
