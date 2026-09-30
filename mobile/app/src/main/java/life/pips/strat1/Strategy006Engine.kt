@@ -27,7 +27,7 @@ class Strategy006Engine {
         val zoneName: String, val zone: Double,
         val matchedStrike: Double?, val score: Double,
         val volatility: Double, val greekMagnitude: Double,
-        val distance: Double
+        val distance: Double, val bias: TradeSide? = null
     )
 
     data class Zones(
