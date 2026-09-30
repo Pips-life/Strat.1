@@ -738,18 +738,39 @@ fun S006PolishedZones(z: Strategy006Engine.Zones, livePrice: Double?, status: St
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("I.V ZONES + PRICE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                    Text("POLISHED LIVE CONFLUENCE ZONES", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                    Text("I.V ZONES MAP", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                    Text("POLISHED ZONE → NOMINATED STRIKE → CONFIDENCE / BIAS", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                 }
-                Text(
-                    livePrice?.let { String.format("%.2f", it) } ?: "—",
-                    color = Green, fontSize = 16.sp, fontWeight = FontWeight.Black
-                )
+                Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                    Text("LIVE / SPOT", color = Muted, fontSize = 6.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        livePrice?.let { String.format("%.2f", it) } ?: "—",
+                        color = Green, fontSize = 15.sp, fontWeight = FontWeight.Black
+                    )
+                }
             }
+
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("IV ZONE", color = Muted, fontSize = 6.sp, fontWeight = FontWeight.Bold)
+                Text("NOMINATED STRIKE", color = Muted, fontSize = 6.sp, fontWeight = FontWeight.Bold)
+                Text("CONFIDENCE / BIAS", color = Muted, fontSize = 6.sp, fontWeight = FontWeight.Bold)
+            }
+            HorizontalDivider(color = Color.White.copy(alpha = .14f))
+
             rows.forEachIndexed { index, (name, price) ->
+                val match = z.confluence.firstOrNull { it.zoneName == name }
                 val active = status?.likelyZoneName == name
                 val reacted = status?.reactedZoneName == name
-                Row(
+                val bias = match?.bias
+                val biasColor = when (bias) {
+                    life.pips.strat1.data.TradeSide.BUY -> Green
+                    life.pips.strat1.data.TradeSide.SELL -> Red
+                    else -> Muted
+                }
+                Column(
                     Modifier.fillMaxWidth()
                         .background(
                             when {
@@ -759,25 +780,62 @@ fun S006PolishedZones(z: Strategy006Engine.Zones, livePrice: Double?, status: St
                                 else -> Color.Transparent
                             }
                         )
-                        .padding(vertical = 7.dp, horizontal = 9.dp),
-                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        .padding(horizontal = 9.dp, vertical = 7.dp)
                 ) {
-                    Text(
-                        if (active) "● " + name else if (reacted) "✓ " + name else name,
-                        color = if (active) Cyan else if (reacted) Green else TextMain,
-                        fontSize = 9.sp, fontWeight = if (active || reacted) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.weight(1.6f)
-                    )
-                    Text(
-                        price?.let { String.format("%.2f", it) } ?: "—",
-                        color = if (active) Cyan else Green,
-                        fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(.8f),
-                        textAlign = TextAlign.End
-                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(
+                            if (active) "● $name" else if (reacted) "✓ $name" else name,
+                            color = if (active) Cyan else if (reacted) Green else TextMain,
+                            fontSize = 9.sp,
+                            fontWeight = if (active || reacted) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.weight(1.35f)
+                        )
+                        Text(
+                            price?.let { String.format("%.2f", it) } ?: "—",
+                            color = if (active) Cyan else Green,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(.65f),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Text("NOMINATED", color = Muted, fontSize = 6.sp, modifier = Modifier.weight(1f))
+                        Text(
+                            match?.matchedStrike?.let { String.format("%.2f", it) } ?: "NO MATCH",
+                            color = if (match?.matchedStrike != null) Cyan else Red,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Text(
+                            if (match?.matchedStrike != null) String.format("%.0f%% CONFIDENCE", match.score.coerceIn(0.0, 100.0)) else "NO CONFLUENCE",
+                            color = if (match?.matchedStrike != null) Green else Muted,
+                            fontSize = 7.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text("  •  ", color = Muted, fontSize = 7.sp)
+                        Text(
+                            bias?.name ?: "WAIT",
+                            color = biasColor,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
                 }
                 if (index < rows.lastIndex) HorizontalDivider(color = Color.White.copy(alpha = .08f), thickness = 1.dp)
             }
+
             Row(
                 Modifier.fillMaxWidth().padding(8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -792,13 +850,23 @@ fun S006PolishedZones(z: Strategy006Engine.Zones, livePrice: Double?, status: St
                             else -> Muted
                         }
                     } ?: Muted,
-                    fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
                 Text(
-                    status?.likelySide?.name ?: "WAIT",
-                    color = Muted, fontSize = 8.sp, fontWeight = FontWeight.Bold
+                    status?.entryConfluence?.let { String.format("%.0f%%", it) } ?: "—",
+                    color = Cyan,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
+            Text(
+                "FILES 1+2+3 • confluence buffer ±500 points (1000 total) • highest File 2 + File 3 confluence is nominated for each IV zone.",
+                color = Muted,
+                fontSize = 7.sp,
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp)
+            )
         }
     }
 }
