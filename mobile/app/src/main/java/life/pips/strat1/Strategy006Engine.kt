@@ -321,63 +321,80 @@ class Strategy006Engine {
     ): TradePlan {
         val m = current ?: return wait("WAIT FILES", "Load the IV options table and Volatility & Greeks file.")
         if (!m.valid || price <= 0.0 || balance <= 0.0) return wait("WAIT DATA", "S006 map or account data is invalid.")
+
+        val previousPrice = lastPrice
         lastPrice = price
         priceHistory.addLast(price)
         while (priceHistory.size > 12) priceHistory.removeFirst()
-        val closedBar = updateFiveMinuteBar(price, tickTime)
-        val eps = max(price * 0.0005, 0.5)
+        updateFiveMinuteBar(price, tickTime)
+
         val buy = if (ask > 0.0) ask else price
         val sell = if (bid > 0.0) bid else price
         val candidate = entryConfluence(price)
+        val strike = candidate?.matchedStrike
 
-        if (closedBar != null && closedBar.start != lastConfirmedBarStart && candidate != null) {
-            lastConfirmedBarStart = closedBar.start
-            val reaction = detectConfluenceReaction(closedBar, candidate)
-            if (reaction != null) {
-                lastReactionZoneName = candidate.zoneName
-                lastReactionZone = candidate.matchedStrike ?: candidate.zone
-                val entry = if (reaction.side == TradeSide.BUY) buy else sell
-                val target = if (reaction.behavior == "REJECTION") oppositeTarget(reaction.side, entry)
-                    else nextTargetInDirection(reaction.side, candidate.matchedStrike ?: candidate.zone)
-                if (target != null) {
-                    val strike = candidate.matchedStrike ?: candidate.zone
-                    val stop = if (reaction.side == TradeSide.BUY) strike - eps else strike + eps
-                    val state = if (reaction.behavior == "REJECTION") MarketState.ABSORPTION_RECLAIM else MarketState.CONTINUATION
-                    return trade(
-                        reaction.side, entry, stop, target.zone, balance, state,
-                        "High-confluence strike " + String.format("%.2f", strike) +
-                            " produced M5 " + reaction.behavior.lowercase(Locale.US) +
-                            " → target " + target.zoneName + " @ " + String.format("%.2f", target.zone) +
-                            " (confluence " + String.format("%.1f", target.score) + ")."
-                    )
+        if (candidate != null && strike != null) {
+            val triggerTolerance = max(0.01, price * 0.00001)
+            val touched = abs(price - strike) <= triggerTolerance
+            val crossed = previousPrice.isFinite() &&
+                ((previousPrice < strike && price >= strike) || (previousPrice > strike && price <= strike))
+            val triggered = touched || crossed
+
+            if (triggered) {
+                val side = candidate.bias ?: zoneApproachSide(candidate.zoneName)
+                if (side != null) {
+                    val entry = if (side == TradeSide.BUY) buy else sell
+                    val stop = if (side == TradeSide.BUY) {
+                        strike - NOMINATED_STRIKE_STOP
+                    } else {
+                        strike + NOMINATED_STRIKE_STOP
+                    }
+                    val target = if (side == TradeSide.BUY) {
+                        nextTargetInDirection(side, strike) ?: oppositeTarget(side, strike)
+                    } else {
+                        nextTargetInDirection(side, strike) ?: oppositeTarget(side, strike)
+                    }
+
+                    if (target != null) {
+                        lastReactionZoneName = candidate.zoneName
+                        lastReactionZone = strike
+                        val state = if (side == TradeSide.BUY) MarketState.ABSORPTION_RECLAIM else MarketState.RECLAIM_GATE
+                        return trade(
+                            side, entry, stop, target.zone, balance, state,
+                            "Nominated confluence strike " + String.format("%.2f", strike) +
+                                " triggered → immediate " + side.name +
+                                " entry; fixed SL " + String.format("%.0f", NOMINATED_STRIKE_STOP) +
+                                " points away; target " + target.zoneName + " @ " +
+                                String.format("%.2f", target.zone) +
+                                " (confluence " + String.format("%.1f", candidate.score) + ")."
+                        )
+                    }
                 }
             }
         }
-        val next = candidate?.matchedStrike
-        if (next != null && abs(price - next) <= max(5.0, eps * 2.0))
-            return wait("HIGH_CONFLUENCE_TEST", "High-confluence strike " + String.format("%.2f", next) + " is under test; waiting for completed M5 rejection or breakout.")
-        return wait(MarketState.NO_TRADE.name, "No confirmed M5 reaction at a highest-confluence volatility/Greeks strike.")
+
+        return wait(
+            MarketState.NO_TRADE.name,
+            if (strike != null)
+                "Waiting for nominated confluence strike " + String.format("%.2f", strike) + " to trigger an immediate entry."
+            else
+                "No nominated confluence strike is available for execution."
+        )
     }
 
     private data class ConfluenceReaction(val side: TradeSide, val behavior: String)
 
     private fun entryConfluence(price: Double): ZoneConfluence? {
-        // Execution is driven by the two zones surrounding live price, not by
-        // whichever zone has the highest raw confluence score on the entire map.
-        // Approaching the upper zone = SELL bias; approaching the lower zone = BUY bias.
-        val candidates = current?.zones?.confluence.orEmpty()
+        // Execution is driven by the nominated confluence strike itself.
+        // Select the nearest nominated strike so the trigger remains stable as
+        // price approaches the strike even when the strike sits on the far side
+        // of its parent IV zone.
+        return current?.zones?.confluence.orEmpty()
             .filter { it.matchedStrike != null }
-        if (candidates.isEmpty()) return null
-
-        val lower = candidates
-            .filter { it.zone < price }
-            .maxByOrNull { it.zone }
-        val upper = candidates
-            .filter { it.zone > price }
-            .minByOrNull { it.zone }
-
-        return listOfNotNull(lower, upper)
-            .minWithOrNull(compareBy<ZoneConfluence> { abs(it.zone - price) }.thenByDescending { it.score })
+            .minWithOrNull(
+                compareBy<ZoneConfluence> { abs((it.matchedStrike ?: Double.POSITIVE_INFINITY) - price) }
+                    .thenByDescending { it.score }
+            )
     }
 
     private fun zoneApproachSide(zoneName: String): TradeSide? = when (zoneName) {
@@ -638,7 +655,7 @@ class Strategy006Engine {
             "GC basis is applied only to IV strike polishing: XAU zone = IV strike + (GC price - live XAUUSD price).",
             "Greeks and futures strikes remain in their native file price spaces; no GC-basis adjustment is applied to either.",
             "Only strikes present in File 2 and File 3 within the buffer receive a confluence score and are eligible for the execution engine.",
-            "For each mapped zone, the highest-scoring agreeing strike is nominated as the execution strike; the mapped zone itself remains unchanged.",
+            "For each mapped zone, the highest-scoring agreeing strike is nominated as the execution strike; price triggers immediately at that nominated strike, with a fixed 350-point stop.",
             "Confluence weights: IV volatility 30%, full Greeks magnitude 35%, IV skew 15%, futures OI/volume/premium 20%."
         ))
     }
@@ -655,6 +672,8 @@ class Strategy006Engine {
         // 1000-point total matching window = 500 points on either side of the mapped zone.
         // For XAUUSD at 0.01 point size, 4150.00 matches 4145.00 through 4155.00.
         const val STRIKE_BUFFER = 500.0
+        // Immediate-entry stop: 350 price points from the nominated confluence strike.
+        const val NOMINATED_STRIKE_STOP = 350.0
     }
 
     private fun parseText(text: String): List<Row> {
