@@ -726,6 +726,9 @@ class Strategy006Engine {
     }
 
     /** Parse normalized File 3 rows plus legacy OCR futures chains. */
+    /** Validate and expose normalized File 3 rows for the UI. */
+    fun parseFile3Rows(text: String): List<Row> = parseFuturesText(text)
+
     private fun parseFuturesText(text: String): List<Row> {
         if (text.isBlank()) return emptyList()
         val lines = text.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
