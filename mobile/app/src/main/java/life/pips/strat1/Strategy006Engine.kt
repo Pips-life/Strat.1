@@ -19,7 +19,7 @@ class Strategy006Engine {
         val gamma: Double = 0.0, val delta: Double = 0.0, val vega: Double = 0.0,
         val theta: Double = 0.0, val iv: Double = 0.0,
         val putIv: Double = 0.0, val callIv: Double = 0.0, val ivSkew: Double = 0.0,
-        val source: String = "greeks"
+        val source: String = "greeks", val latest: Double? = null
     )
 
     data class ZoneConfluence(
@@ -742,10 +742,63 @@ class Strategy006Engine {
         val lines = text.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
         if (lines.isEmpty()) return emptyList()
         val header = splitCsv(lines.first()).map { normalize(it) }
+
+        // Native Barchart File 3 CSV layout:
+        // Call Type | Latest | Volume | Open Int | Premium | Strike |
+        // Put Type  | Latest | Volume | Open Int | Premium
+        // This is one physical row containing both option sides, so parse
+        // both sides explicitly rather than treating the first Type as the row type.
+        if (header.size >= 11 &&
+            header[0] == "type" && header[1] == "latest" &&
+            header[2] == "volume" && header[3] == "open int" &&
+            header[4] == "premium" && header[5] == "strike" &&
+            header[6] == "type" && header[7] == "latest" &&
+            header[8] == "volume" && header[9] == "open int" &&
+            header[10] == "premium"
+        ) {
+            fun sideType(value: String): Char? = when {
+                value.trim().uppercase(Locale.US).startsWith("C") -> 'C'
+                value.trim().uppercase(Locale.US).startsWith("P") -> 'P'
+                else -> null
+            }
+            val parsed = mutableListOf<Row>()
+            for (line in lines.drop(1)) {
+                val cells = splitCsv(line)
+                if (cells.size < 11) continue
+                val strike = numOrNull(cells[5]) ?: continue
+                if (strike <= 0.0) continue
+                if (sideType(cells[0]) == 'C') {
+                    parsed += Row(
+                        strike = strike, type = 'C',
+                        oi = numOrNull(cells[3]) ?: 0.0,
+                        volume = numOrNull(cells[2]) ?: 0.0,
+                        premium = numOrNull(cells[4]) ?: 0.0,
+                        source = "futures",
+                        latest = numOrNull(cells[1])
+                    )
+                }
+                if (sideType(cells[6]) == 'P') {
+                    parsed += Row(
+                        strike = strike, type = 'P',
+                        oi = numOrNull(cells[9]) ?: 0.0,
+                        volume = numOrNull(cells[8]) ?: 0.0,
+                        premium = numOrNull(cells[10]) ?: 0.0,
+                        source = "futures",
+                        latest = numOrNull(cells[7])
+                    )
+                }
+            }
+            if (parsed.isNotEmpty()) {
+                return parsed.distinctBy {
+                    Triple(it.strike, it.type, it.oi.toString() + "|" + it.volume + "|" + it.premium + "|" + it.latest)
+                }
+            }
+        }
+
         val strikeIdx = header.indexOfFirst { it == "strike" || it.contains("strike price") }
         val typeIdx = header.indexOfFirst { it == "type" || it == "call put" || it == "put call" }
         val volIdx = header.indexOfFirst { it == "volume" || it == "vol" }
-        val oiIdx = header.indexOfFirst { it == "open interest" || it == "oi" }
+        val oiIdx = header.indexOfFirst { it == "open interest" || it == "oi" || it == "open int" }
         val premiumIdx = header.indexOfFirst { it == "premium" || it == "price" || it == "option price" }
         if (strikeIdx >= 0 && typeIdx >= 0) {
             val parsed = mutableListOf<Row>()
@@ -784,7 +837,11 @@ class Strategy006Engine {
 
     private fun clean(s: String): String = s.replace(Regex("<[^>]+>"), "").replace("&nbsp;", " ").trim()
     private fun normalize(s: String): String = s.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), " ").trim()
-    private fun num(s: String?): Double? = s?.replace(",", "")?.replace("%", "")?.trim()?.toDoubleOrNull()
+    private fun num(s: String?): Double? = numOrNull(s) ?: 0.0
+    private fun numOrNull(s: String?): Double? =
+        s?.replace(",", "")?.replace("%", "")?.trim()?.removeSuffix("s")?.removeSuffix("S")
+            ?.takeUnless { it.equals("N/A", true) || it.isBlank() }
+            ?.toDoubleOrNull()
     private fun splitCsv(line: String): List<String> {
         val out = mutableListOf<String>(); val cur = StringBuilder(); var quoted = false
         for (c in line) when {
