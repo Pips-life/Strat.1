@@ -401,36 +401,32 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                         CardBlock {
                                             Text("LIVE MAPPED ZONE", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                             Text(
-                                                (zoneStatus?.likelyZoneName ?: "NO ACTIVE ZONE") + " • " +
-                                                    (zoneStatus?.likelyZone?.let { String.format("%.2f", it) } ?: "—") + " • " +
-                                                    (zoneStatus?.likelySide?.name ?: "WAIT"),
+                                                "Entry " +
+                                                    (zoneStatus?.entryPrice?.let { String.format("%.2f", it) } ?: "—") +
+                                                    " + " + (zoneStatus?.likelyZoneName ?: "NO ACTIVE ZONE") +
+                                                    " • BIAS " + (zoneStatus?.likelySide?.name ?: "WAIT") +
+                                                    " • Confluence " +
+                                                    (zoneStatus?.entryConfluence?.let { String.format("%.1f", it) } ?: "—"),
                                                 color = when (zoneStatus?.likelySide) {
                                                     life.pips.strat1.data.TradeSide.BUY -> Green
                                                     life.pips.strat1.data.TradeSide.SELL -> Red
                                                     else -> Muted
                                                 },
-                                                fontSize = 16.sp,
+                                                fontSize = 12.sp,
                                                 fontWeight = FontWeight.Black
                                             )
-                                            val activeConfluence = m.zones.confluence.minByOrNull {
-                                                abs(it.zone - (zoneStatus?.likelyZone ?: chartPrice))
-                                            }
                                             Text(
-                                                "Confluence: " +
-                                                    (activeConfluence?.score?.let { String.format("%.1f", it) } ?: "—") +
-                                                    " • Greeks strike " +
-                                                    (activeConfluence?.matchedStrike?.let { String.format("%.2f", it) } ?: "—"),
-                                                color = Green,
-                                                fontSize = 9.sp
+                                                "Target " +
+                                                    (zoneStatus?.possibleExit?.let { String.format("%.2f", it) } ?: "—") +
+                                                    " + " + (zoneStatus?.possibleExitName ?: "—") +
+                                                    " • Confluence " +
+                                                    (zoneStatus?.targetConfluence?.let { String.format("%.1f", it) } ?: "—"),
+                                                color = Cyan,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
                                             )
                                             Text(
                                                 "M5 reaction: " + (zoneStatus?.reactedZoneName ?: "waiting"),
-                                                color = Muted,
-                                                fontSize = 9.sp
-                                            )
-                                            Text(
-                                                "Opposite target: " + (zoneStatus?.possibleExitName ?: "—") +
-                                                    (zoneStatus?.possibleExit?.let { " @ " + String.format("%.2f", it) } ?: ""),
                                                 color = Muted,
                                                 fontSize = 9.sp
                                             )
