@@ -1,5 +1,5 @@
 name: Strat.1 Android + Python + Web CI
-# Release pipeline: push-to-main and manual dispatch build the version in mobile/release.properties.
+# Verification/build CI only. Release publishing is handled by android-v3-release.yml.
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   ANDROID_DIR: mobile
