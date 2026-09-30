@@ -619,79 +619,104 @@ private fun S006FuturesStrikes(confluence: List<Strategy006Engine.ZoneConfluence
 @Composable
 private fun S006GreeksStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
-        Text("VOLATILITY / GREEKS • PAGE 2", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("13-COLUMN RULED TABLE • ALL HEADERS ON ONE ROW", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+        Text("VOLATILITY / GREEKS • PAGE 2 • FILE 2", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("BARCHART CSV • CALL / PUT SIDE-BY-SIDE • 19 COLUMNS", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
 
         val scroll = rememberScrollState()
-        val header = listOf(
-            "Call IV", "Call Δ", "Call Γ", "Call Θ", "Call Vega", "Call IV Skew",
-            "Strike",
-            "Put IV", "Put Δ", "Put Γ", "Put Θ", "Put Vega", "Put IV Skew"
+        val headers = listOf(
+            "Latest", "IV", "Delta", "Gamma", "Theta", "Vega", "IV Skew", "Type", "Last Trade",
+            "STRIKE",
+            "Latest", "IV", "Delta", "Gamma", "Theta", "Vega", "IV Skew", "Type", "Last Trade"
         )
+        val widths = headers.mapIndexed { index, _ -> if (index == 9) 82.dp else 86.dp }
+
         Row(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
-            header.forEachIndexed { index, label ->
+            headers.forEachIndexed { index, label ->
                 Text(
                     label,
-                    color = if (index == 6) Cyan else Muted,
+                    color = if (index == 9) Cyan else Muted,
                     fontSize = 6.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.width(if (index == 6) 68.dp else 76.dp).padding(vertical = 6.dp, horizontal = 2.dp)
+                    modifier = Modifier.width(widths[index]).padding(vertical = 6.dp, horizontal = 2.dp)
                 )
             }
         }
         HorizontalDivider(color = Color.White.copy(alpha = .16f))
 
+        fun value(row: Strategy006Engine.Row?, field: String): String {
+            if (row == null) return "N/A"
+            return when (field) {
+                "latest" -> row.latest?.let { String.format("%.2f", it) } ?: "N/A"
+                "iv" -> String.format("%.2f%%", row.iv)
+                "delta" -> String.format("%.4f", row.delta)
+                "gamma" -> String.format("%.4f", row.gamma)
+                "theta" -> String.format("%.4f", row.theta)
+                "vega" -> String.format("%.4f", row.vega)
+                "skew" -> String.format("%+.2f%%", row.ivSkew)
+                "type" -> if (row.type == 'C') "Call" else "Put"
+                "last" -> row.lastTrade.ifBlank { "N/A" }
+                else -> "N/A"
+            }
+        }
+
         if (rows.isEmpty()) {
-            Text("FILE READ — 0 USABLE GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text("FILE 2 READ — 0 USABLE VOLATILITY / GREEKS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
-            rows.map { it.strike }.distinct().sorted().forEach { strike ->
-                val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
-                val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+            val strikes = rows.map { it.strike }.distinct().sorted().take(100)
+            strikes.forEach { strike ->
+                val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }
+                    .maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+                val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }
+                    .maxByOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
                 val match = confluence
                     .filter { it.matchedStrike != null && abs(it.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER }
                     .maxByOrNull { it.score }
+
                 val cells = listOf(
-                    call?.let { String.format("%.2f", it.iv) } ?: "—",
-                    call?.let { String.format("%.3f", it.delta) } ?: "—",
-                    call?.let { String.format("%.4f", it.gamma) } ?: "—",
-                    call?.let { String.format("%.4f", it.theta) } ?: "—",
-                    call?.let { String.format("%.4f", it.vega) } ?: "—",
-                    call?.let { String.format("%.2f", it.ivSkew) } ?: "—",
-                    String.format("%.2f", strike),
-                    put?.let { String.format("%.2f", it.iv) } ?: "—",
-                    put?.let { String.format("%.3f", it.delta) } ?: "—",
-                    put?.let { String.format("%.4f", it.gamma) } ?: "—",
-                    put?.let { String.format("%.4f", it.theta) } ?: "—",
-                    put?.let { String.format("%.4f", it.vega) } ?: "—",
-                    put?.let { String.format("%.2f", it.ivSkew) } ?: "—"
+                    value(call, "latest"), value(call, "iv"), value(call, "delta"), value(call, "gamma"),
+                    value(call, "theta"), value(call, "vega"), value(call, "skew"), value(call, "type"),
+                    value(call, "last"), String.format("%.2f", strike),
+                    value(put, "latest"), value(put, "iv"), value(put, "delta"), value(put, "gamma"),
+                    value(put, "theta"), value(put, "vega"), value(put, "skew"), value(put, "type"),
+                    value(put, "last")
                 )
+
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(scroll)
                         .background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent)
                 ) {
-                    cells.forEachIndexed { index, value ->
+                    cells.forEachIndexed { index, cell ->
                         Text(
-                            value,
-                            color = if (index == 6) TextMain else Muted,
+                            cell,
+                            color = when {
+                                index == 9 -> TextMain
+                                index == 7 || index == 17 -> Cyan
+                                else -> TextMain
+                            },
                             fontSize = 6.sp,
-                            fontWeight = if (index == 6) FontWeight.Bold else FontWeight.Normal,
+                            fontWeight = if (index == 9 || index == 7 || index == 17) FontWeight.Bold else FontWeight.Normal,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.width(if (index == 6) 68.dp else 76.dp).padding(vertical = 6.dp, horizontal = 2.dp)
+                            modifier = Modifier.width(widths[index]).padding(vertical = 6.dp, horizontal = 2.dp)
                         )
                     }
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .08f))
             }
         }
+
         Text(
-            "CALL: IV / Delta / Gamma / Theta / Vega / IV Skew • STRIKE • PUT: IV / Delta / Gamma / Theta / Vega / IV Skew",
+            "CALL: Latest | IV | Delta | Gamma | Theta | Vega | IV Skew | Type | Last Trade • STRIKE • PUT: Latest | IV | Delta | Gamma | Theta | Vega | IV Skew | Type | Last Trade",
             color = if (rows.isNotEmpty()) Green else Red,
             fontSize = 8.sp
         )
+        Text(
+            "FILE 2 parser preserves both sides, duplicate headers, Last Trade dates, and explicit IV Skew values.",
+            color = Muted,
+            fontSize = 7.sp
+        )
     }
 }
-
 @Composable
 fun S006PolishedZones(z: Strategy006Engine.Zones, livePrice: Double?, status: Strategy006Engine.ZoneStatus?) {
     val rows = listOf(
