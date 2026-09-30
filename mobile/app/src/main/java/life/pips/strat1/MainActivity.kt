@@ -278,10 +278,11 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
                         Text("File 2: " + greeksName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
                         Text("File 3: " + futuresName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
+                        val parsedFile3Rows = optionsFlow.parseFile3Rows(futuresText)
                         Text(
-                            if (futuresText.isNotBlank()) "FILE 3 PARSED • " + futuresText.lineSequence().count { it.isNotBlank() }.coerceAtLeast(0) + " DATA LINES"
-                            else "FILE 3 NOT PARSED — LOAD FILE 3 BEFORE BUILD I.V MAP",
-                            color = if (futuresText.isNotBlank()) Green else Red,
+                            if (parsedFile3Rows.isNotEmpty()) "FILE 3 PARSED • " + parsedFile3Rows.map { it.strike to it.type }.distinct().size + " STRIKES • " + parsedFile3Rows.size + " SIDE ROWS"
+                            else "FILE 3 NOT PARSED • 0 USABLE OI/VOLUME/PREMIUM ROWS",
+                            color = if (parsedFile3Rows.isNotEmpty()) Green else Red,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold
                         )
