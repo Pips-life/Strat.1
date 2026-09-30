@@ -573,56 +573,109 @@ class Strategy006Engine {
         // confluence window. Stage 3: require File 3 evidence at the same strike.
         // The nearest strike is NOT automatically selected: the strike with the
         // strongest combined File 2 + File 3 agreement is nominated for execution.
+        // Confluence scoring is deliberately separated into four signals:
+        // 1) IV/volatility strength, 2) directional Greek strength,
+        // 3) directional options-chain strength, and 4) proximity to the
+        // polished IV zone. File 2 + File 3 reinforce the structural zone bias;
+        // they do not replace the zone's BUY/SELL geometry.
         val ivValues = ivRows.map { abs(it.iv) }.filter { it.isFinite() }
-        val greekValues = greekRows.map { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }.filter { it.isFinite() }
-        val skewValues = greekRows.map { abs(it.ivSkew) }.filter { it.isFinite() }
-        val futuresValues = futuresRows.map { abs(it.oi) + abs(it.volume) + abs(it.premium) }.filter { it.isFinite() && it > 0.0 }
+        val greekMagnitudeValues = greekRows.map {
+            abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta)
+        }.filter { it.isFinite() }
+        val futuresMagnitudeValues = futuresRows.map {
+            abs(it.oi) + abs(it.volume) + abs(it.premium)
+        }.filter { it.isFinite() && it > 0.0 }
 
         data class ZoneScore(val confluence: ZoneConfluence, val score: Double)
 
+        fun directionalBalance(callStrength: Double, putStrength: Double, side: TradeSide): Double {
+            val total = callStrength + putStrength
+            if (!total.isFinite() || total <= 0.0) return 50.0
+            val preferred = if (side == TradeSide.BUY) callStrength else putStrength
+            return (preferred / total * 100.0).coerceIn(0.0, 100.0)
+        }
+
         fun confluence(ivZone: Double, name: String): ZoneConfluence {
-            if (nativeGreekStrikes.isEmpty()) {
-                return ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
+            if (nativeGreekStrikes.isEmpty() || nativeFuturesStrikes.isEmpty()) {
+                return ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY, zoneApproachSide(name))
             }
 
             val candidates = nativeGreekStrikes.filter { abs(it - ivZone) <= STRIKE_BUFFER }
-            if (candidates.isEmpty() || nativeFuturesStrikes.isEmpty()) {
-                return ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
+            if (candidates.isEmpty()) {
+                return ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY, zoneApproachSide(name))
             }
 
+            val bias = zoneApproachSide(name)
             val scored = candidates.mapNotNull { greekStrike ->
                 val futuresStrike = nativeFuturesStrikes.minByOrNull { abs(it - greekStrike) }
                     ?.takeIf { abs(it - greekStrike) <= STRIKE_BUFFER } ?: return@mapNotNull null
                 val greekAtStrike = greekRows.filter { abs(it.strike - greekStrike) <= 0.01 }
                 val ivAtStrike = ivRows.filter { abs(it.strike - greekStrike) <= STRIKE_BUFFER }
                 val futuresAtStrike = futuresRows.filter { abs(it.strike - futuresStrike) <= 0.01 }
-                if (greekAtStrike.isEmpty() || futuresAtStrike.isEmpty()) return@mapNotNull null
+                if (greekAtStrike.isEmpty() || futuresAtStrike.isEmpty() || bias == null) return@mapNotNull null
 
                 val volatility = ivAtStrike.maxOfOrNull { abs(it.iv) } ?: 0.0
-                val greekMagnitude = greekAtStrike.maxOfOrNull { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) } ?: 0.0
-                val skew = greekAtStrike.maxOfOrNull { abs(it.ivSkew) } ?: 0.0
-                val futuresStrength = futuresAtStrike.maxOfOrNull {
-                    normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues)
+                val greekMagnitude = greekAtStrike.maxOfOrNull {
+                    abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta)
                 } ?: 0.0
-                val rawScore = normalize(volatility, ivValues) * 0.30 +
-                    normalize(greekMagnitude, greekValues) * 0.35 +
-                    normalize(skew, skewValues) * 0.15 +
-                    futuresStrength * 0.20
 
-                // A strike can be inside the ±500-point confluence window without
-                // being equally relevant to the polished IV zone. Distance must
-                // therefore affect confidence; otherwise nearby zones can all
-                // nominate the same strongest strike and display the same score.
-                val distanceWeight = 0.50 + 0.50 * exp(-abs(greekStrike - ivZone) / STRIKE_BUFFER)
-                val score = (rawScore * distanceWeight).coerceIn(0.0, 100.0)
+                // Preserve call/put direction instead of stripping it with abs().
+                // Delta supplies the directional component; the other Greeks
+                // contribute to strength without inventing a direction.
+                val callGreekRows = greekAtStrike.filter { it.type == 'C' }
+                val putGreekRows = greekAtStrike.filter { it.type == 'P' }
+                val callGreekStrength = callGreekRows.maxOfOrNull {
+                    abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta)
+                } ?: 0.0
+                val putGreekStrength = putGreekRows.maxOfOrNull {
+                    abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta)
+                } ?: 0.0
+                val greekDirectionalAgreement = directionalBalance(
+                    callGreekStrength, putGreekStrength, bias
+                )
+                val greekStrength = normalize(greekMagnitude, greekMagnitudeValues)
 
-                // Directional bias is NOT inferred by adding absolute call/put
-                // magnitudes. File 2 + File 3 determine confluence strength and
-                // nominated strike; zone geometry determines approach bias.
-                val bias = zoneApproachSide(name)
+                val futuresCallRows = futuresAtStrike.filter { it.type == 'C' }
+                val futuresPutRows = futuresAtStrike.filter { it.type == 'P' }
+                val callChainStrength = futuresCallRows.maxOfOrNull {
+                    abs(it.oi) + abs(it.volume) + abs(it.premium)
+                } ?: 0.0
+                val putChainStrength = futuresPutRows.maxOfOrNull {
+                    abs(it.oi) + abs(it.volume) + abs(it.premium)
+                } ?: 0.0
+                val chainStrength = normalize(
+                    max(callChainStrength, putChainStrength), futuresMagnitudeValues
+                )
+                val chainDirectionalAgreement = directionalBalance(
+                    callChainStrength, putChainStrength, bias
+                )
+
+                val skew = greekAtStrike.maxOfOrNull { abs(it.ivSkew) } ?: 0.0
+                val skewStrength = normalize(skew, greekRows.map { abs(it.ivSkew) }.filter { it.isFinite() })
+
+                // Make proximity a first-class signal. A strike at the edge of
+                // the ±500 window must not beat a materially closer strike merely
+                // because its raw option metrics are larger.
+                val distance = abs(greekStrike - ivZone)
+                val proximity = (exp(-distance / PROXIMITY_SCALE) * 100.0).coerceIn(0.0, 100.0)
+
+                // Confidence is a confluence score, not a probability.
+                // Structural bias + directional agreement + strength + proximity.
+                val score = (
+                    normalize(volatility, ivValues) * 0.20 +
+                    greekStrength * 0.20 +
+                    greekDirectionalAgreement * 0.20 +
+                    chainStrength * 0.10 +
+                    chainDirectionalAgreement * 0.15 +
+                    skewStrength * 0.05 +
+                    proximity * 0.10
+                ).coerceIn(0.0, 100.0)
 
                 ZoneScore(
-                    ZoneConfluence(name, ivZone, greekStrike, score, volatility, greekMagnitude, abs(greekStrike - ivZone), bias),
+                    ZoneConfluence(
+                        name, ivZone, greekStrike, score, volatility,
+                        greekMagnitude, distance, bias
+                    ),
                     score
                 )
             }
@@ -630,7 +683,10 @@ class Strategy006Engine {
             return scored.maxWithOrNull(
                 compareBy<ZoneScore> { it.score }
                     .thenBy { -it.confluence.distance }
-            )?.confluence ?: ZoneConfluence(name, ivZone, null, 0.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
+            )?.confluence ?: ZoneConfluence(
+                name, ivZone, null, 0.0, 0.0, 0.0,
+                Double.POSITIVE_INFINITY, bias
+            )
         }
 
         val named = polishedZones.zip(listOf(
