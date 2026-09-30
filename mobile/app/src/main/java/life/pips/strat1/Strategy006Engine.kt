@@ -57,8 +57,10 @@ class Strategy006Engine {
 
     data class ZoneStatus(
         val likelyZoneName: String?, val likelyZone: Double?, val likelySide: TradeSide?,
+        val entryPrice: Double?, val entryConfluence: Double?,
         val reactedZoneName: String?, val reactedZone: Double?,
-        val possibleExitName: String?, val possibleExit: Double?
+        val possibleExitName: String?, val possibleExit: Double?,
+        val targetConfluence: Double?
     )
 
     enum class PositionAction { HOLD, CLOSE_REVERSE, RETARGET }
@@ -113,26 +115,32 @@ class Strategy006Engine {
     fun currentMap(): Map? = current
 
     fun zoneStatus(price: Double): ZoneStatus {
-        val z = current?.zones ?: return ZoneStatus(null, null, null, lastReactionZoneName, lastReactionZone, null, null)
+        val z = current?.zones ?: return ZoneStatus(null, null, null, null, null, lastReactionZoneName, lastReactionZone, null, null, null)
+        // When live/spot price is between two mapped zones, upper resistance => SELL; lower support => BUY.
         val lower = listOfNotNull(
             z.primaryHedgeFloor?.let { "Primary Hedge Floor" to it },
-            z.dealerAbsorption?.let { "Dealer Absorption" to it },
+            z.dealerAbsorption?.let { "Absorption Floor" to it },
             z.liquidityExhaustion?.let { "Liquidity Exhaustion" to it }
-        ).filter { it.second < price }.minByOrNull { price - it.second }
+        ).filter { it.second < price }.maxByOrNull { it.second }
         val upper = listOfNotNull(
             z.immediateHedgeWall?.let { "Immediate Hedge Wall" to it },
             z.reclaimGate?.let { "Reclaim Gate" to it },
             z.upperInventoryCeiling?.let { "Upper Inventory Ceiling" to it }
-        ).filter { it.second > price }.minByOrNull { it.second - price }
+        ).filter { it.second > price }.minByOrNull { it.second }
         val likely = listOfNotNull(
             lower?.let { Triple(it.first, it.second, TradeSide.BUY) },
             upper?.let { Triple(it.first, it.second, TradeSide.SELL) }
         ).minByOrNull { abs(it.second - price) }
-        val target = likely?.third?.let { oppositeTarget(it, price) }
+        val entryConfluence = likely?.let { candidate ->
+            z.confluence.firstOrNull { it.zoneName == candidate.first }
+        }
+        val target = likely?.third?.let { oppositeTarget(it, likely.second) }
+        val entryPrice = entryConfluence?.matchedStrike ?: likely?.second
         return ZoneStatus(
             likely?.first, likely?.second, likely?.third,
+            entryPrice, entryConfluence?.score,
             lastReactionZoneName, lastReactionZone,
-            target?.zoneName, target?.zone
+            target?.zoneName, target?.zone, target?.score
         )
     }
 
