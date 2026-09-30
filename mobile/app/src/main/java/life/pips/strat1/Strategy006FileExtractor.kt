@@ -128,49 +128,70 @@ object Strategy006FileExtractor {
         val premium: Double
     )
 
-    /** Rebuild File 3 from OCR geometry and normalize it to one row per side. */
+    /**
+     * Rebuild File 3 from OCR geometry and normalize it to one row per side.
+     *
+     * Expected visual layout:
+     *   CALL: Volume | OI | Premium | STRIKE | PUT: Volume | OI | Premium
+     *
+     * OCR is noisy, so a row is no longer required to contain exactly seven
+     * numeric tokens. We locate the strike by value/position and take the
+     * nearest three numeric cells on each side. Header/page/date numbers are
+     * therefore ignored instead of invalidating the entire row.
+     */
     private fun normalizeFuturesOcr(raw: String, ocrTokens: List<OcrToken>): String {
-        val numberRegex = Regex("""[-+]?\\d+(?:,\\d{3})*(?:\\.\\d+)?%?""")
-        fun value(s: String): Double? = s.replace(",", "").replace("%", "").toDoubleOrNull()
+        val numberRegex = Regex("""[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?""")
+        fun value(s: String): Double? =
+            s.replace(",", "").replace("%", "").trim().toDoubleOrNull()
 
-        /*
-         * Screenshot/PDF File 3 schema (page 3):
-         *   CALL: Volume | OI | Premium | STRIKE | PUT: Volume | OI | Premium
-         *
-         * The OCR result is never mapped by text order. For each physical OCR row
-         * we use Y to find the row and X to find the seven cells. A row is accepted
-         * only when exactly seven numeric cells are present, so a neighbouring value
-         * can never slide into another column.
-         */
-        fun parseSeven(values: List<Double>): Pair<Double, List<RowValue>>? {
-            if (values.size != 7) return null
-            val strike = values[3]
-            if (strike < 100.0) return null
-            val call = RowValue('C', values[1], values[0], values[2])
-            val put = RowValue('P', values[5], values[4], values[6])
+        fun parseAroundStrike(values: List<Double>, strikeIndex: Int): Pair<Double, List<RowValue>>? {
+            if (strikeIndex < 3 || strikeIndex + 3 >= values.size) return null
+            val strike = values[strikeIndex]
+            if (!strike.isFinite() || strike < 100.0) return null
+
+            val left = values.subList(strikeIndex - 3, strikeIndex)
+            val right = values.subList(strikeIndex + 1, strikeIndex + 4)
+
+            // File 3 orientation is CALL-left / PUT-right:
+            // Volume, OI, Premium | Strike | Volume, OI, Premium.
+            val call = RowValue('C', oi = left[1], volume = left[0], premium = left[2])
+            val put = RowValue('P', oi = right[1], volume = right[0], premium = right[2])
             return strike to listOf(call, put)
+        }
+
+        fun bestRow(values: List<Double>): Pair<Double, List<RowValue>>? {
+            if (values.size < 7) return null
+            val candidates = values.indices.filter { idx ->
+                values[idx] >= 1000.0 && idx >= 3 && idx + 3 < values.size
+            }
+            return candidates
+                .mapNotNull { idx -> parseAroundStrike(values, idx)?.let { idx to it } }
+                .minByOrNull { (_, row) ->
+                    // Prefer a plausible strike near the middle of the row.
+                    abs((row.first) - values[values.size / 2]) + abs(values.size - 7) * 0.001
+                }?.second
         }
 
         val rows = mutableListOf<Pair<Double, List<RowValue>>>()
 
         if (ocrTokens.isNotEmpty()) {
-            for (pageTokens in ocrTokens.groupBy { it.page }) {
-                val numeric = pageTokens.value.flatMap { token ->
+            for ((_, pageTokens) in ocrTokens.groupBy { it.page }) {
+                val numeric = pageTokens.flatMap { token ->
                     numberRegex.findAll(token.text).mapNotNull { m ->
                         value(m.value)?.let { Triple(it, token.left, token.centerY) }
                     }
                 }
                 if (numeric.isEmpty()) continue
 
-                val heights = pageTokens.value.map { it.height }.sorted()
+                val heights = pageTokens.map { it.height }.sorted()
                 val medianHeight = heights[heights.size / 2].toDouble().coerceAtLeast(1.0)
-                val rowTolerance = max(12.0, medianHeight * 0.8)
+                val rowTolerance = max(12.0, medianHeight * 0.9)
                 val groups = mutableListOf<MutableList<Triple<Double, Int, Double>>>()
 
                 for (item in numeric.sortedBy { it.third }) {
                     val group = groups.lastOrNull()
                     if (group == null ||
-                        kotlin.math.abs(group.map { it.third }.average() - item.third) > rowTolerance
+                        abs(group.map { it.third }.average() - item.third) > rowTolerance
                     ) {
                         groups += mutableListOf(item)
                     } else {
@@ -180,20 +201,47 @@ object Strategy006FileExtractor {
 
                 for (group in groups) {
                     val ordered = group.sortedBy { it.second }
-                    // Header/metadata rows and wrapped OCR rows are rejected.
-                    if (ordered.size != 7) continue
-                    parseSeven(ordered.map { it.first })?.let { rows += it }
+                    bestRow(ordered.map { it.first })?.let { rows += it }
                 }
             }
         }
 
-        /*
-         * Text fallback is deliberately strict: seven numbers per row only.
-         * This is used for non-image exports where physical coordinates are absent.
-         */
+        // Text/CSV fallback. Supports both normalized CSV and pasted table text.
         if (rows.isEmpty()) {
-            raw.lineSequence().forEach { line ->
-                parseSeven(numberRegex.findAll(line).mapNotNull { value(it.value) }.toList())?.let { rows += it }
+            val lines = raw.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+            if (lines.isNotEmpty()) {
+                val header = splitCsv(lines.first()).map { normalize(it) }
+                val strikeIdx = header.indexOfFirst { it == "strike" || it.contains("strike price") }
+                val typeIdx = header.indexOfFirst { it == "type" || it == "side" || it == "call put" }
+                val volIdx = header.indexOfFirst { it == "volume" || it == "vol" }
+                val oiIdx = header.indexOfFirst { it == "open interest" || it == "oi" }
+                val premiumIdx = header.indexOfFirst { it == "premium" || it == "price" || it == "option price" }
+
+                if (strikeIdx >= 0 && volIdx >= 0 && oiIdx >= 0 && premiumIdx >= 0 && typeIdx >= 0) {
+                    for (line in lines.drop(1)) {
+                        val cells = splitCsv(line)
+                        val strike = value(cells.getOrNull(strikeIdx)) ?: continue
+                        val typeText = cells.getOrNull(typeIdx).orEmpty().uppercase(Locale.US)
+                        val type = when {
+                            typeText.startsWith("P") -> 'P'
+                            typeText.startsWith("C") -> 'C'
+                            else -> continue
+                        }
+                        rows += strike to listOf(
+                            RowValue(
+                                type,
+                                oi = value(cells.getOrNull(oiIdx)) ?: 0.0,
+                                volume = value(cells.getOrNull(volIdx)) ?: 0.0,
+                                premium = value(cells.getOrNull(premiumIdx)) ?: 0.0
+                            )
+                        )
+                    }
+                } else {
+                    for (line in lines) {
+                        val values = numberRegex.findAll(line).mapNotNull { value(it.value) }.toList()
+                        bestRow(values)?.let { rows += it }
+                    }
+                }
             }
         }
 
@@ -201,11 +249,10 @@ object Strategy006FileExtractor {
         return buildString {
             appendLine("strike,type,volume,open interest,premium")
             rows.distinctBy { it.first to it.second.first().type }.forEach { (strike, sides) ->
-                // Preserve CALL-left / PUT-right source orientation in the normalized data.
                 sides.forEach { side ->
                     appendLine(
                         String.format(
-                            java.util.Locale.US,
+                            Locale.US,
                             "%.4f,%s,%.4f,%.4f,%.4f",
                             strike, side.type, side.volume, side.oi, side.premium
                         )
