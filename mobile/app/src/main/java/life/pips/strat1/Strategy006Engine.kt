@@ -560,8 +560,24 @@ class Strategy006Engine {
                     normalize(skew, skewValues) * 0.15 +
                     futuresStrength * 0.20
 
+                // Directional nomination uses File 2 call/put Greeks plus
+                // File 3 call/put OI, volume and premium at the nominated strike.
+                val callGreek = greekAtStrike.filter { it.type == 'C' }
+                    .sumOf { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+                val putGreek = greekAtStrike.filter { it.type == 'P' }
+                    .sumOf { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
+                val callChain = futuresAtStrike.filter { it.type == 'C' }
+                    .sumOf { abs(it.oi) + abs(it.volume) + abs(it.premium) }
+                val putChain = futuresAtStrike.filter { it.type == 'P' }
+                    .sumOf { abs(it.oi) + abs(it.volume) + abs(it.premium) }
+                val bias = when {
+                    callGreek + callChain > putGreek + putChain -> TradeSide.BUY
+                    putGreek + putChain > callGreek + callChain -> TradeSide.SELL
+                    else -> null
+                }
+
                 ZoneScore(
-                    ZoneConfluence(name, ivZone, greekStrike, score, volatility, greekMagnitude, abs(greekStrike - ivZone)),
+                    ZoneConfluence(name, ivZone, greekStrike, score, volatility, greekMagnitude, abs(greekStrike - ivZone), bias),
                     score
                 )
             }
