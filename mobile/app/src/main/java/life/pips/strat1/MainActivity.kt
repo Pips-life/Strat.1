@@ -114,12 +114,29 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
             barchartName = s006Prefs.getString("barchart_name", "Cached IV options table").orEmpty()
             greeksName = s006Prefs.getString("greeks_name", "Cached Volatility / Greeks table").orEmpty()
             futuresText = s006Prefs.getString("futures_text", "").orEmpty()
-            futuresName = s006Prefs.getString("futures_name", "Cached futures/options PDF").orEmpty()
+            futuresName = s006Prefs.getString("futures_name", "Cached futures/options CSV").orEmpty()
             gcPriceText = s006Prefs.getString("gc_price", "").orEmpty()
             spotPriceText = s006Prefs.getString("spot_price", "").orEmpty()
             if (spotPriceText.isBlank()) spotPriceText = optionsFlow.extractIvSpotPrice(barchartText)?.let { String.format("%.2f", it) }.orEmpty()
         } else {
             s006Prefs.edit().clear().apply()
+        }
+
+        // File 3 is also persisted in the dedicated bot storage folder so the
+        // execution engine can recover the latest Barchart CSV without relying
+        // on the Android picker state or a stale in-memory value.
+        if (futuresText.isBlank()) {
+            loadS006File3ForBot(context)?.let { stored ->
+                futuresText = stored.first
+                futuresName = stored.second.ifBlank { "Bot storage • File 3 CSV" }
+                s006Prefs.edit()
+                    .putString("date", s006Today)
+                    .putString("futures_text", futuresText)
+                    .putString("futures_name", futuresName)
+                    .putLong("updated_at", System.currentTimeMillis())
+                    .apply()
+                localStatus = "S006 | FILE 3 AUTO-FETCHED • $futuresName"
+            }
         }
     }
     val barchartPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -211,6 +228,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                     .onSuccess { result ->
                         futuresText = result.first
                         futuresName = result.second
+                        saveS006File3ForBot(context, futuresText, futuresName)
                         s006Prefs.edit()
                             .putString("date", s006Today)
                             .putString("futures_text", futuresText)
@@ -278,6 +296,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                         Text("Vol/Greeks: " + greeksName, color = Muted, fontSize = 8.sp)
                         Text("File 2: " + greeksName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
                         Text("File 3: " + futuresName + " • accepts screenshot PDF or CSV", color = Muted, fontSize = 8.sp)
+                        Text("BOT STORAGE: $S006_FILE3_STORAGE_DIR • latest File 3 CSV is auto-fetched from this folder", color = Cyan, fontSize = 8.sp)
                         val parsedFile3Rows = optionsFlow.parseFile3Rows(futuresText)
                         Text(
                             if (parsedFile3Rows.isNotEmpty()) "FILE 3 PARSED • " + parsedFile3Rows.map { it.strike to it.type }.distinct().size + " STRIKES • " + parsedFile3Rows.size + " SIDE ROWS"
@@ -483,47 +502,84 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
     }
 }
 
+private const val S006_FILE3_STORAGE_DIR = "strategy006/file3"
+
+private fun s006File3Dir(context: android.content.Context): java.io.File =
+    java.io.File(context.filesDir, S006_FILE3_STORAGE_DIR).apply { mkdirs() }
+
+private fun saveS006File3ForBot(context: android.content.Context, text: String, sourceName: String) {
+    val dir = s006File3Dir(context)
+    java.io.File(dir, "file3_latest.csv").writeText(text)
+    java.io.File(dir, "source_name.txt").writeText(sourceName)
+}
+
+private fun loadS006File3ForBot(context: android.content.Context): Pair<String, String>? {
+    val dir = s006File3Dir(context)
+    val file = java.io.File(dir, "file3_latest.csv")
+    if (!file.isFile || file.length() == 0L) return null
+    return file.readText() to java.io.File(dir, "source_name.txt").takeIf { it.isFile }?.readText().orEmpty()
+}
+
 @Composable
 private fun S006FuturesStrikes(confluence: List<Strategy006Engine.ZoneConfluence>, rows: List<Strategy006Engine.Row>) {
     CardBlock {
-        Text("FUTURES / OPTIONS • PAGE 3", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-        Text("8-COLUMN RULED TABLE • CALL → STRIKE → PUT → ZONE MATCH", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+        Text("OPTIONS CHAIN • PAGE 3 • FILE 3", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+        Text("BARCHART CSV • CALL / PUT SIDE-BY-SIDE • 11 COLUMNS", color = Muted, fontSize = 7.sp, fontWeight = FontWeight.Bold)
 
         val scroll = rememberScrollState()
-        val header = listOf("Vol.", "OI.", "Premium", "Strike", "Vol.", "OI.", "Premium", "Zone Matched + Score")
-        Row(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
-            header.forEachIndexed { index, label ->
+        val headers = listOf(
+            "CALL", "Latest", "Volume", "Open Int", "Premium",
+            "STRIKE",
+            "PUT", "Latest", "Volume", "Open Int", "Premium"
+        )
+        val widths = listOf(48, 66, 66, 72, 76, 76, 48, 66, 66, 72, 76).map { it.dp }
+
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(scroll)
+        ) {
+            headers.forEachIndexed { index, label ->
                 Text(
                     label,
-                    color = if (index == 3) Cyan else Muted,
+                    color = if (index == 5) Cyan else Muted,
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.width(if (index == 7) 118.dp else 70.dp).padding(vertical = 6.dp, horizontal = 3.dp)
+                    modifier = Modifier.width(widths[index]).padding(vertical = 6.dp, horizontal = 2.dp)
                 )
             }
         }
         HorizontalDivider(color = Color.White.copy(alpha = .16f))
 
+        fun latest(row: Strategy006Engine.Row?): String =
+            row?.latest?.let { String.format("%.2f", it) } ?: "N/A"
+
+        fun metric(value: Double, missing: Boolean, decimals: Int): String =
+            if (missing) "N/A" else if (decimals == 0) String.format("%.0f", value) else String.format("%.2f", value)
+
         if (rows.isEmpty()) {
-            Text("FILE READ — 0 USABLE FUTURES ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text("FILE 3 READ — 0 USABLE OPTIONS ROWS", color = Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         } else {
-            rows.map { it.strike }.distinct().sorted().take(60).forEach { strike ->
+            rows.map { it.strike }.distinct().sorted().take(80).forEach { strike ->
                 val call = rows.filter { it.type == 'C' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { it.volume + it.oi }
                 val put = rows.filter { it.type == 'P' && abs(it.strike - strike) <= 0.01 }.maxByOrNull { it.volume + it.oi }
                 val match = confluence
                     .filter { it.matchedStrike != null && abs(it.matchedStrike!! - strike) <= Strategy006Engine.STRIKE_BUFFER }
                     .maxByOrNull { it.score }
+
                 val cells = listOf(
-                    call?.let { String.format("%.0f", it.volume) } ?: "—",
-                    call?.let { String.format("%.0f", it.oi) } ?: "—",
-                    call?.let { String.format("%.2f", it.premium) } ?: "—",
+                    "Call",
+                    latest(call),
+                    call?.let { metric(it.volume, it.volumeMissing, 0) } ?: "N/A",
+                    call?.let { metric(it.oi, it.oiMissing, 0) } ?: "N/A",
+                    call?.let { metric(it.premium, it.premiumMissing, 2) } ?: "N/A",
                     String.format("%.2f", strike),
-                    put?.let { String.format("%.0f", it.volume) } ?: "—",
-                    put?.let { String.format("%.0f", it.oi) } ?: "—",
-                    put?.let { String.format("%.2f", it.premium) } ?: "—",
-                    match?.let { "✓ " + String.format("%.1f", it.score) } ?: "✗ —"
+                    "Put",
+                    latest(put),
+                    put?.let { metric(it.volume, it.volumeMissing, 0) } ?: "N/A",
+                    put?.let { metric(it.oi, it.oiMissing, 0) } ?: "N/A",
+                    put?.let { metric(it.premium, it.premiumMissing, 2) } ?: "N/A"
                 )
+
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(scroll)
                         .background(if (match != null) Green.copy(alpha = .08f) else Color.Transparent)
@@ -532,25 +588,31 @@ private fun S006FuturesStrikes(confluence: List<Strategy006Engine.ZoneConfluence
                         Text(
                             value,
                             color = when {
-                                index == 3 -> TextMain
-                                index == 7 && match != null -> Green
-                                index == 7 -> Muted
+                                index == 5 -> TextMain
+                                index == 0 || index == 6 -> Cyan
+                                match != null && (index == 5) -> Green
                                 else -> TextMain
                             },
                             fontSize = 7.sp,
-                            fontWeight = if (index == 3 || index == 7) FontWeight.Bold else FontWeight.Normal,
+                            fontWeight = if (index == 5 || index == 0 || index == 6) FontWeight.Bold else FontWeight.Normal,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.width(if (index == 7) 118.dp else 70.dp).padding(vertical = 6.dp, horizontal = 3.dp)
+                            modifier = Modifier.width(widths[index]).padding(vertical = 6.dp, horizontal = 2.dp)
                         )
                     }
                 }
                 HorizontalDivider(color = Color.White.copy(alpha = .08f))
             }
         }
+
         Text(
-            "CALL: Volume / OI / Premium • STRIKE • PUT: Volume / OI / Premium • Zone Matched + Score",
+            "CALL | Latest | Volume | Open Int | Premium | STRIKE | PUT | Latest | Volume | Open Int | Premium",
             color = if (rows.isNotEmpty()) Green else Red,
             fontSize = 8.sp
+        )
+        Text(
+            "Bot source: $S006_FILE3_STORAGE_DIR/file3_latest.csv",
+            color = Muted,
+            fontSize = 7.sp
         )
     }
 }
