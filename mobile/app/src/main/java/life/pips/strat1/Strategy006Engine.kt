@@ -728,6 +728,7 @@ class Strategy006Engine {
         // 1000-point total matching window = 500 points on either side of the mapped zone.
         // For XAUUSD at 0.01 point size, 4150.00 matches 4145.00 through 4155.00.
         const val STRIKE_BUFFER = 500.0
+        const val PROXIMITY_SCALE = 200.0
         // Immediate-entry stop: 350 price points from the nominated confluence strike.
         const val NOMINATED_STRIKE_STOP = 350.0
     }
