@@ -19,7 +19,7 @@ class Strategy006Engine {
         val gamma: Double = 0.0, val delta: Double = 0.0, val vega: Double = 0.0,
         val theta: Double = 0.0, val iv: Double = 0.0,
         val putIv: Double = 0.0, val callIv: Double = 0.0, val ivSkew: Double = 0.0,
-        val source: String = "greeks", val latest: Double? = null,
+        val source: String = "greeks", val latest: Double? = null, val lastTrade: String = "",
         val volumeMissing: Boolean = false, val oiMissing: Boolean = false, val premiumMissing: Boolean = false
     )
 
@@ -624,6 +624,47 @@ class Strategy006Engine {
         val all = if (htmlRows.size >= 2) htmlRows else csvRows
         if (all.isEmpty()) return emptyList()
         val header = all.first().map { normalize(it) }
+
+        // Native Barchart File 2 / Volatility + Greeks CSV layout:
+        // Latest, IV, Delta, Gamma, Theta, Vega, IV Skew, Type, Last Trade,
+        // Strike, Latest, IV, Delta, Gamma, Theta, Vega, IV Skew, Type, Last Trade
+        // Keep both call and put sides intact; do not collapse duplicate headers.
+        val nativeFile2 = header.size >= 19 &&
+            header[0] == "latest" && header[1] == "iv" && header[2] == "delta" &&
+            header[3] == "gamma" && header[4] == "theta" && header[5] == "vega" &&
+            header[6] == "iv skew" && header[7] == "type" && header[8] == "last trade" &&
+            header[9] == "strike" && header[10] == "latest" && header[11] == "iv" &&
+            header[12] == "delta" && header[13] == "gamma" && header[14] == "theta" &&
+            header[15] == "vega" && header[16] == "iv skew" && header[17] == "type" &&
+            header[18] == "last trade"
+        if (nativeFile2) {
+            val parsed = mutableListOf<Row>()
+            for (cells in all.drop(1)) {
+                val strike = numOrNull(cells.getOrNull(9)) ?: continue
+                if (strike <= 0.0) continue
+                fun sideType(value: String?): Char? = when {
+                    value.orEmpty().trim().uppercase(Locale.US).startsWith("C") -> 'C'
+                    value.orEmpty().trim().uppercase(Locale.US).startsWith("P") -> 'P'
+                    else -> null
+                }
+                fun rowFor(side: Char, offset: Int): Row {
+                    val latest = numOrNull(cells.getOrNull(offset))
+                    val iv = numOrNull(cells.getOrNull(offset + 1)) ?: 0.0
+                    val delta = numOrNull(cells.getOrNull(offset + 2)) ?: 0.0
+                    val gamma = numOrNull(cells.getOrNull(offset + 3)) ?: 0.0
+                    val theta = numOrNull(cells.getOrNull(offset + 4)) ?: 0.0
+                    val vega = numOrNull(cells.getOrNull(offset + 5)) ?: 0.0
+                    val skew = numOrNull(cells.getOrNull(offset + 6)) ?: 0.0
+                    val lastTrade = cells.getOrNull(offset + 8).orEmpty().trim()
+                    return Row(strike, side, gamma = gamma, delta = delta, vega = vega, theta = theta,
+                        iv = iv, putIv = if (side == 'P') iv else 0.0, callIv = if (side == 'C') iv else 0.0,
+                        ivSkew = skew, source = "greeks", latest = latest, lastTrade = lastTrade)
+                }
+                sideType(cells.getOrNull(7))?.let { parsed += rowFor(it, 0) }
+                sideType(cells.getOrNull(17))?.let { parsed += rowFor(it, 10) }
+            }
+            if (parsed.isNotEmpty()) return parsed
+        }
 
         // Barchart/Volatility side-by-side layout:
         // PUT DELTA | PUT PRICE | STRIKE | CALL PRICE | CALL DELTA | IMP VOL
