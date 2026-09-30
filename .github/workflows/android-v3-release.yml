@@ -1,4 +1,4 @@
-name: Android v2.127 Release
+name: Pips-life Android Release
 
 on:
   push:
@@ -92,7 +92,7 @@ jobs:
           set -euo pipefail
           APK_PATH="mobile/app/build/outputs/apk/release/app-release.apk"
           test -f "$APK_PATH"
-          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-$VERSION_NAME.0-$VERSION_CODE.apk"
+          NORMALIZED_APK="mobile/app/build/outputs/apk/release/pips-life-$VERSION_NAME-$VERSION_CODE.apk"
           cp "$APK_PATH" "$NORMALIZED_APK"
           echo "path=$NORMALIZED_APK" >> "$GITHUB_OUTPUT"
 
@@ -154,5 +154,12 @@ jobs:
           VERSION_NAME: ${{ steps.version.outputs.name }}
         run: |
           set -euo pipefail
-          gh release delete "v$VERSION_NAME" --yes 2>/dev/null || true
-          gh release create "v$VERSION_NAME"             "${{ steps.apk.outputs.path }}"             "${{ steps.apk.outputs.path }}.sha256"             --title "PipsLife v$VERSION_NAME"             --generate-notes
+          TAG="v$VERSION_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.apk.outputs.path }}" "${{ steps.apk.outputs.path }}.sha256" --clobber
+          else
+            gh release create "$TAG" "${{ steps.apk.outputs.path }}" "${{ steps.apk.outputs.path }}.sha256" --title "PipsLife v$VERSION_NAME" --generate-notes
+          fi
+
+          APK_COUNT="$(gh release view "$TAG" --json assets --jq '[.assets[] | select(.name | endswith(".apk"))] | length')"
+          test "$APK_COUNT" -eq 1
