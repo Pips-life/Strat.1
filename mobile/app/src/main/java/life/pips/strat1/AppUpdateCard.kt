@@ -52,6 +52,7 @@ fun AppUpdateCard() {
         }
     }
 
+    // The update card shows only installed/latest update status; no separate "current release" tab.
     Surface(
         color = Color(0xFF0A1624),
         shape = RoundedCornerShape(10.dp),

@@ -15,15 +15,18 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 private const val GITHUB_LATEST_URL = "https://api.github.com/repos/Pips-life/Strat.1/releases/latest"
 private const val APK_MIME = "application/vnd.android.package-archive"
+private const val DOWNLOAD_READ_TIMEOUT_MINUTES = 5L
+private const val DOWNLOAD_CALL_TIMEOUT_MINUTES = 15L
 
-data class AppRelease(val tag: String, val name: String, val versionName: String, val versionCode: Int, val assetId: Long, val assetName: String, val downloadUrl: String, val viaBackend: Boolean = false)
+data class AppRelease(val tag: String, val name: String, val versionName: String, val versionCode: Int, val assetId: Long, val assetName: String, val downloadUrl: String, val sha256Digest: String = "", val viaBackend: Boolean = false)
 
 class ReleaseUpdateManager(private val context: Context) {
-    private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(DOWNLOAD_READ_TIMEOUT_MINUTES, TimeUnit.MINUTES).callTimeout(DOWNLOAD_CALL_TIMEOUT_MINUTES, TimeUnit.MINUTES).build()
 
     suspend fun check(): Result<AppRelease?> = withContext(Dispatchers.IO) { runCatching { checkPublicGitHub() } }
 
@@ -46,7 +49,8 @@ class ReleaseUpdateManager(private val context: Context) {
                 if (versionCode <= BuildConfig.VERSION_CODE) continue
                 val url = asset.optString("browser_download_url").trim()
                 if (url.isBlank()) continue
-                val candidate = AppRelease(tag, json.optString("name", "Pips-life update"), versionName, versionCode, asset.optLong("id"), name, url)
+                val digest = asset.optString("digest").trim().removePrefix("sha256:").lowercase()
+                val candidate = AppRelease(tag, json.optString("name", "Pips-life update"), versionName, versionCode, asset.optLong("id"), name, url, digest)
                 if (best == null || candidate.versionCode > best!!.versionCode) best = candidate
             }
             return best
@@ -62,23 +66,89 @@ class ReleaseUpdateManager(private val context: Context) {
                 }
                 return@runCatching
             }
+
             val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: error("App download directory unavailable")
             val file = File(dir, "pips-life-${release.versionName}-${release.versionCode}.apk")
-            if (file.exists()) file.delete()
-            val request = Request.Builder().url(release.downloadUrl).get().header("Accept", "application/vnd.github+json").header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}").build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("Update download failed (${response.code})")
-                val body = response.body ?: error("Update download was empty")
-                val total = body.contentLength(); var read = 0L
-                body.byteStream().use { input -> FileOutputStream(file).use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (true) { val count = input.read(buffer); if (count < 0) break; output.write(buffer, 0, count); read += count; if (total > 0) onProgress(((read * 100L) / total).toInt().coerceIn(0, 100)) }
-                    output.fd.sync()
-                } }
+            val partial = File(dir, "${file.name}.part")
+
+            if (file.exists() && file.length() > 0L && digestMatches(file, release.sha256Digest)) {
+                withContext(Dispatchers.Main) { installApk(file) }
+                return@runCatching
             }
-            if (!file.exists() || file.length() == 0L) error("Downloaded update is empty")
+            if (file.exists()) file.delete()
+
+            var lastError: Throwable? = null
+            for (attempt in 0 until 3) {
+                try {
+                    downloadResumable(release, partial, onProgress)
+                    lastError = null
+                    break
+                } catch (error: Throwable) {
+                    lastError = error
+                    if (attempt < 2) Thread.sleep(1_000L * (attempt + 1))
+                }
+            }
+            lastError?.let { throw it }
+
+            if (!partial.exists() || partial.length() == 0L) error("Downloaded update is empty")
+            if (!digestMatches(partial, release.sha256Digest)) {
+                partial.delete()
+                error("Downloaded update failed SHA-256 verification")
+            }
+            if (file.exists()) file.delete()
+            if (!partial.renameTo(file)) error("Could not finalize downloaded update")
+
             withContext(Dispatchers.Main) { installApk(file) }
         }
+    }
+
+    private fun downloadResumable(release: AppRelease, partial: File, onProgress: (Int) -> Unit) {
+        var existing = if (partial.exists()) partial.length() else 0L
+        val builder = Request.Builder().url(release.downloadUrl).get()
+            .header("Accept", "application/octet-stream")
+            .header("User-Agent", "Pips-life/${BuildConfig.VERSION_NAME}")
+        if (existing > 0L) builder.header("Range", "bytes=$existing-")
+
+        client.newCall(builder.build()).execute().use { response ->
+            if (!response.isSuccessful) error("Update download failed (${response.code})")
+            val resumed = existing > 0L && response.code == 206
+            if (existing > 0L && !resumed) {
+                partial.delete()
+                existing = 0L
+            }
+            val body = response.body ?: error("Update download was empty")
+            val contentLength = body.contentLength()
+            val total = if (resumed && contentLength > 0L) existing + contentLength else contentLength
+            var read = existing
+            body.byteStream().use { input ->
+                FileOutputStream(partial, resumed).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        read += count
+                        if (total > 0L) onProgress(((read * 100L) / total).toInt().coerceIn(0, 100))
+                    }
+                    output.fd.sync()
+                }
+            }
+        }
+    }
+
+    private fun digestMatches(file: File, expected: String): Boolean {
+        if (expected.isBlank()) return true
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        return actual.equals(expected, ignoreCase = true)
     }
 
     private fun installApk(file: File) {
