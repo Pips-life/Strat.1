@@ -77,7 +77,18 @@ class ReleaseUpdateManager(private val context: Context) {
             }
             if (file.exists()) file.delete()
 
-            downloadResumable(release, partial, onProgress)
+            var lastError: Throwable? = null
+            for (attempt in 0 until 3) {
+                try {
+                    downloadResumable(release, partial, onProgress)
+                    lastError = null
+                    break
+                } catch (error: Throwable) {
+                    lastError = error
+                    if (attempt < 2) Thread.sleep(1_000L * (attempt + 1))
+                }
+            }
+            lastError?.let { throw it }
 
             if (!partial.exists() || partial.length() == 0L) error("Downloaded update is empty")
             if (!digestMatches(partial, release.sha256Digest)) {
