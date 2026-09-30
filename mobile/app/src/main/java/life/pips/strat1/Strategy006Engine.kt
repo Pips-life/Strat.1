@@ -10,6 +10,7 @@ import java.time.format.DateTimeParseException
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.exp
 
 /** Independent Strategy 006 Options Flow engine. */
 class Strategy006Engine {
@@ -391,8 +392,15 @@ class Strategy006Engine {
         val strike = candidate.matchedStrike ?: return null
         val eps = max(strike * 0.0001, 0.5)
         if (bar.low <= strike + eps && bar.high >= strike - eps) {
-            if (bar.high >= strike && bar.close < strike - eps) return ConfluenceReaction(TradeSide.SELL, "REJECTION")
-            if (bar.low <= strike && bar.close > strike + eps) return ConfluenceReaction(TradeSide.BUY, "REJECTION")
+            // Rejection must agree with the zone's approach bias:
+            // upper/resistance rejection = SELL; lower/support rejection = BUY.
+            if (candidate.bias == TradeSide.SELL && bar.high >= strike && bar.close < strike - eps)
+                return ConfluenceReaction(TradeSide.SELL, "REJECTION")
+            if (candidate.bias == TradeSide.BUY && bar.low <= strike && bar.close > strike + eps)
+                return ConfluenceReaction(TradeSide.BUY, "REJECTION")
+
+            // A confirmed close through the strike is a breakout and reverses
+            // the approach bias for continuation toward the next IV zone.
             if (bar.close > strike + eps) return ConfluenceReaction(TradeSide.BUY, "BREAKOUT")
             if (bar.close < strike - eps) return ConfluenceReaction(TradeSide.SELL, "BREAKOUT")
         }
@@ -579,21 +587,21 @@ class Strategy006Engine {
                 val futuresStrength = futuresAtStrike.maxOfOrNull {
                     normalize(abs(it.oi) + abs(it.volume) + abs(it.premium), futuresValues)
                 } ?: 0.0
-                val score = normalize(volatility, ivValues) * 0.30 +
+                val rawScore = normalize(volatility, ivValues) * 0.30 +
                     normalize(greekMagnitude, greekValues) * 0.35 +
                     normalize(skew, skewValues) * 0.15 +
                     futuresStrength * 0.20
 
+                // A strike can be inside the ±500-point confluence window without
+                // being equally relevant to the polished IV zone. Distance must
+                // therefore affect confidence; otherwise nearby zones can all
+                // nominate the same strongest strike and display the same score.
+                val distanceWeight = 0.50 + 0.50 * exp(-abs(greekStrike - ivZone) / STRIKE_BUFFER)
+                val score = (rawScore * distanceWeight).coerceIn(0.0, 100.0)
+
                 // Directional bias is NOT inferred by adding absolute call/put
-                // magnitudes. That loses the market-side meaning of the Greeks and
-                // can make every zone report the same direction.
-                //
-                // S006 bias is determined by the zone's location relative to the
-                // live price:
-                //   lower/support zone -> BUY approach bias
-                //   upper/resistance zone -> SELL approach bias
-                // The File 2 + File 3 data determines CONFLUENCE/CONFIDENCE and
-                // the nominated strike; the zone geometry determines approach bias.
+                // magnitudes. File 2 + File 3 determine confluence strength and
+                // nominated strike; zone geometry determines approach bias.
                 val bias = zoneApproachSide(name)
 
                 ZoneScore(
