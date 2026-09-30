@@ -135,6 +135,9 @@ class Strategy006Engine {
         val entryConfluence = likely?.let { candidate ->
             z.confluence.firstOrNull { it.zoneName == candidate.first }
         }
+        // The target is selected from the opposite side of the map after the
+        // approach direction is established. Do not use the highest confluence
+        // zone globally as the entry signal.
         val target = likely?.third?.let { oppositeTarget(it, likely.second) }
         val entryPrice = entryConfluence?.matchedStrike ?: likely?.second
         return ZoneStatus(
@@ -358,9 +361,30 @@ class Strategy006Engine {
     private data class ConfluenceReaction(val side: TradeSide, val behavior: String)
 
     private fun entryConfluence(price: Double): ZoneConfluence? {
-        val candidates = current?.zones?.confluence.orEmpty().filter { it.matchedStrike != null }
+        // Execution is driven by the two zones surrounding live price, not by
+        // whichever zone has the highest raw confluence score on the entire map.
+        // Approaching the upper zone = SELL bias; approaching the lower zone = BUY bias.
+        val candidates = current?.zones?.confluence.orEmpty()
+            .filter { it.matchedStrike != null }
         if (candidates.isEmpty()) return null
-        return candidates.maxWithOrNull(compareBy<ZoneConfluence> { it.score }.thenBy { -abs((it.matchedStrike ?: it.zone) - price) })
+
+        val lower = candidates
+            .filter { it.zone < price }
+            .maxByOrNull { it.zone }
+        val upper = candidates
+            .filter { it.zone > price }
+            .minByOrNull { it.zone }
+
+        return listOfNotNull(lower, upper)
+            .minWithOrNull(compareBy<ZoneConfluence> { abs(it.zone - price) }.thenByDescending { it.score })
+    }
+
+    private fun zoneApproachSide(zoneName: String): TradeSide? = when (zoneName) {
+        "Liquidity Exhaustion", "Dealer Absorption", "Absorption Floor",
+        "Primary Hedge Floor" -> TradeSide.BUY
+        "Immediate Hedge Wall", "Reclaim Gate",
+        "Upper Inventory Ceiling" -> TradeSide.SELL
+        else -> null
     }
 
     private fun detectConfluenceReaction(bar: FiveMinuteBar, candidate: ZoneConfluence): ConfluenceReaction? {
@@ -560,21 +584,17 @@ class Strategy006Engine {
                     normalize(skew, skewValues) * 0.15 +
                     futuresStrength * 0.20
 
-                // Directional nomination uses File 2 call/put Greeks plus
-                // File 3 call/put OI, volume and premium at the nominated strike.
-                val callGreek = greekAtStrike.filter { it.type == 'C' }
-                    .sumOf { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
-                val putGreek = greekAtStrike.filter { it.type == 'P' }
-                    .sumOf { abs(it.delta) + abs(it.gamma) + abs(it.vega) + abs(it.theta) }
-                val callChain = futuresAtStrike.filter { it.type == 'C' }
-                    .sumOf { abs(it.oi) + abs(it.volume) + abs(it.premium) }
-                val putChain = futuresAtStrike.filter { it.type == 'P' }
-                    .sumOf { abs(it.oi) + abs(it.volume) + abs(it.premium) }
-                val bias = when {
-                    callGreek + callChain > putGreek + putChain -> TradeSide.BUY
-                    putGreek + putChain > callGreek + callChain -> TradeSide.SELL
-                    else -> null
-                }
+                // Directional bias is NOT inferred by adding absolute call/put
+                // magnitudes. That loses the market-side meaning of the Greeks and
+                // can make every zone report the same direction.
+                //
+                // S006 bias is determined by the zone's location relative to the
+                // live price:
+                //   lower/support zone -> BUY approach bias
+                //   upper/resistance zone -> SELL approach bias
+                // The File 2 + File 3 data determines CONFLUENCE/CONFIDENCE and
+                // the nominated strike; the zone geometry determines approach bias.
+                val bias = zoneApproachSide(name)
 
                 ZoneScore(
                     ZoneConfluence(name, ivZone, greekStrike, score, volatility, greekMagnitude, abs(greekStrike - ivZone), bias),
