@@ -475,7 +475,7 @@ private enum class Tab { HOME, METAAPI, STRATEGY, WATCHLIST, UPDATE }
                                     fontSize = 9.sp
                                 )
                             }
-                            Text("ATM IV strike is ignored • confluence buffer 1000 points (±500) • highest Volatility + Greeks strike drives entry.", color = Muted, fontSize = 8.sp)
+                            Text("ATM IV strike is ignored • confluence buffer 3000 points total (±1500) • highest Volatility + Greeks strike drives entry.", color = Muted, fontSize = 8.sp)
                         }
                     }
                     }
@@ -862,7 +862,7 @@ fun S006PolishedZones(z: Strategy006Engine.Zones, livePrice: Double?, status: St
                 )
             }
             Text(
-                "FILES 1+2+3 • confluence buffer ±500 points (1000 total) • highest File 2 + File 3 confluence is nominated for each IV zone.",
+                "FILES 1+2+3 • confluence buffer ±1500 points (3000 total) • highest File 2 + File 3 confluence is nominated for each IV zone.",
                 color = Muted,
                 fontSize = 7.sp,
                 modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp)
