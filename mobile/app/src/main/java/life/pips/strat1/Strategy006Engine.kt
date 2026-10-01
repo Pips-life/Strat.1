@@ -663,7 +663,7 @@ class Strategy006Engine {
                 val skewStrength = normalize(skew, greekRows.map { abs(it.ivSkew) }.filter { it.isFinite() })
 
                 // Make proximity a first-class signal. A strike at the edge of
-                // the ±500-point window must not beat a materially closer strike merely
+                // the ±1500-point half-window must not beat a materially closer strike merely
                 // because its raw option metrics are larger.
                 val distance = abs(greekStrike - ivZone)
                 val proximity = (exp(-distance / PROXIMITY_SCALE) * 100.0).coerceIn(0.0, 100.0)
@@ -735,10 +735,11 @@ class Strategy006Engine {
 
     companion object {
         // Point convention: 1 XAUUSD point = 0.01 price.
-        // Therefore 500 points = 5.00 price and a ±500-point window is ±5.00.
-        // Example: 4150.00 matches 4145.00 through 4155.00.
+        // Therefore 3000 points total = 30.00 price, with a ±1500-point half-window = ±15.00.
+        // Example: 4150.00 matches 4135.00 through 4165.00.
         const val POINT_SIZE = 0.01
-        const val STRIKE_BUFFER = 500.0 * POINT_SIZE
+        const val TOTAL_STRIKE_BUFFER_POINTS = 3000.0
+        const val STRIKE_BUFFER = (TOTAL_STRIKE_BUFFER_POINTS / 2.0) * POINT_SIZE
         const val PROXIMITY_SCALE = 200.0 * POINT_SIZE
         const val TICK_SIZE = POINT_SIZE
         const val TICK_VALUE = 0.01
