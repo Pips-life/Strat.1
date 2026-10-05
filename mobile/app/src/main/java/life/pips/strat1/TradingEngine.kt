@@ -76,8 +76,9 @@ class TradingEngine(
             View(id, p.side, p.confidence, p.entryZone?.center, p.exitZone?.center, p.invalidation, p.reason, phase, session, "QOF ${p.confidence}% • ${p.reason}")
         }
         StrategyId.STRATEGY_002 -> {
-            val p = strategy002.evaluate(history[symbol]?.toList().orEmpty())
-            View(id, p.side, p.confidence, p.entry, null, p.stop, p.reason, if (p.side == null) "WAIT TICK" else "READY", "ALL SESSIONS", "TICK VELOCITY")
+            val priceBias = strategy006.zoneStatus(price).likelySide?.let { if (it == TradeSide.BUY) Strategy002Engine.DirectionalBias.BULLISH else Strategy002Engine.DirectionalBias.BEARISH } ?: Strategy002Engine.DirectionalBias.NEUTRAL
+            val p = strategy002.evaluate(history[symbol]?.toList().orEmpty(), priceBias)
+            View(id, p.side, p.confidence, p.entry, null, p.stop, p.reason, if (p.side == null) "WAIT TICK" else "READY", "ALL SESSIONS", "IV ${p.directionalBias.name} • ${p.biasAlignment} • TICK VELOCITY")
         }
         StrategyId.STRATEGY_003 -> {
             val p = strategy003.latest()
@@ -322,7 +323,8 @@ class TradingEngine(
     }
 
     private suspend fun execute002(account: MetaAccount, saved: SavedConnection, symbol: String, price: Double, tick: TickPrice, positions: List<MetaPosition>, snapshot: MetaSnapshot, onStatus: (String) -> Unit) {
-        val plan = strategy002.evaluate(history[symbol]?.toList().orEmpty())
+        val priceBias = strategy006.zoneStatus(price).likelySide?.let { if (it == TradeSide.BUY) Strategy002Engine.DirectionalBias.BULLISH else Strategy002Engine.DirectionalBias.BEARISH } ?: Strategy002Engine.DirectionalBias.NEUTRAL
+        val plan = strategy002.evaluate(history[symbol]?.toList().orEmpty(), priceBias)
         for (p in positions) {
             val exit = strategy002.exitDecision(plan, p, price)
             if (exit.close) meta.closePosition(saved.metaApiToken, account, p.id).onSuccess { recordClosedTrade(p.profit, snapshot.equity); onStatus("S002 | EXIT CONFIRMED | ${p.id}") }.onFailure { onStatus("S002 | EXIT FAILED | ${it.message ?: "unknown"}") }
