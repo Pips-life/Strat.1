@@ -216,4 +216,3 @@ class Strategy002(Strategy):
             "bias_policy": "IV-zone direction is prioritized; counter-bias velocity reversals remain allowed",
             "sizing": "balance * risk_per_trade / (trail_distance / tick_size * tick_value)",
         }
-}
