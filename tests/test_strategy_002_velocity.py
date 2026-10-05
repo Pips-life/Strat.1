@@ -62,3 +62,41 @@ def test_controller_keeps_one_opposite_stop_and_reverses_on_trigger():
     assert positions[0].side == "SELL"
     assert controller.pairs["XAUUSD"].position_side == "SELL"
     assert controller.pairs["XAUUSD"].stop_price == 101.5
+
+
+def test_strategy_002_iv_bias_prioritizes_aligned_direction():
+    strategy = Strategy002()
+    market = {"ticks": _ticks([100, 100.1, 100.2]), "directional_bias": "BULLISH"}
+    analysis = strategy.analyze(market)
+    signal = strategy.generate_signal(analysis)
+
+    assert signal.action == "BUY"
+    assert analysis["directional_bias"] == "BULLISH"
+    assert analysis["bias_alignment"] == "ALIGNED"
+    assert analysis["bias_priority"] == 1.0
+    assert signal.confidence == 100.0
+    assert "prioritized" in signal.reason
+
+
+def test_strategy_002_iv_bias_allows_counter_bias_short_reversal():
+    strategy = Strategy002()
+    market = {"ticks": _ticks([100.2, 100.1, 100.0]), "directional_bias": "BULLISH"}
+    analysis = strategy.analyze(market)
+    signal = strategy.generate_signal(analysis)
+
+    assert signal.action == "SELL"
+    assert analysis["directional_bias"] == "BULLISH"
+    assert analysis["bias_alignment"] == "COUNTER_BIAS"
+    assert analysis["bias_priority"] == 0.5
+    assert signal.confidence == 70.0
+    assert "allowed as counter-bias short-term reversal" in signal.reason
+
+
+def test_strategy_002_without_iv_bias_keeps_velocity_behavior():
+    strategy = Strategy002()
+    analysis = strategy.analyze(_ticks([100, 100.1]))
+    signal = strategy.generate_signal(analysis)
+
+    assert signal.action == "BUY"
+    assert analysis["directional_bias"] == "NEUTRAL"
+    assert analysis["bias_alignment"] == "NEUTRAL"
