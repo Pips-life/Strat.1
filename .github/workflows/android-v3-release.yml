@@ -2,7 +2,7 @@ name: Pips-life Android Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, fix/v2.135-iv-zone-only ]
 
 concurrency:
   group: pips-life-android-release
