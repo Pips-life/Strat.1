@@ -304,7 +304,9 @@ class Strategy006Engine {
     }
 
     fun polishIvStrike(ivStrike: Double, gcPrice: Double, liveXauPrice: Double): Double =
-        ivStrike + (gcPrice - liveXauPrice)
+        // IV-table strikes are expressed on the GC basis. Convert them into
+        // the live XAUUSD coordinate by subtracting the GC-minus-XAU basis.
+        ivStrike - (gcPrice - liveXauPrice)
 
     fun clear() {
         current = null
@@ -571,7 +573,9 @@ class Strategy006Engine {
         if (below.size < 3 || above.size < 3) return Map(rows, futuresRows, liveXauSpot, Zones(null, null, null, null, null, null), null, false, listOf("S006 requires three non-ATM IV strikes below and three above the IV-file live spot."))
 
         val selectedIv = (below.take(3).sorted() + above.take(3)).sorted()
-        val polishedZones = selectedIv.map { it + signedBasis }
+        // Zone is always the IV-table strike converted by the signed GC/XAU basis.
+        // basis = GC - XAU, therefore XAU zone = IV strike - basis.
+        val polishedZones = selectedIv.map { it - signedBasis }
 
         val ivRows = rows.filter { it.source == "iv" && it.iv.isFinite() && it.iv > 0.0 }
         val greekRows = rows.filter { it.source == "greeks" && it.strike.isFinite() && it.strike > 0.0 }
@@ -717,7 +721,7 @@ class Strategy006Engine {
         val hasFile3Confluence = futuresRows.isNotEmpty() && named.any { it.matchedStrike != null && it.score > 0.0 }
         return Map(rows, futuresRows, liveXauSpot, zones, null, hasFile3Confluence, listOf(
             "S006 pipeline: IV map -> Greeks strike match -> Futures strike match -> confluence -> execution.",
-            "GC basis is applied only to IV strike polishing: XAU zone = IV strike + (GC price - live XAUUSD price).",
+            "GC basis is applied only to IV strike polishing: XAU zone = IV-table strike - (GC price - live XAUUSD price).",
             "Greeks and futures strikes remain in their native file price spaces; no GC-basis adjustment is applied to either.",
             "Only strikes present in File 2 and File 3 within the buffer receive a confluence score and are eligible for the execution engine.",
             "For each mapped zone, the highest-scoring agreeing strike is nominated as the execution strike; price triggers immediately at that nominated strike, with a fixed 350-point (3.50 price) stop.",
